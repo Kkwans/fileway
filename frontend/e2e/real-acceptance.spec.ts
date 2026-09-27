@@ -198,7 +198,7 @@ test.describe("NAS File Browser real deployment acceptance", () => {
     if (admin) {
       await page.getByRole("button", { name: "目录分类", exact: true }).click();
       await expect(
-        page.getByRole("button", { name: "NAS 根目录", exact: true })
+        page.getByRole("button", { name: "根目录", exact: true })
       ).toBeVisible();
     }
 
