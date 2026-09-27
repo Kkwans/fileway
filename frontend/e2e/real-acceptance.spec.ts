@@ -176,8 +176,9 @@ test.describe("NAS File Browser real deployment acceptance", () => {
     const more = page.getByRole("button", { name: "更多", exact: true });
     await more.click();
     await expect(page.locator("#dropdown")).toHaveClass(/active/);
-    await page.mouse.click(20, 200);
+    await page.keyboard.press("Escape");
     await expect(page.locator("#dropdown")).not.toHaveClass(/active/);
+    await expect(more).toBeFocused();
 
     await page.setViewportSize({ width: 1280, height: 800 });
     const handle = page.getByRole("separator", { name: "调整侧栏宽度" });
