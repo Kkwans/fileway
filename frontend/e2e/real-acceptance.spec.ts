@@ -171,8 +171,9 @@ test.describe("NAS File Browser real deployment acceptance", () => {
     await expect(page).toHaveURL(/order=desc/);
     await expect(page).toHaveURL(/view=details/);
 
-    await page.goto("/trash", { waitUntil: "domcontentloaded" });
-    const more = page.getByRole("button", { name: "更多" });
+    // The file-list header owns the overflow menu. Trash has dedicated
+    // refresh/clear actions and intentionally does not render this control.
+    const more = page.getByRole("button", { name: "更多", exact: true });
     await more.click();
     await expect(page.locator("#dropdown")).toHaveClass(/active/);
     await page.mouse.click(20, 200);
