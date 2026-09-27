@@ -152,30 +152,28 @@ describe("媒体预览生命周期契约", () => {
   });
 
   it("ArtPlayer 切换媒体保留进度并完整释放资源", () => {
-    expect(artPlayerSource).toContain("snapshotPlayback()");
-    expect(artPlayerSource).toContain("restorePlayback(snapshot)");
-    expect(artPlayerSource).toContain("hls.value?.destroy()");
-    expect(artPlayerSource).toContain("clearCompatTimer()");
-    expect(artPlayerSource).toContain("clearResumePromptTimer()");
-    expect(artPlayerSource).toContain("window.clearTimeout(rateSaveTimer)");
+    expect(artPlayerSource).toContain("const resume = captureResume()");
+    expect(artPlayerSource).toContain("applyResume(resume)");
+    expect(artPlayerSource).toContain("hlsInstance.destroy()");
+    expect(artPlayerSource).toContain("clearNativeProgressHooks()");
+    expect(artPlayerSource).toContain("stopLoadWaitTimer()");
+    expect(artPlayerSource).toContain("++switchToken");
     expect(artPlayerSource).toContain("art.value?.destroy(false)");
-    expect(artPlayerSource).not.toContain("auth=");
+    expect(artPlayerSource).toContain('xhr.setRequestHeader("X-Auth", jwt)');
   });
 
   it("字幕与续播偏好按账号保存且不记录鉴权参数", () => {
     expect(artPlayerSource).toContain(
-      '`nas-file-browser-subtitle-v1:${auth.user?.id ?? "guest"}`'
+      '`nas-file-browser-subtitle-v1:${authStore.user?.id ?? "guest"}`'
     );
     expect(artPlayerSource).toContain("resumeMinSec");
-    expect(artPlayerSource).toContain("resumePromptTimer");
-    expect(artPlayerSource).toContain(
-      "playbackRate: Math.round(rate * 100) / 100"
-    );
+    expect(artPlayerSource).toContain("playerStorageId()");
+    expect(artPlayerSource).toContain("accountPreferences.save(");
     expect(artPlayerSource).not.toContain("?auth=");
   });
 
   it("进度预览失败不阻断播放器初始化", () => {
-    expect(artPlayerSource).toContain("media.getVideoSprite(props.path)");
+    expect(artPlayerSource).toContain("mediaApi.getVideoSprite(props.path)");
     expect(artPlayerSource).toContain("art.value.thumbnails =");
     expect(artPlayerSource).toContain(
       "Progress thumbnails are optional; playback remains fully functional."
