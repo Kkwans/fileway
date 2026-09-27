@@ -6,6 +6,7 @@ import {
   getVideoSourceType,
   getNativeContainerPlayback,
   isDefinitelyUnsupportedVideoCodec,
+  isHevcCodec,
   isKnownIncompatibleVideo,
   isPlaybackPositionSeekable,
   shouldPreflightVideoCodec,
@@ -23,6 +24,16 @@ describe("视频播放源策略", () => {
     );
     expect(getDirectVideoFailureCopy("unsupported").title).toBe(
       "当前浏览器不支持此视频格式"
+    );
+  });
+  it("HEVC 解码失败显示具体编码提示，网络失败仍保持网络提示", () => {
+    expect(isHevcCodec("hev1.1.6.L93.B0")).toBe(true);
+    expect(isHevcCodec("h264")).toBe(false);
+    expect(getDirectVideoFailureCopy("decode", "hevc").title).toContain(
+      "H.265 / HEVC"
+    );
+    expect(getDirectVideoFailureCopy("network", "hevc").title).toBe(
+      "视频源暂时无法读取"
     );
   });
   it("识别需要用户主动选择兼容播放的格式", () => {

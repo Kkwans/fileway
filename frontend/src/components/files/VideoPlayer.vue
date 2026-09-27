@@ -49,12 +49,12 @@
     >
       <span class="media-video-status__indicator" aria-hidden="true"></span>
       <strong>
-        {{ videoLoadState === "stalled" ? "视频读取较慢" : "正在加载视频" }}
+        {{ videoLoadState === "stalled" ? "缓冲中" : "正在加载视频" }}
       </strong>
       <small>
         {{
           videoLoadState === "stalled"
-            ? "网络或 NAS 正在准备下一段数据"
+            ? "正在读取视频数据，可能因文件较大或磁盘繁忙而较慢"
             : "正在连接视频源，请稍候"
         }}
       </small>
@@ -254,8 +254,8 @@ import {
   getDirectVideoFailureCopy,
   getVideoSourceType,
   getNativeContainerPlayback,
+  isHevcCodec,
   isPlaybackPositionSeekable,
-  isKnownIncompatibleVideo,
   supportsH264CompatibilityPlayback,
   type DirectVideoFailure,
 } from "@/utils/videoPlayback";
@@ -265,6 +265,9 @@ import { mediaIcon } from "@/utils/mediaIconSemantics";
 import videojs from "video.js";
 import type Player from "video.js/dist/types/player";
 import type { HLSPlaybackState, HLSPlaybackStatus } from "@/api/media";
+import { resolveControlsTimeoutMs } from "@/utils/playerControls";
+import { useAuthStore } from "@/stores/auth";
+import { useAccountPreferencesStore } from "@/stores/accountPreferences";
 import "videojs-hotkeys";
 import "video.js/dist/video-js.min.css";
 
@@ -303,6 +306,30 @@ const directPlaybackFailure = ref<DirectVideoFailure | null>(null);
 const directPlaybackFailed = computed(
   () => directPlaybackFailure.value !== null
 );
+const mediaCodec = ref("");
+const authStore = useAuthStore();
+const accountPreferences = useAccountPreferencesStore();
+const controlsTimeoutMs = ref(
+  resolveControlsTimeoutMs(
+    authStore.user?.playerPreferences?.controlsTimeoutSec
+  )
+);
+
+watch(
+  () => authStore.user?.playerPreferences?.controlsTimeoutSec,
+  (sec) => {
+    controlsTimeoutMs.value = resolveControlsTimeoutMs(sec);
+  }
+);
+
+watch(
+  () => props.path,
+  () => {
+    controlsTimeoutMs.value = resolveControlsTimeoutMs(
+      authStore.user?.playerPreferences?.controlsTimeoutSec
+    );
+  }
+);
 const hlsActive = ref(false);
 const nativeProbeBusy = ref(false);
 // Do not attach containers that the active browser has already declared
@@ -310,7 +337,7 @@ const nativeProbeBusy = ref(false);
 // request before it can show the compatibility action, which is especially
 // painful on NAS-hosted MKV/MOV files.  The user can still explicitly retry
 // the original source from the compatibility panel.
-const sourceAttached = ref(!isKnownIncompatibleVideo(props.path));
+const sourceAttached = ref(true);
 type VideoLoadState = "idle" | "loading" | "stalled" | "ready" | "error";
 const videoLoadState = ref<VideoLoadState>(
   sourceAttached.value ? "loading" : "idle"
@@ -374,8 +401,7 @@ watch(
     player.value.pause();
     player.value.reset();
     void prepareDirectPlayback(nextPath, nextSource);
-    if (!shouldAttachDirectSource(nextPath))
-      void probeNativeContainer(nextPath);
+    if (!shouldAttachDirectSource()) void probeNativeContainer(nextPath);
     void restorePlayback(nextPath);
   }
 );
@@ -405,6 +431,138 @@ onBeforeUnmount(() => {
   player.value = null;
 });
 
+watch(
+  () => props.path,
+  () => {
+    controlsTimeoutMs.value = resolveControlsTimeoutMs(
+      authStore.user?.playerPreferences?.controlsTimeoutSec
+    );
+  }
+);
+
+const DEFAULT_RATES = [
+  0.25, 0.5, 0.75, 1, 1.15, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5,
+];
+
+const accountPlaybackMode = computed(() =>
+  normalizePlaybackMode(
+    authStore.user?.playerPreferences?.playbackMode || "native"
+  )
+);
+const accountPlaybackRate = computed(() => {
+  const raw = authStore.user?.playerPreferences?.playbackRate;
+  if (raw == null || !Number.isFinite(raw)) return 1;
+  return Math.min(5, Math.max(0.1, Math.round(raw * 100) / 100));
+});
+const sessionPlaybackMode = ref<string>("native");
+const playbackRates = computed(() => {
+  const rates = [...DEFAULT_RATES];
+  const r = accountPlaybackRate.value;
+  if (!rates.includes(r)) rates.push(r);
+  return rates.sort((a, b) => a - b);
+});
+
+function normalizePlaybackMode(raw: string) {
+  const v = (raw || "").toLowerCase();
+  if (v === "compat" || v === "ask") return v;
+  return "native";
+}
+
+function applyPlaybackRate(rate: number) {
+  const p = player.value;
+  if (!p) return;
+  const v = Math.min(5, Math.max(0.1, Math.round(rate * 100) / 100));
+  p.playbackRate(v);
+  void persistPlayerPrefs({ playbackRate: v });
+}
+
+function persistPlayerPrefs(patch: {
+  playbackMode?: string;
+  playbackRate?: number;
+}) {
+  const userId = authStore.user?.id;
+  if (!userId) return;
+  const prev = authStore.user?.playerPreferences || {};
+  const next = {
+    ...prev,
+    controlsTimeoutSec: prev.controlsTimeoutSec ?? 4,
+    playbackMode:
+      patch.playbackMode ??
+      normalizePlaybackMode(prev.playbackMode || "native"),
+    playbackRate: patch.playbackRate ?? prev.playbackRate ?? 1,
+    resumeMode: prev.resumeMode || "resume",
+    resumeMinSec: prev.resumeMinSec ?? 10,
+  };
+  return accountPreferences.save({ playerPreferences: next }).catch(() => {
+    showProgressMessage("播放器偏好保存失败");
+  });
+}
+
+function switchPlaybackMode(mode: "native" | "compat" | "ask") {
+  sessionPlaybackMode.value = mode;
+  void persistPlayerPrefs({ playbackMode: mode });
+  if (mode === "compat") {
+    void startCompatibilityPlayback();
+    return;
+  }
+  if (mode === "native") {
+    compatibilityPanelOpen.value = false;
+    void tryDirectPlayback();
+    return;
+  }
+  compatibilityPanelOpen.value = true;
+}
+
+function playerControlBarEl(): HTMLElement | null {
+  const p = player.value as unknown as {
+    controlBar?: { el?: () => Element | null };
+  } | null;
+  return (p?.controlBar?.el?.() as HTMLElement | null) ?? null;
+}
+
+function bindPlaybackModeButtons() {
+  const bar = playerControlBarEl();
+  if (!bar || bar.querySelector(".vjs-playback-mode-button")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "vjs-playback-mode-button vjs-control vjs-button";
+  btn.title = "播放方式";
+  btn.textContent = "播放";
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const next =
+      sessionPlaybackMode.value === "native"
+        ? "compat"
+        : sessionPlaybackMode.value === "compat"
+          ? "ask"
+          : "native";
+    switchPlaybackMode(next as "native" | "compat" | "ask");
+    btn.textContent =
+      next === "compat" ? "转码" : next === "ask" ? "选择" : "播放";
+  });
+  bar.insertBefore(btn, bar.querySelector(".vjs-fullscreen-control"));
+}
+
+function bindCustomRateUI() {
+  const bar = playerControlBarEl();
+  if (!bar || bar.querySelector(".vjs-custom-rate")) return;
+  const wrap = document.createElement("div");
+  wrap.className = "vjs-custom-rate vjs-control";
+  wrap.innerHTML = `<input type="number" min="0.1" max="5" step="0.01" value="${accountPlaybackRate.value}" aria-label="倍速" style="width:52px;background:transparent;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:4px;height:28px;padding:0 4px;" />`;
+  const input = wrap.querySelector("input");
+  input?.addEventListener("change", () => {
+    applyPlaybackRate(Number((input as HTMLInputElement).value));
+  });
+  input?.addEventListener("click", (e) => e.stopPropagation());
+  const rateBtn = bar.querySelector(".vjs-playback-rate");
+  if (rateBtn?.parentNode) {
+    rateBtn.parentNode.insertBefore(wrap, rateBtn);
+  } else {
+    bar.insertBefore(wrap, bar.querySelector(".vjs-fullscreen-control"));
+  }
+}
+
 async function initVideoPlayer() {
   try {
     const initialPath = props.path;
@@ -420,18 +578,28 @@ async function initVideoPlayer() {
     if (disposed || !videoPlayer.value || props.path !== initialPath) return;
     const initialSource = sourceAttached.value
       ? {
-          sources: {
-            src: props.source,
-            type: getVideoSourceType(props.source, props.path),
-          },
+          sources: buildDirectSource(props.path, props.source),
         }
       : { sources: [] };
     player.value = videojs(
       videoPlayer.value,
       getOptions(props.options, { language: code }, initialSource, {
-        playbackRates: [0.5, 1, 1.5, 2, 2.5, 3],
+        playbackRates: playbackRates.value,
       })
     );
+    bindControlKeepAlive(player.value);
+    sessionPlaybackMode.value = accountPlaybackMode.value;
+    player.value.ready(() => {
+      bindPlaybackModeButtons();
+      bindCustomRateUI();
+      const p = player.value;
+      if (p) p.playbackRate(accountPlaybackRate.value);
+      if (sessionPlaybackMode.value === "compat") {
+        void startCompatibilityPlayback();
+      } else if (sessionPlaybackMode.value === "ask") {
+        compatibilityPanelOpen.value = true;
+      }
+    });
     player.value.on("timeupdate", onTimeUpdate);
     player.value.on("pause", () => void persistPlayback(true));
     player.value.on("seeked", () => void persistPlayback(true));
@@ -462,8 +630,8 @@ async function initVideoPlayer() {
       });
     if (sourceAttached.value) beginVideoLoading();
     else {
-      compatibilityPanelOpen.value = true;
-      void probeNativeContainer(initialPath);
+      // Compatibility panel is opt-in after a real native failure, not on mount.
+      compatibilityPanelOpen.value = false;
     }
     const playbackPromise = restorePlayback(props.path);
     await playbackPromise;
@@ -474,11 +642,20 @@ async function initVideoPlayer() {
 }
 
 function getOptions(...sources: Record<string, unknown>[]) {
+  const timeoutSec = resolveControlsTimeoutMs(
+    authStore.user?.playerPreferences?.controlsTimeoutSec
+  );
   const options = {
+    // 0 = never hide; 1–20s from account preference.
+    inactivityTimeout: timeoutSec,
     controlBar: {
       skipButtons: { forward: 10, backward: 10 },
+      playbackRates: playbackRates.value,
     },
-    html5: { nativeTextTracks: false },
+    html5: {
+      nativeTextTracks: false,
+      nativeControlsForTouch: false,
+    },
     plugins: {
       hotkeys: {
         volumeStep: 0.1,
@@ -488,6 +665,48 @@ function getOptions(...sources: Record<string, unknown>[]) {
     },
   };
   return videojs.obj.merge(options, ...sources);
+}
+
+function keepControlsActive() {
+  const p = player.value;
+  if (!p || disposed) return;
+  try {
+    p.userActive(true);
+    (
+      p as unknown as { reportUserActivity?: () => void }
+    ).reportUserActivity?.();
+  } catch {}
+}
+
+function bindControlKeepAlive(p: {
+  el: () => Element | null | undefined;
+  on: (type: string, fn: () => void) => void;
+}) {
+  const root = p.el();
+  if (!root) return;
+  const events = [
+    "touchstart",
+    "touchend",
+    "touchmove",
+    "pointerdown",
+    "pointerup",
+    "click",
+  ] as const;
+  const handler = () => keepControlsActive();
+  for (const ev of events)
+    root.addEventListener(ev, handler, { passive: true });
+  p.on("play", keepControlsActive);
+  p.on("pause", keepControlsActive);
+}
+
+function buildDirectSource(path: string, source: string) {
+  const type = getVideoSourceType(source, path);
+  // Chromium often rejects video/x-matroska by MIME even when H.264/AAC
+  // tracks are decodable. Omit type for Matroska so the element can probe.
+  if (!type || type === "video/x-matroska") {
+    return { src: source };
+  }
+  return { src: source, type };
 }
 
 async function restorePlayback(path: string) {
@@ -560,13 +779,9 @@ const compatibilityCopy = computed(() => {
     case "queued":
       return {
         icon: "hourglass_top",
-        title: "已加入低并发队列",
+        title: "已加入处理队列",
         description:
-          status?.format === "webm" ||
-          status?.format === "webm-copy" ||
-          status?.format === "mp4-copy"
-            ? "NAS 会优先响应文件浏览和缩略图；轮到此视频后生成兼容视频文件。"
-            : "NAS 会优先响应文件浏览和缩略图；轮到此视频后再生成首个可播放分段。",
+          "为保证文件浏览流畅，兼容转码排队执行；轮到此视频后会生成可播放文件。",
       };
     case "preparing":
       return {
@@ -582,11 +797,11 @@ const compatibilityCopy = computed(() => {
           status?.format === "mp4-copy" ||
           status?.format === "webm-copy"
             ? status?.format === "webm-copy"
-              ? "视频本身已是浏览器支持的 VP8/VP9/AV1 + Opus/Vorbis，NAS 只重新封装，不重新编码。"
+              ? "视频轨道已是浏览器较易支持的格式，服务端只重新封装，不重新编码。"
               : "正在重新封装已有的 H.264/AAC 轨道，不重新编码视频；完成后即可拖动进度。"
             : status?.format === "webm"
-              ? "当前浏览器没有可用的 H.264 解码器，NAS 正生成 VP9/WebM 兼容文件；完整文件就绪后支持拖动进度。"
-              : "FFmpeg 正以低资源配置转换视频。可以离开此页，真实任务状态会保留在任务中心。",
+              ? "当前浏览器没有可用的 H.264 解码器，服务端正在生成 VP9/WebM 兼容流。"
+              : "服务端 FFmpeg 正在转码（例如 H.265/HEVC → 浏览器可播格式）。可离开页面，任务会保留在任务中心。",
       };
     case "streamable":
       return {
@@ -611,9 +826,13 @@ const compatibilityCopy = computed(() => {
       return {
         icon: "error_outline",
         title: "兼容播放准备失败",
-        description:
-          status?.error ||
-          "FFmpeg 未能生成可播放分段，可下载后使用本地播放器。",
+        description: (() => {
+          const raw = status?.error || "";
+          if (/ffmpeg|executable file not found|PATH/i.test(raw)) {
+            return "未检测到 FFmpeg，无法兼容转码。原视频通常可直接播放；若仍失败，请下载后用本地播放器打开，或将 ffmpeg.exe 放到服务 bin 目录后重试。";
+          }
+          return raw || "FFmpeg 未能生成可播放分段，可下载后使用本地播放器。";
+        })(),
       };
     case "canceled":
       return {
@@ -630,7 +849,10 @@ const compatibilityCopy = computed(() => {
       };
     default:
       if (directPlaybackFailure.value) {
-        return getDirectVideoFailureCopy(directPlaybackFailure.value);
+        return getDirectVideoFailureCopy(
+          directPlaybackFailure.value,
+          mediaCodec.value
+        );
       }
       return {
         icon: "movie_filter",
@@ -729,12 +951,24 @@ const compatibilityBadgeLabel = computed(() => {
   return "兼容播放准备中";
 });
 
-const compatibilityStartLabel = computed(() =>
-  compatibilityStatus.value?.state === "failed" ||
-  compatibilityStatus.value?.state === "canceled"
-    ? "重新准备"
-    : "启动兼容播放"
-);
+const compatibilityStartLabel = computed(() => {
+  if (
+    compatibilityStatus.value?.state === "failed" ||
+    compatibilityStatus.value?.state === "canceled"
+  ) {
+    return "重新准备";
+  }
+  if (isHevcCodec(mediaCodec.value)) {
+    if (
+      /^(hevc|h265|x265|hev1|hvc1)$/i.test(mediaCodec.value.toLowerCase()) ||
+      /hevc|h265/i.test(mediaCodec.value)
+    ) {
+      return "兼容转码";
+    }
+    return "切换为兼容";
+  }
+  return "启动兼容播放";
+});
 
 const downloadFallbackSource = computed(
   () => props.downloadSource || props.source
@@ -751,6 +985,19 @@ function onPlayerError() {
     );
   }
   compatibilityPanelOpen.value = true;
+  void enrichCodecHint();
+}
+
+async function enrichCodecHint() {
+  const path = props.path;
+  if (!path || disposed) return;
+  try {
+    const info = await mediaApi.getMediaInformation(path, false);
+    if (disposed || path !== props.path) return;
+    mediaCodec.value = info.videoCodec || "";
+  } catch {
+    /* ignore */
+  }
 }
 
 function onPlayerPlaying() {
@@ -780,7 +1027,7 @@ function clearLoadStateTimer() {
 }
 
 function prepareDirectPlayback(path: string, source: string) {
-  if (!shouldAttachDirectSource(path)) {
+  if (!shouldAttachDirectSource()) {
     detachDirectSource();
     return;
   }
@@ -788,7 +1035,7 @@ function prepareDirectPlayback(path: string, source: string) {
 }
 
 async function probeNativeContainer(path: string) {
-  if (disposed || path !== props.path || shouldAttachDirectSource(path)) return;
+  if (disposed || path !== props.path || shouldAttachDirectSource()) return;
 
   nativeProbeController?.abort();
   const controller = new AbortController();
@@ -830,8 +1077,9 @@ async function probeNativeContainer(path: string) {
   }
 }
 
-function shouldAttachDirectSource(path: string) {
-  return !isKnownIncompatibleVideo(path);
+function shouldAttachDirectSource() {
+  // Native-first for every container, including MKV.
+  return true;
 }
 
 function detachDirectSource() {
@@ -851,10 +1099,7 @@ function attachDirectSource(path: string, source: string) {
   const currentPlayer = player.value;
   if (!currentPlayer) return;
   beginVideoLoading();
-  currentPlayer.src({
-    src: source,
-    type: getVideoSourceType(source, path),
-  });
+  currentPlayer.src(buildDirectSource(path, source));
   currentPlayer.load();
 }
 
@@ -1145,10 +1390,7 @@ function tryDirectPlayback() {
   compatibilityNetworkError.value = "";
   sourceAttached.value = true;
   beginVideoLoading();
-  currentPlayer.src({
-    src: props.source,
-    type: getVideoSourceType(props.source, props.path),
-  });
+  currentPlayer.src(buildDirectSource(props.path, props.source));
   currentPlayer.load();
   compatibilityPanelOpen.value = false;
 }
@@ -1173,7 +1415,7 @@ function resetCompatibility() {
   directPlaybackFailure.value = null;
   hlsActive.value = false;
   activeHLSURL = "";
-  sourceAttached.value = shouldAttachDirectSource(props.path);
+  sourceAttached.value = shouldAttachDirectSource();
   posterSource.value = "";
   videoLoadState.value = sourceAttached.value ? "loading" : "idle";
   loadingOverlayVisible.value = false;
@@ -1420,6 +1662,23 @@ const languageImports: LanguageImports = {
   display: none !important;
 }
 
+/* Mobile only: slightly larger hit targets without changing desktop chrome. */
+@media (max-width: 720px) {
+  .media-video-stage :deep(.vjs-control) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .media-video-stage :deep(.vjs-button > .vjs-icon-placeholder) {
+    line-height: 44px;
+  }
+
+  .media-video-stage :deep(.vjs-play-control),
+  .media-video-stage :deep(.vjs-fullscreen-control) {
+    min-width: 48px;
+  }
+}
+
 .media-video-stage :deep(.vjs-tech) {
   filter: brightness(var(--video-brightness));
   transition: filter 120ms ease-out;
@@ -1603,175 +1862,150 @@ const languageImports: LanguageImports = {
   z-index: 14;
   bottom: 76px;
   left: 50%;
-  display: block;
-  width: min(620px, calc(100% - 32px));
-  max-height: calc(100% - 152px);
-  padding: 17px;
+  display: flex;
+  width: min(560px, calc(100% - 24px));
+  max-height: min(70%, 420px);
+  flex-direction: column;
+  gap: 0;
+  padding: 16px 16px 14px;
   overflow: auto;
-  color: #f5f8ff;
-  background:
-    linear-gradient(135deg, rgb(30 77 135 / 22%), transparent 48%),
-    rgb(8 12 19 / 94%);
-  border: 1px solid rgb(124 181 255 / 25%);
-  border-radius: 18px;
-  box-shadow: 0 22px 64px rgb(0 0 0 / 42%);
-  backdrop-filter: blur(18px);
+  color: #eef3ff;
+  background: rgb(12 16 24 / 92%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 45%);
   transform: translateX(-50%);
 }
 
 .media-compatibility-card--failed,
 .media-compatibility-card--error {
-  background:
-    linear-gradient(135deg, rgb(150 49 59 / 24%), transparent 48%),
-    rgb(14 10 15 / 95%);
-  border-color: rgb(255 131 145 / 28%);
+  border-color: rgb(255 140 150 / 35%);
+  background: rgb(20 12 14 / 94%);
 }
 
 .media-compatibility-card--completed {
-  background:
-    linear-gradient(135deg, rgb(31 126 101 / 24%), transparent 48%),
-    rgb(8 14 17 / 95%);
-  border-color: rgb(112 219 181 / 27%);
+  border-color: rgb(120 210 170 / 30%);
+  background: rgb(10 16 14 / 94%);
 }
 
 .media-compatibility-card__icon {
   display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   place-items: center;
-  color: #a8ceff;
-  background: rgb(124 181 255 / 13%);
-  border: 1px solid rgb(124 181 255 / 18%);
-  border-radius: 13px;
+  color: #9ec5ff;
+  background: rgb(124 181 255 / 12%);
+  border-radius: 10px;
 }
 
 .media-compatibility-card--failed .media-compatibility-card__icon,
 .media-compatibility-card--error .media-compatibility-card__icon {
   color: #ff9da8;
   background: rgb(255 117 132 / 12%);
-  border-color: rgb(255 117 132 / 18%);
 }
 
 .media-compatibility-card__body {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .media-compatibility-card__heading {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 
 .media-compatibility-card__identity {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 11px;
+  flex: 1;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .media-compatibility-card__title {
-  display: grid;
+  display: flex;
   min-width: 0;
+  flex: 1;
+  flex-direction: column;
   gap: 2px;
+  text-align: left;
 }
 
 .media-compatibility-card__heading span {
-  color: #85baff;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: #8ebfff;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .media-compatibility-card__heading strong {
-  font-size: 16px;
-  line-height: 1.35;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-overflow: ellipsis;
 }
 
 .media-compatibility-card__close {
   display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   place-items: center;
   padding: 0;
-  color: rgb(255 255 255 / 65%);
-  background: transparent;
+  color: rgb(255 255 255 / 70%);
+  background: rgb(255 255 255 / 6%);
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
 .media-compatibility-card__close:hover {
   color: #fff;
-  background: rgb(255 255 255 / 9%);
+  background: rgb(255 255 255 / 12%);
 }
 
 .media-compatibility-card__body > p {
-  margin: 11px 0 0;
-  color: rgb(235 242 255 / 68%);
+  margin: 0;
+  color: rgb(235 242 255 / 78%);
   font-size: 13px;
   line-height: 1.55;
-  overflow-wrap: anywhere;
-}
-
-.media-compatibility-progress {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.media-compatibility-progress__track {
-  display: block;
-  height: 6px;
-  overflow: hidden;
-  background: rgb(255 255 255 / 13%);
-  border-radius: 999px;
-}
-
-.media-compatibility-progress__value {
-  display: block;
-  height: 100%;
-  min-width: 2px;
-  background: #7cb5ff;
-  border-radius: inherit;
-  transition: width 180ms ease;
-}
-
-.media-compatibility-progress__text {
-  color: rgb(235 242 255 / 68%);
-  font-size: 12px;
 }
 
 .media-compatibility-card__body > .media-compatibility-card__progress {
-  color: #b9d7ff;
-  font-variant-numeric: tabular-nums;
+  margin: 0;
+  color: rgb(235 242 255 / 70%);
+  font-size: 12px;
 }
 
 .media-compatibility-card__body > small {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
-  margin-top: 9px;
-  color: #ffb0ba;
+  margin: 0;
+  color: #ffb4bc;
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .media-compatibility-card__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 4px;
 }
 
 .media-compatibility-action {
   display: inline-flex;
-  min-height: 44px;
+  min-height: 40px;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
   padding: 8px 12px;
   color: #e9f2ff;
   font: inherit;
@@ -1780,7 +2014,7 @@ const languageImports: LanguageImports = {
   text-decoration: none;
   background: rgb(255 255 255 / 8%);
   border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 10px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
@@ -1803,6 +2037,48 @@ const languageImports: LanguageImports = {
 .media-compatibility-action:disabled {
   cursor: wait;
   opacity: 0.56;
+}
+
+.media-compatibility-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.media-compatibility-progress__track {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 10%);
+  border-radius: 99px;
+}
+
+.media-compatibility-progress__value {
+  display: block;
+  height: 100%;
+  background: #8bc0ff;
+  border-radius: inherit;
+}
+
+.media-compatibility-progress__text {
+  color: rgb(235 242 255 / 70%);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .media-compatibility-card {
+    bottom: 64px;
+    width: calc(100% - 16px);
+    padding: 14px 12px 12px;
+  }
+
+  .media-compatibility-card__actions {
+    gap: 6px;
+  }
+
+  .media-compatibility-action {
+    flex: 1 1 calc(50% - 6px);
+  }
 }
 
 .media-resume-chip button {

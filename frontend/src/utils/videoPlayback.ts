@@ -99,6 +99,17 @@ function normalizeCodec(codec?: string) {
   );
 }
 
+export function isHevcCodec(codec?: string) {
+  const normalized = normalizeCodec(codec);
+  return (
+    normalized.includes("hevc") ||
+    normalized.includes("h265") ||
+    normalized.includes("x265") ||
+    normalized.startsWith("hev1") ||
+    normalized.startsWith("hvc1")
+  );
+}
+
 export type NativeContainerPlayback = "supported" | "unsupported" | "unknown";
 
 const NATIVE_WEBM_VIDEO_CODECS = new Set(["vp8", "vp9", "av1"]);
@@ -172,7 +183,21 @@ export function getDirectVideoFailure(
   return "unknown";
 }
 
-export function getDirectVideoFailureCopy(failure: DirectVideoFailure) {
+export function getDirectVideoFailureCopy(
+  failure: DirectVideoFailure,
+  videoCodec?: string
+) {
+  if (
+    isHevcCodec(videoCodec) &&
+    (failure === "decode" || failure === "unsupported" || failure === "unknown")
+  ) {
+    return {
+      icon: "movie_filter",
+      title: "当前浏览器无法解码 H.265 / HEVC",
+      description:
+        "Chrome/Edge 桌面版通常不支持 HEVC 硬解，可能出现黑屏、极慢或只有声音。可一键「兼容播放」（服务端转 H.264/WebM），或下载后用本地播放器打开。手机浏览器有时能播 HEVC，故手机端可能正常。",
+    };
+  }
   switch (failure) {
     case "network":
       return {

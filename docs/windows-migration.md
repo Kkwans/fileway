@@ -118,6 +118,10 @@
 
 下方“最终全量代码门禁”和运行验收记录是上一次发布的历史证据；本次回迁以新提交与部署后的门禁、截图和播放结果为准。
 
+### Video.js 显式诊断回退来源版回迁
+
+`?player=videojs` 保留为显式诊断入口。`VideoPlayer.vue` 整体采用同一固定 Windows 来源版，补回其播放模式按钮、账号倍速预设、自定义倍速控件、原生/兼容/询问操作和相应样式；`videoPlayback.ts` 同步补回 HEVC 识别与失败提示。仅将偏好写入改接 NAS 已有的账号保存队列，并去除来源中未使用的辅助代码。诊断参数不再混入文件预览标题。独立浏览器回归脚本为 `frontend/e2e/videojs-diagnostic.real.spec.ts`。
+
 最终全量代码门禁：前端目录执行 `corepack pnpm test`（108 文件、452 项）、`corepack pnpm run typecheck`、`corepack pnpm run lint`；后端目录执行 `go test ./...`、`go vet ./...`；仓库根目录执行 `git diff a202d0e627d2..HEAD --check`，均通过。生产镜像的前端阶段再次执行 typecheck 与生产构建。NAS 缺少 GCC，`go test -race` 未执行。镜像从干净检出构建，未采用工作区已有的 `backend/frontend/dist`。
 
 运行验收：ARM64 镜像启动后 `/health` 与 `/login` 返回 200，未授权访问受保护的雪碧图和等比例缩略图接口均返回 401；真实 Chromium 登录页在 1440/1024/768/390 宽度正常加载且无横向溢出或页面异常。使用授权 admin 账号检查了 Windows 图标四档尺寸、390/768/1024/1440 宽度、真实图片目录和隔离媒体目录；长达 178 字符的无空格名称完整换行，宽图、长图、横竖视频封面均返回 `fit=contain` 缩略图且保持原比例。搜索、最近访问、回收站、存储工具、任务中心和四个设置页面均无页面错误或横向溢出；移动端用户与分享卡片按内容收起，不再保留 30rem 空白高度。图标视图的账号偏好在验收后恢复为原有 `mosaic`。

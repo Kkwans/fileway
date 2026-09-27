@@ -697,7 +697,7 @@ const updatePreview = async (generation = previewGeneration) => {
     autoPlay.value = false;
   }
 
-  const dirs = route.fullPath.split("/");
+  const dirs = route.path.split("/");
   name.value = decodeURIComponent(dirs[dirs.length - 1]);
 
   // Load CSV content if it's a CSV file

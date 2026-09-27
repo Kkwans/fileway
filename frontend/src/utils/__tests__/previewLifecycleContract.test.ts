@@ -28,12 +28,11 @@ describe("媒体预览生命周期契约", () => {
   });
 
   it("先尝试浏览器原生源，明确不支持时再展示兼容播放", () => {
-    expect(videoPlayerSource).toContain("isKnownIncompatibleVideo");
-    expect(videoPlayerSource).toContain(
-      "const sourceAttached = ref(!isKnownIncompatibleVideo(props.path))"
-    );
+    expect(videoPlayerSource).toContain("const sourceAttached = ref(true)");
     expect(videoPlayerSource).toContain("const initialSource");
-    expect(videoPlayerSource).toContain("src: props.source");
+    expect(videoPlayerSource).toContain(
+      "buildDirectSource(props.path, props.source)"
+    );
     expect(videoPlayerSource).toContain("{ sources: [] }");
     expect(videoPlayerSource).toContain(
       "getVideoSourceType(props.source, props.path)"
