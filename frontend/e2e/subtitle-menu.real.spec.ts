@@ -41,18 +41,23 @@ test("ArtPlayer 字幕在原生设置菜单内完成选择和样式调整", asyn
   await expect(page.locator(".art-control-playback-quality")).toBeVisible();
 
   async function openSubtitles() {
+    // ArtPlayer finishes returning from the previous nested selection before
+    // opening a new panel; reopening mid-transition gets reset to the root.
+    await page.waitForTimeout(350);
     const activeSubtitleMenu = page.locator(
       '.art-setting-panel.art-current .art-setting-item[data-name="sub-offset"]'
     );
-    if (await activeSubtitleMenu.isVisible()) return;
-    const subtitleRow = page.locator(
-      '.art-setting-panel.art-current .art-setting-item[data-name="playback-subtitle"]'
-    );
-    if (!(await subtitleRow.isVisible()))
-      await page.locator(".art-control-setting").click();
-    if (!(await subtitleRow.isVisible()))
-      await page.locator(".art-control-setting").click();
-    await subtitleRow.click();
+    if (!(await activeSubtitleMenu.isVisible())) {
+      const subtitleRow = page.locator(
+        '.art-setting-panel.art-current .art-setting-item[data-name="playback-subtitle"]'
+      );
+      if (!(await subtitleRow.isVisible()))
+        await page.locator(".art-control-setting").click();
+      if (!(await subtitleRow.isVisible()))
+        await page.locator(".art-control-setting").click();
+      await subtitleRow.click();
+    }
+    await expect(activeSubtitleMenu).toBeVisible();
   }
 
   await openSubtitles();
@@ -88,6 +93,10 @@ test("ArtPlayer 字幕在原生设置菜单内完成选择和样式调整", asyn
 
   await openSubtitles();
   await currentPanel.locator('.art-setting-item[data-name="sub-size"]').click();
+  await expect(
+    currentPanel.locator('.art-setting-item[data-name="sub-size-lg"]')
+  ).toBeVisible();
+  await page.waitForTimeout(300);
   await currentPanel
     .locator('.art-setting-item[data-name="sub-size-lg"]')
     .click();
@@ -95,6 +104,10 @@ test("ArtPlayer 字幕在原生设置菜单内完成选择和样式调整", asyn
 
   await openSubtitles();
   await currentPanel.locator('.art-setting-item[data-name="sub-pos"]').click();
+  await expect(
+    currentPanel.locator('.art-setting-item[data-name="sub-pos-80"]')
+  ).toBeVisible();
+  await page.waitForTimeout(300);
   await currentPanel
     .locator('.art-setting-item[data-name="sub-pos-80"]')
     .click();

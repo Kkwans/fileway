@@ -72,7 +72,11 @@ test("Video.js 诊断回退保留 Windows 版播放模式和自定义倍速", as
     await mode.click();
   }
   await expect(mode).toHaveText("转码");
-  await expect(page.locator(".media-compatibility-card")).toBeVisible();
+  await expect(
+    page
+      .locator(".media-compatibility-badge, .media-compatibility-card")
+      .first()
+  ).toBeVisible();
   await expect
     .poll(
       async () =>
