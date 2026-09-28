@@ -1295,7 +1295,7 @@ async function switchEngine(
           ? "原生无法播放，已切换兼容转码"
           : `已切换兼容 · ${qualityLabel(transcodeQuality.value)}`
       );
-      applyResume(resume);
+      applyResume({ ...resume, rate: currentRate.value });
       const hv = art.value?.video as HTMLVideoElement | undefined;
       try {
         void hv?.play?.().catch(() => {});
@@ -1309,7 +1309,7 @@ async function switchEngine(
       if (!art.value) return;
       art.value.url = rawUrl();
       notice("已切换原生播放");
-      applyResume(resume);
+      applyResume({ ...resume, rate: currentRate.value });
     }
   } catch (e) {
     if (token !== switchToken) return;
@@ -2234,6 +2234,10 @@ onMounted(async () => {
     settings: buildSettingsOption() as never,
     controls: barControls as never,
   });
+  // ArtPlayer renders controls before media is ready; make them usable during
+  // a cold compatibility transcode instead of waiting for the ready event.
+  bindBarSelectorPopups();
+  hardenSelectorLists();
   void loadVideoSprite();
 
   if (startCompatUrl && !askVisible.value) {
@@ -2276,12 +2280,11 @@ onMounted(async () => {
       } catch {
         /* ignore */
       }
-      if (startCompatUrl) {
-        // Already started right after player create; keep loader state coherent.
-        if (!switchingEngine) {
-          void switchEngine("compat", preferredCompatQuality(), true);
-        }
-      } else if (policy.value !== "ask" && actualMode.value === "native") {
+      if (
+        !startCompatUrl &&
+        policy.value !== "ask" &&
+        actualMode.value === "native"
+      ) {
         // Native-first: poll media state; compat only on error / true stall.
         const startedAt = Date.now();
         const poll = window.setInterval(() => {

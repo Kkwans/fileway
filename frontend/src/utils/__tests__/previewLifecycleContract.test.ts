@@ -152,7 +152,9 @@ describe("媒体预览生命周期契约", () => {
 
   it("ArtPlayer 切换媒体保留进度并完整释放资源", () => {
     expect(artPlayerSource).toContain("const resume = captureResume()");
-    expect(artPlayerSource).toContain("applyResume(resume)");
+    expect(artPlayerSource).toContain(
+      "applyResume({ ...resume, rate: currentRate.value })"
+    );
     expect(artPlayerSource).toContain("hlsInstance.destroy()");
     expect(artPlayerSource).toContain("clearNativeProgressHooks()");
     expect(artPlayerSource).toContain("stopLoadWaitTimer()");

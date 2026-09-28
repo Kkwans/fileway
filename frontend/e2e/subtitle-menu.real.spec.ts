@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const videoPath = process.env.NFB_E2E_SUBTITLE_VIDEO_PATH || "";
+const coldVideoPath = process.env.NFB_E2E_COLD_VIDEO_PATH || "";
 const username = process.env.NFB_E2E_USERNAME || "";
 const password = process.env.NFB_E2E_PASSWORD || "";
 
@@ -266,4 +267,51 @@ test("Windows 来源播放器的倍速、原生与兼容、分辨率控制可用
     )
     .toMatch(/\/api\/raw\//);
   await expect(video).toHaveJSProperty("playbackRate", 1.37);
+});
+
+test("兼容冷启动不会在媒体就绪时关闭已打开的倍速菜单", async ({ page }) => {
+  test.skip(
+    process.env.NFB_E2E_MODE !== "real" ||
+      !coldVideoPath ||
+      !username ||
+      !password,
+    "需要未转码过的 NAS 媒体路径验证兼容冷启动"
+  );
+  test.setTimeout(120_000);
+  await page.route("**/api/users/*", async (route) => {
+    if (route.request().method() === "PUT")
+      await route.fulfill({ status: 200, body: "" });
+    else await route.continue();
+  });
+  await page.goto("/login?redirect=%2Ffiles%2F");
+  await page.getByPlaceholder("用户名").fill(username);
+  await page.getByPlaceholder("密码").fill(password);
+  await page.getByRole("button", { name: "登录" }).click();
+  await expect(page).toHaveURL(/\/files\/?/);
+  const savedMode = await page.evaluate(() => {
+    const token = localStorage.getItem("jwt") || "";
+    const encoded = (token.split(".")[1] || "")
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    const payload = JSON.parse(atob(encoded));
+    return payload.user?.playerPreferences?.playbackMode;
+  });
+  test.skip(savedMode !== "compat", "冷启动用例需要账号默认使用兼容模式");
+  await page.goto(`/files${coldVideoPath}`);
+
+  const video = page.locator(".art-video");
+  const rate = page.locator(".art-control-playback-rate");
+  await expect(rate).toBeVisible();
+  await expect(video).toHaveJSProperty("readyState", 0);
+  await rate.click();
+  await expect(rate).toHaveClass(/art-selector-open/);
+  await rate.locator('.art-selector-item[data-value="1.5"]').click();
+  await expect(video).toHaveJSProperty("playbackRate", 1.5);
+  await expect
+    .poll(
+      async () => video.evaluate((element: HTMLVideoElement) => element.readyState),
+      { timeout: 90_000 }
+    )
+    .toBeGreaterThanOrEqual(2);
+  await expect(video).toHaveJSProperty("playbackRate", 1.5);
 });
