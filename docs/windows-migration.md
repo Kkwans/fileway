@@ -122,6 +122,8 @@
 
 `?player=videojs` 保留为显式诊断入口。`VideoPlayer.vue` 整体采用同一固定 Windows 来源版，补回其播放模式按钮、账号倍速预设、自定义倍速控件、原生/兼容/询问操作和相应样式；`videoPlayback.ts` 同步补回 HEVC 识别与失败提示。仅将偏好写入改接 NAS 已有的账号保存队列，并去除来源中未使用的辅助代码。诊断参数不再混入文件预览标题。独立浏览器回归脚本为 `frontend/e2e/videojs-diagnostic.real.spec.ts`。
 
+诊断入口在账号默认兼容或询问模式时，来源实现把模式按钮初始文字固定为“播放”，与实际会话模式不符；现由真实会话模式生成初始文字。真实浏览器脚本校验账号偏好与按钮文字一致，建议通过 `NFB_E2E_VIDEOJS_VIDEO_PATH` 使用较长的隔离样本，避免短视频自动结束时控制条收起。
+
 兼容模式冷启动的真实浏览器回归发现：媒体就绪前控制条已经显示，但独立弹出菜单此前要等 `ready` 才绑定；同时来源中的 `ready` 回调会重复发起兼容切换，转码结束后旧快照还会覆盖这段时间内新选的倍速。现改为控制条创建后立即绑定、只发起一次初始兼容切换，并在恢复播放时保留最新倍速。`frontend/e2e/subtitle-menu.real.spec.ts` 的冷启动用例需要通过 `NFB_E2E_COLD_VIDEO_PATH` 指向全新媒体路径，且验收账号默认使用兼容模式。
 
 最终全量代码门禁：前端目录执行 `corepack pnpm test`（108 文件、452 项）、`corepack pnpm run typecheck`、`corepack pnpm run lint`；后端目录执行 `go test ./...`、`go vet ./...`；仓库根目录执行 `git diff a202d0e627d2..HEAD --check`，均通过。生产镜像的前端阶段再次执行 typecheck 与生产构建。NAS 缺少 GCC，`go test -race` 未执行。镜像从干净检出构建，未采用工作区已有的 `backend/frontend/dist`。

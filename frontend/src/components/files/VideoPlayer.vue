@@ -527,7 +527,12 @@ function bindPlaybackModeButtons() {
   btn.type = "button";
   btn.className = "vjs-playback-mode-button vjs-control vjs-button";
   btn.title = "播放方式";
-  btn.textContent = "播放";
+  btn.textContent =
+    sessionPlaybackMode.value === "compat"
+      ? "转码"
+      : sessionPlaybackMode.value === "ask"
+        ? "选择"
+        : "播放";
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
