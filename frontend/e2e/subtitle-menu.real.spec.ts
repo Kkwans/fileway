@@ -22,6 +22,18 @@ test("ArtPlayer 字幕在原生设置菜单内完成选择和样式调整", asyn
   await page.goto(`/files${videoPath}`);
   const player = page.locator(".art-video-player");
   await expect(player).toBeVisible();
+  const video = page.locator(".art-video");
+  await expect
+    .poll(
+      async () =>
+        video.evaluate((element: HTMLVideoElement) => element.readyState),
+      { timeout: 90_000 }
+    )
+    .toBeGreaterThanOrEqual(2);
+  await video.evaluate((element: HTMLVideoElement) => {
+    element.pause();
+    element.currentTime = 1;
+  });
   await expect(page.locator(".player-tools")).toHaveCount(0);
   await expect(page.locator(".art-player-stage")).toBeVisible();
   await expect(page.locator(".art-control-playback-mode")).toBeVisible();
@@ -309,7 +321,8 @@ test("兼容冷启动不会在媒体就绪时关闭已打开的倍速菜单", as
   await expect(video).toHaveJSProperty("playbackRate", 1.5);
   await expect
     .poll(
-      async () => video.evaluate((element: HTMLVideoElement) => element.readyState),
+      async () =>
+        video.evaluate((element: HTMLVideoElement) => element.readyState),
       { timeout: 90_000 }
     )
     .toBeGreaterThanOrEqual(2);
