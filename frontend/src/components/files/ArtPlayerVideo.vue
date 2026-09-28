@@ -2908,6 +2908,10 @@ onBeforeUnmount(() => {
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
 }
+.art-player-stage :deep(.art-settings) {
+  /* The progress hit area sits above the controls and must not cover rows. */
+  bottom: calc(var(--art-control-height, 46px) + 21px);
+}
 .art-modal-mask {
   position: absolute;
   inset: 0;

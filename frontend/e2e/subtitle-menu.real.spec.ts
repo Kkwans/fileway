@@ -60,7 +60,22 @@ test("ArtPlayer 字幕在原生设置菜单内完成选择和样式调整", asyn
     await expect(activeSubtitleMenu).toBeVisible();
   }
 
+  async function expectSettingsAboveProgress() {
+    const clearance = await page.evaluate(() => {
+      const settings = document.querySelector(".art-settings");
+      const progress = document.querySelector(".art-progress");
+      if (!settings || !progress) return null;
+      return (
+        progress.getBoundingClientRect().top -
+        settings.getBoundingClientRect().bottom
+      );
+    });
+    expect(clearance).not.toBeNull();
+    expect(clearance).toBeGreaterThanOrEqual(-1);
+  }
+
   await openSubtitles();
+  await expectSettingsAboveProgress();
   const currentPanel = page.locator(".art-setting-panel.art-current");
   await expect(
     currentPanel.locator('.art-setting-item[data-name="sub-pick"]')
@@ -158,6 +173,7 @@ test("ArtPlayer 字幕在原生设置菜单内完成选择和样式调整", asyn
   await expect(
     currentPanel.locator('.art-setting-item[data-name="sub-offset"]')
   ).toBeVisible();
+  await expectSettingsAboveProgress();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth
