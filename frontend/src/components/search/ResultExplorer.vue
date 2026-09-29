@@ -72,7 +72,7 @@
           </span>
           <span v-else>搜索已取消，以下为取消前找到的结果。</span>
         </div>
-        <div v-if="results.length === 0" class="result-state">
+        <div v-if="results.length === 0" class="result-state" role="status">
           <AppIcon :name="emptyIcon" :size="32" />
           <span>{{ emptyText }}</span>
         </div>
@@ -192,6 +192,7 @@ const props = withDefaults(
     title: string;
     results: ExplorerResult[];
     loading?: boolean;
+    searched?: boolean;
     basePath?: string;
     returnRoute: string;
     showReturn?: boolean;
@@ -204,6 +205,7 @@ const props = withDefaults(
   }>(),
   {
     loading: false,
+    searched: true,
     showReturn: true,
     basePath: "/",
     iconColor: "var(--blue, #1677ff)",
@@ -260,7 +262,13 @@ const emptyIcon = computed<AppIconName>(() =>
 const emptyText = computed(() =>
   props.kind === "tag"
     ? "该标签下暂无可访问的文件或文件夹"
-    : "没有找到匹配的文件或文件夹"
+    : !props.searched
+      ? "输入关键词或选择文件类型，然后开始搜索"
+      : props.termination?.reason === "canceled"
+        ? "搜索已取消，未保留结果"
+        : props.termination?.reason === "timeout"
+          ? "搜索超时，未找到可展示的结果"
+          : "没有找到匹配的文件或文件夹"
 );
 
 function formatSize(size: number) {

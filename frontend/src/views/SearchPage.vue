@@ -83,6 +83,7 @@
           :scope="fileSearchScope"
           :title="searchTitle"
           :results="searchResults"
+          :searched="hasSearchAttempt"
           :loading="ongoing"
           :termination="searchTermination"
           :error="searchError"
@@ -154,6 +155,7 @@ const ongoing = ref(false);
 const results = ref<SearchResult[]>([]);
 const searchTermination = ref<SearchTermination | null>(null);
 const searchError = ref("");
+const hasSearchAttempt = ref(false);
 const activeType = ref<SearchType | null>(null);
 const submittedType = ref<SearchType | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
@@ -313,6 +315,10 @@ function clearSearch() {
   submittedType.value = null;
   searchTermination.value = null;
   searchError.value = "";
+  hasSearchAttempt.value = false;
+  const query = { ...route.query };
+  delete query.q;
+  void router.replace({ path: "/search", query });
   nextTick(() => inputRef.value?.focus());
 }
 
@@ -344,6 +350,7 @@ async function selectSearchType(type: SearchType | null) {
 
 async function submit() {
   if (!prompt.value) return;
+  hasSearchAttempt.value = true;
   const generation = ++searchGeneration;
   const requestPrompt = prompt.value;
   const requestScope = fileSearchScope.value;
@@ -468,6 +475,7 @@ watch(tagId, () => {
   prompt.value = getSearchPromptFromRoute(route.query.q, route.query.tag);
   activeType.value = detectSearchType(prompt.value);
   submittedType.value = null;
+  hasSearchAttempt.value = false;
   if (tagMode.value) {
     tagSearchScope.value =
       route.query.scope === "global" ? "global" : "current";
