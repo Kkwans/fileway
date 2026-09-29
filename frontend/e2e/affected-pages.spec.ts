@@ -153,6 +153,30 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
         return;
       }
       if (path === "/api/users/1") return json(route, user);
+      if (path === "/api/settings") {
+        return json(route, {
+          signup: false,
+          createUserDir: false,
+          hideLoginButton: false,
+          minimumPasswordLength: 6,
+          userHomeBasePath: "/users",
+          defaults: { ...user, sorting: { by: "name", asc: true } },
+          authMethod: "json",
+          rules: [],
+          branding: {
+            name: "NAS 文件浏览器",
+            disableExternal: false,
+            disableUsedPercentage: false,
+            files: "",
+            theme: "light",
+            color: "",
+          },
+          tus: { chunkSize: 10 * 1024 * 1024, retryCount: 5 },
+          shell: [],
+          commands: {},
+          tokenExpirationTime: "2h",
+        });
+      }
       if (path === "/api/tasks" || path === "/api/tasks/summary") {
         const counts = {
           all: 0,
@@ -580,5 +604,116 @@ test.describe("affected page browser gate", () => {
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
     expect(failedResponses).toEqual([]);
+  });
+
+  test("captures optimized pages across themes and viewport sizes", async ({
+    page,
+  }, testInfo: TestInfo) => {
+    test.setTimeout(300_000);
+    const unknownRequests: string[] = [];
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const measurements: Array<Record<string, unknown>> = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await installFixtureApi(page, unknownRequests);
+
+    for (const theme of themes) {
+      await page.goto("/login", { waitUntil: "networkidle" });
+      await setTheme(page, theme);
+      await expect(page.getByLabel("用户名")).toBeVisible();
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        const metrics = await geometry(page);
+        expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.innerWidth + 1);
+        measurements.push({
+          theme,
+          viewport: viewport.name,
+          route: "/login",
+          ...metrics,
+        });
+        await page.screenshot({
+          path: testInfo.outputPath(
+            `optimized/${theme}-${viewport.name}-login.png`
+          ),
+          fullPage: true,
+        });
+      }
+    }
+
+    await login(page);
+    const routes = [
+      {
+        name: "search",
+        path: "/search",
+        marker: "输入关键词或选择文件类型，然后开始搜索",
+      },
+      { name: "archive", path: "/archive", marker: "选择压缩包开始浏览" },
+      { name: "tasks", path: "/tasks", marker: "下载记录" },
+      { name: "global", path: "/settings/global", marker: "全局设置" },
+      { name: "profile", path: "/settings/profile", marker: "账户设置" },
+      { name: "user-new", path: "/settings/users/new", marker: "新建用户" },
+      {
+        name: "files",
+        path: "/files/?view=details",
+        marker: "这个文件夹是空的",
+      },
+    ];
+    for (const theme of themes) {
+      for (const target of routes) {
+        await page.goto(target.path, { waitUntil: "networkidle" });
+        await setTheme(page, theme);
+        await expect(
+          page.getByText(target.marker, { exact: true }).first()
+        ).toBeVisible();
+        for (const viewport of viewports) {
+          await page.setViewportSize(viewport);
+          await page.waitForTimeout(120);
+          const metrics = await geometry(page);
+          expect(metrics.scrollWidth).toBeLessThanOrEqual(
+            metrics.innerWidth + 1
+          );
+          measurements.push({
+            theme,
+            viewport: viewport.name,
+            route: target.path,
+            ...metrics,
+          });
+          await page.screenshot({
+            path: testInfo.outputPath(
+              `optimized/${theme}-${viewport.name}-${target.name}.png`
+            ),
+            fullPage: true,
+          });
+        }
+      }
+    }
+
+    const reportPath = testInfo.outputPath("optimized-audit.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify(
+        {
+          dataSource: "fixture",
+          themes,
+          viewports,
+          measurements,
+          unknownRequests: [...new Set(unknownRequests)],
+          consoleErrors,
+          pageErrors,
+        },
+        null,
+        2
+      )
+    );
+    await testInfo.attach("optimized-audit", {
+      path: reportPath,
+      contentType: "application/json",
+    });
+    expect(unknownRequests).toEqual([]);
+    expect(consoleErrors).toEqual([]);
+    expect(pageErrors).toEqual([]);
   });
 });
