@@ -128,177 +128,189 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
   ).user;
   let favorite = false;
 
-  await page.route(/\/api\//, async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    const path = url.pathname;
-    const method = request.method();
+  await page.route(
+    (url) => url.pathname.startsWith("/api/"),
+    async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = url.pathname;
+      const method = request.method();
 
-    if (path === "/api/login" || path === "/api/renew") {
-      await route.fulfill({
-        status: 200,
-        contentType: "text/plain",
-        body: token,
-      });
-      return;
-    }
-    if (path === "/api/task-center/events") {
-      await route.fulfill({
-        status: 200,
-        contentType: "text/event-stream; charset=utf-8",
-        body: ": fixture connected\n\n",
-      });
-      return;
-    }
-    if (path === "/api/users/1") return json(route, user);
-    if (path === "/api/tasks" || path === "/api/tasks/summary") {
-      const counts = {
-        all: 0,
-        active: 0,
-        attention: 0,
-        canceled: 0,
-        completed: 0,
-        archived: 0,
-      };
-      return json(route, {
-        items: [],
-        nextCursor: "",
-        total: 0,
-        counts,
-        categoryCounts: { file: counts, background: counts },
-        owners: [],
-      });
-    }
-    if (path === "/api/transfers") return json(route, { items: [], total: 0 });
-    if (path === "/api/history")
-      return json(route, { items: [], total: 0, nextCursor: "" });
-    if (path === "/api/trash" && method === "GET") {
-      return json(route, [
-        {
-          id: "trash-file",
-          userId: 1,
-          ownerName: "fixture",
-          originalPath: "/项目/说明.md",
-          name: "/项目/说明.md",
-          isDir: false,
-          size: 4096,
-          sizeState: "accurate",
-          deletedAt: now - 3_600_000,
-          status: "available",
-        },
-        {
-          id: "trash-dir-calculating",
-          userId: 1,
-          ownerName: "fixture",
-          originalPath: "/项目/素材",
-          name: "/项目/素材",
-          isDir: true,
-          size: 0,
-          sizeState: "calculating",
-          sizeTaskId: "fixture-size-task",
-          deletedAt: now - 7_200_000,
-          status: "available",
-        },
-        {
-          id: "trash-dir-unknown",
-          userId: 1,
-          ownerName: "fixture",
-          originalPath: "/旧记录",
-          name: "/旧记录",
-          isDir: true,
-          size: 0,
-          sizeState: "unknown",
-          deletedAt: now - 86_400_000,
-          status: "available",
-        },
-      ]);
-    }
-    if (path === "/api/analysis/recent") {
-      return json(route, [
-        {
-          id: "scan-fixture",
-          tool: url.searchParams.get("tool") || "duplicates",
-          status: "completed",
-          createdAt: now - 120_000,
-          finishedAt: now - 60_000,
-          scopes: ["/项目/照片", "/项目/视频"],
-          processedItems: 24,
-          totalItems: 24,
-          resultReady: true,
-          metrics: {
-            scannedFiles: 24,
-            scannedDirectories: 4,
-            scannedBytes: 128 * 1024 * 1024,
-            duplicateGroups: 3,
-            reclaimableBytes: 32 * 1024 * 1024,
-          },
-        },
-      ]);
-    }
-    if (path.startsWith("/api/resources")) {
-      return json(
-        route,
-        path.includes("fixture-video.mkv")
-          ? videoResource()
-          : directoryResource(path)
-      );
-    }
-    if (path === "/api/media/playback") {
-      return json(route, {
-        exists: false,
-        path: "/fixture-video.mkv",
-        position: 0,
-        duration: 0,
-        updatedAt: now,
-      });
-    }
-    if (path === "/api/media/info") {
-      return json(route, {
-        videoCodec: "hevc",
-        audioCodec: "aac",
-        duration: 120,
-        width: 1920,
-        height: 1080,
-      });
-    }
-    if (path === "/api/favorites/groups") return json(route, []);
-    if (path === "/api/favorites") {
-      if (method === "POST") {
-        favorite = true;
+      if (path === "/api/login" || path === "/api/renew") {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/plain",
+          body: token,
+        });
+        return;
+      }
+      if (path === "/api/task-center/events") {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/event-stream; charset=utf-8",
+          body: ": fixture connected\n\n",
+        });
+        return;
+      }
+      if (path === "/api/users/1") return json(route, user);
+      if (path === "/api/tasks" || path === "/api/tasks/summary") {
+        const counts = {
+          all: 0,
+          active: 0,
+          attention: 0,
+          canceled: 0,
+          completed: 0,
+          archived: 0,
+        };
         return json(route, {
-          id: "favorite-video",
-          path: "/fixture-video.mkv",
-          name: "fixture-video.mkv",
-          addedAt: now,
-          order: 0,
+          items: [],
+          nextCursor: "",
+          total: 0,
+          counts,
+          categoryCounts: { file: counts, background: counts },
+          owners: [],
         });
       }
-      return json(
-        route,
-        favorite
-          ? [
-              {
-                id: "favorite-video",
-                path: "/fixture-video.mkv",
-                name: "fixture-video.mkv",
-                addedAt: now,
-                order: 0,
+      if (path === "/api/transfers")
+        return json(route, { items: [], total: 0 });
+      if (path === "/api/history")
+        return json(route, { items: [], total: 0, nextCursor: "" });
+      if (path === "/api/trash" && method === "GET") {
+        return json(route, [
+          {
+            id: "trash-file",
+            userId: 1,
+            ownerName: "fixture",
+            originalPath: "/项目/说明.md",
+            name: "/项目/说明.md",
+            isDir: false,
+            size: 4096,
+            sizeState: "accurate",
+            deletedAt: now - 3_600_000,
+            status: "available",
+          },
+          {
+            id: "trash-dir-calculating",
+            userId: 1,
+            ownerName: "fixture",
+            originalPath: "/项目/素材",
+            name: "/项目/素材",
+            isDir: true,
+            size: 0,
+            sizeState: "calculating",
+            sizeTaskId: "fixture-size-task",
+            deletedAt: now - 7_200_000,
+            status: "available",
+          },
+          {
+            id: "trash-dir-unknown",
+            userId: 1,
+            ownerName: "fixture",
+            originalPath: "/旧记录",
+            name: "/旧记录",
+            isDir: true,
+            size: 0,
+            sizeState: "unknown",
+            deletedAt: now - 86_400_000,
+            status: "available",
+          },
+        ]);
+      }
+      if (path === "/api/analysis/recent") {
+        return json(route, {
+          items: [
+            {
+              id: "scan-fixture",
+              tool: url.searchParams.get("tool") || "duplicates",
+              status: "completed",
+              createdAt: now - 120_000,
+              finishedAt: now - 60_000,
+              scopes: ["/项目/照片", "/项目/视频"],
+              processedItems: 24,
+              totalItems: 24,
+              resultReady: true,
+              metrics: {
+                scannedFiles: 24,
+                scannedDirectories: 4,
+                scannedBytes: 128 * 1024 * 1024,
+                duplicateGroups: 3,
+                reclaimableBytes: 32 * 1024 * 1024,
               },
-            ]
-          : []
-      );
-    }
-    if (
-      ["/api/tags", "/api/categories", "/api/volumes", "/api/recent"].includes(
-        path
-      )
-    ) {
-      return json(route, []);
-    }
+            },
+          ],
+          nextCursor: "",
+        });
+      }
+      if (path.startsWith("/api/resources")) {
+        return json(
+          route,
+          path.includes("fixture-video.mkv")
+            ? videoResource()
+            : directoryResource(path)
+        );
+      }
+      if (path === "/api/media/playback") {
+        return json(route, {
+          exists: false,
+          path: "/fixture-video.mkv",
+          position: 0,
+          duration: 0,
+          updatedAt: now,
+        });
+      }
+      if (path === "/api/media/info") {
+        return json(route, {
+          videoCodec: "hevc",
+          audioCodec: "aac",
+          duration: 120,
+          width: 1920,
+          height: 1080,
+        });
+      }
+      if (path === "/api/media/sprite") return json(route, {});
+      if (path === "/api/media/hls") return json(route, {});
+      if (path === "/api/favorites/groups") return json(route, []);
+      if (path === "/api/favorites") {
+        if (method === "POST") {
+          favorite = true;
+          return json(route, {
+            id: "favorite-video",
+            path: "/fixture-video.mkv",
+            name: "fixture-video.mkv",
+            addedAt: now,
+            order: 0,
+          });
+        }
+        return json(
+          route,
+          favorite
+            ? [
+                {
+                  id: "favorite-video",
+                  path: "/fixture-video.mkv",
+                  name: "fixture-video.mkv",
+                  addedAt: now,
+                  order: 0,
+                },
+              ]
+            : []
+        );
+      }
+      if (
+        [
+          "/api/tags",
+          "/api/categories",
+          "/api/volumes",
+          "/api/recent",
+        ].includes(path)
+      ) {
+        return json(route, []);
+      }
 
-    unknownRequests.push(`${method} ${path}`);
-    await json(route, {});
-  });
+      unknownRequests.push(`${method} ${path}`);
+      await json(route, {});
+    }
+  );
 }
 
 async function login(page: Page) {
@@ -337,28 +349,11 @@ async function geometry(page: Page) {
 }
 
 test.describe("affected page browser gate", () => {
-  test("covers navigation, sidebar, affected pages and media state", async ({
+  test("covers file navigation, trash status and sidebar controls", async ({
     page,
-  }, testInfo: TestInfo) => {
-    test.setTimeout(180_000);
+  }) => {
+    test.setTimeout(60_000);
     const unknownRequests: string[] = [];
-    const consoleErrors: string[] = [];
-    const pageErrors: string[] = [];
-    const failedResponses: string[] = [];
-    const measurements: Array<Record<string, unknown>> = [];
-
-    page.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text());
-    });
-    page.on("pageerror", (error) => pageErrors.push(error.message));
-    page.on("response", (response) => {
-      if (response.url().includes("/api/") && response.status() >= 400) {
-        failedResponses.push(
-          `${response.status()} ${new URL(response.url()).pathname}`
-        );
-      }
-    });
-
     await installFixtureApi(page, unknownRequests);
     await login(page);
 
@@ -368,12 +363,7 @@ test.describe("affected page browser gate", () => {
     );
     await expect(page).toHaveURL(/sort=name/);
 
-    await page.goto("/trash");
-    await expect(page.getByRole("heading", { name: "回收站" })).toBeVisible();
-    await expect(page.getByText("统计中", { exact: true })).toBeVisible();
-    await expect(page.getByText("未统计", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "补算" })).toBeVisible();
-
+    // The More menu belongs to the file view, not the trash view.
     await page.getByRole("button", { name: "更多" }).click();
     await expect(page.locator("#dropdown")).toHaveClass(/active/);
     await page.mouse.click(300, 300);
@@ -383,7 +373,7 @@ test.describe("affected page browser gate", () => {
     await moreButton.click();
     await page
       .locator("#dropdown")
-      .getByRole("button", { name: "刷新" })
+      .getByRole("button", { name: "下载" })
       .focus();
     await expect(page.locator("#dropdown")).toHaveClass(/active/);
     await page.keyboard.press("Escape");
@@ -393,13 +383,19 @@ test.describe("affected page browser gate", () => {
     await moreButton.click();
     await page
       .locator("#dropdown")
-      .getByRole("button", { name: "刷新" })
+      .getByRole("button", { name: "下载" })
       .focus();
-    await page.getByRole("button", { name: "返回上一页" }).focus();
+    await page.getByRole("searchbox", { name: "在当前目录搜索" }).focus();
     await expect(page.locator("#dropdown")).not.toHaveClass(/active/);
 
+    await page.goto("/trash");
+    await expect(page.getByRole("heading", { name: "回收站" })).toBeVisible();
+    await expect(page.getByText("统计中", { exact: true })).toBeVisible();
+    await expect(page.getByText("未统计", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "补算" })).toBeVisible();
+
     await page.reload({ waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "返回上一页" }).click();
+    await page.goBack();
     await expect(page).toHaveURL(/\/files\/.*%E9%A1%B9%E7%9B%AE|\/files\/项目/);
     await expect(page).toHaveURL(/sort=name/);
     await expect(page).toHaveURL(/order=desc/);
@@ -442,12 +438,21 @@ test.describe("affected page browser gate", () => {
       Number(await resizeHandle.getAttribute("aria-valuenow"))
     ).toBeGreaterThan(initialWidth + 40);
     await resizeHandle.dblclick();
-    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "256");
+    await expect(resizeHandle).toHaveAttribute("aria-valuenow", "288");
 
     await page.getByRole("button", { name: "目录分类", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "NAS 根目录", exact: true })
+      page.getByRole("button", { name: "根目录", exact: true })
     ).toBeVisible();
+
+    expect(unknownRequests).toEqual([]);
+  });
+
+  test("covers storage analysis and media state", async ({ page }) => {
+    test.setTimeout(60_000);
+    const unknownRequests: string[] = [];
+    await installFixtureApi(page, unknownRequests);
+    await login(page);
 
     await page.goto(
       "/analysis?tool=duplicates&paths=%2F%E9%A1%B9%E7%9B%AE%2F%E7%85%A7%E7%89%87"
@@ -455,25 +460,54 @@ test.describe("affected page browser gate", () => {
     await expect(page.getByRole("heading", { name: "存储工具" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "扫描范围" })).toBeVisible();
     await expect(page.getByText("最近扫描", { exact: true })).toBeVisible();
-    await page.getByText("高级：粘贴路径", { exact: true }).click();
-    await expect(page.getByLabel("添加扫描路径")).toBeVisible();
+    await page.getByRole("button", { name: "添加范围" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "选择分析范围" })
+    ).toBeVisible();
+    await page.getByRole("button", { name: "关闭路径选择器" }).click();
 
     await page.goto("/files/fixture-video.mkv");
-    await expect(page.getByText("兼容播放", { exact: true })).toBeVisible();
     await expect(
-      page.getByText(/此格式可能需要兼容播放|正在检查浏览器/)
+      page.locator(".header-title", { hasText: "fixture-video.mkv" })
     ).toBeVisible();
-    const favoriteAction = page
-      .locator("#dropdown")
-      .getByRole("button", { name: "收藏", exact: true });
+    await expect(page.locator(".art-player-stage")).toBeVisible();
+    const favoriteAction = page.getByRole("button", {
+      name: "收藏",
+      exact: true,
+    });
     await expect(favoriteAction).toHaveAttribute("aria-pressed", "false");
     await favoriteAction.click();
     await expect(
-      page
-        .locator("#dropdown")
-        .getByRole("button", { name: "取消收藏", exact: true })
+      page.locator("button.icon-button[aria-label='取消收藏']")
     ).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".header-task-center")).toHaveCount(0);
+
+    expect(unknownRequests).toEqual([]);
+  });
+
+  test("captures affected pages across themes and viewport sizes", async ({
+    page,
+  }, testInfo: TestInfo) => {
+    test.setTimeout(180_000);
+    const unknownRequests: string[] = [];
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const failedResponses: string[] = [];
+    const measurements: Array<Record<string, unknown>> = [];
+
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("response", (response) => {
+      if (response.url().includes("/api/") && response.status() >= 400) {
+        failedResponses.push(
+          `${response.status()} ${new URL(response.url()).pathname}`
+        );
+      }
+    });
+    await installFixtureApi(page, unknownRequests);
+    await login(page);
 
     const routes = [
       { name: "trash", path: "/trash", title: "回收站" },
@@ -482,7 +516,11 @@ test.describe("affected page browser gate", () => {
         path: "/analysis?tool=duplicates&paths=%2F%E9%A1%B9%E7%9B%AE%2F%E7%85%A7%E7%89%87",
         title: "存储工具",
       },
-      { name: "video", path: "/files/fixture-video.mkv", title: "兼容播放" },
+      {
+        name: "video",
+        path: "/files/fixture-video.mkv",
+        title: "fixture-video.mkv",
+      },
     ];
     for (const theme of themes) {
       for (const target of routes) {
