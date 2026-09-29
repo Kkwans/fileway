@@ -57,6 +57,8 @@ body.rtl .shell-content {
 
 .shell--hidden {
   transform: translateY(105%);
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .shell__result--hidden {

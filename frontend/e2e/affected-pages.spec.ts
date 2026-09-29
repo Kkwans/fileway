@@ -412,7 +412,16 @@ test.describe("affected page browser gate", () => {
     await page.getByRole("searchbox", { name: "在当前目录搜索" }).focus();
     await expect(page.locator("#dropdown")).not.toHaveClass(/active/);
 
+    await expect(page.locator(".shell")).toHaveCSS("visibility", "hidden");
+    await moreButton.click();
+    await page
+      .locator("#dropdown")
+      .getByRole("button", { name: "终端" })
+      .click();
+    await expect(page.locator(".shell")).toHaveCSS("visibility", "visible");
+
     await page.goto("/trash");
+    await expect(page.locator(".shell")).toHaveCSS("visibility", "hidden");
     await expect(page.getByRole("heading", { name: "回收站" })).toBeVisible();
     await expect(page.getByText("统计中", { exact: true })).toBeVisible();
     await expect(page.getByText("未统计", { exact: true })).toBeVisible();
