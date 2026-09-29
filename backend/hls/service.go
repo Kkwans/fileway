@@ -73,6 +73,7 @@ type Input struct {
 	VideoPixelFormat string
 	VideoProfile     string
 	VideoBitDepth    int
+	VideoWidth       int
 	VideoHeight      int
 	// DurationSeconds is the probed source duration used to render truthful
 	// compatibility progress while a WebM artifact is being generated.
@@ -277,6 +278,22 @@ func ProfileForQuality(quality string, sourceHeight int) string {
 		requested = sourceHeight
 	}
 	return encodeProfileForHeight(requested)
+}
+
+// ProfileForDimensions keeps cinema-width 4K sources at their source class
+// even when the cropped frame is shorter than 2160 pixels.
+func ProfileForDimensions(quality string, sourceWidth, sourceHeight int) string {
+	classHeight := sourceHeight
+	if widthHeight := (sourceWidth*9 + 8) / 16; widthHeight > classHeight {
+		classHeight = widthHeight
+	}
+	return ProfileForQuality(quality, classHeight)
+}
+
+func WebMProfileForDimensions(quality string, sourceWidth, sourceHeight int) string {
+	profile := ProfileForDimensions(quality, sourceWidth, sourceHeight)
+	profile = strings.Replace(profile, "h264-main-", "vp9-", 1)
+	return strings.Replace(profile, "-aac-hls4-v1", "-opus-webm-v1", 1)
 }
 
 func WebMProfileForQuality(quality string, sourceHeight int) string {

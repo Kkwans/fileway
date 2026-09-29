@@ -207,7 +207,7 @@ describe("媒体 API", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "/电影/示例.mkv" }),
+        body: JSON.stringify({ path: "/电影/示例.mkv", quality: "source" }),
       },
     ]);
     expect(mocks.fetchJSON).toHaveBeenCalledWith("/api/media/hls/cache-id");
@@ -230,7 +230,11 @@ describe("媒体 API", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "/电影/示例.mkv", format: "mp4" }),
+        body: JSON.stringify({
+          path: "/电影/示例.mkv",
+          format: "mp4",
+          quality: "source",
+        }),
       },
     ]);
   });

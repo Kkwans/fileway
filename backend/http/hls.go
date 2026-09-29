@@ -82,6 +82,7 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 		if err := decoder.Decode(&request); err != nil {
 			return http.StatusBadRequest, fmt.Errorf("兼容播放参数无效: %w", err)
 		}
+		request.Quality = strings.ToLower(strings.TrimSpace(request.Quality))
 		if !mediaHLSQualityAllowed(request.Quality) {
 			return http.StatusBadRequest, fmt.Errorf("不支持的兼容播放画质")
 		}
@@ -91,10 +92,14 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 		}
 		var task *tasks.Task
 		reserve := service.Reserve
+		sourceQuality := request.Quality == "source"
+		copySafe := mediaHLSFormatForInput(input) == "copy"
 		if request.Format == "webm" {
 			reserve = service.ReserveWebM
-			if mediaHLSExplicitQuality(request.Quality) {
-				profile := hls.WebMProfileForQuality(request.Quality, input.VideoHeight)
+			if sourceQuality && hls.CanCopyWebMMedia(input.VideoCodec, input.AudioCodec) {
+				reserve = service.ReserveWebMCopy
+			} else if mediaHLSExplicitQuality(request.Quality) || sourceQuality {
+				profile := hls.WebMProfileForDimensions(request.Quality, input.VideoWidth, input.VideoHeight)
 				reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {
 					return service.ReserveWithProfile(source, profile, start)
 				}
@@ -110,11 +115,12 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 			}
 		} else if request.Format != "" && request.Format != "hls" {
 			return http.StatusBadRequest, fmt.Errorf("不支持的兼容播放格式")
-		} else if mediaHLSFormatForInput(input) == "copy" && !mediaHLSExplicitQuality(request.Quality) {
+		} else if copySafe && !mediaHLSExplicitQuality(request.Quality) {
 			reserve = service.ReserveCopy
 		}
-		if request.Format != "webm" && request.Format != "mp4" && mediaHLSExplicitQuality(request.Quality) {
-			profile := hls.ProfileForQuality(request.Quality, input.VideoHeight)
+		if request.Format != "webm" && request.Format != "mp4" &&
+			(mediaHLSExplicitQuality(request.Quality) || (sourceQuality && !copySafe)) {
+			profile := hls.ProfileForDimensions(request.Quality, input.VideoWidth, input.VideoHeight)
 			reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {
 				return service.ReserveWithProfile(source, profile, start)
 			}
@@ -238,6 +244,7 @@ func mediaHLSInputWithContext(ctx context.Context, d *data, owner *users.User, v
 			input.VideoPixelFormat = probe.VideoPixelFormat
 			input.VideoProfile = probe.VideoProfile
 			input.VideoBitDepth = probe.VideoBitDepth
+			input.VideoWidth = probe.Width
 			input.VideoHeight = probe.Height
 			input.DurationSeconds = probe.Duration
 			log.Printf("media HLS codec probe video=%q audio=%q pix_fmt=%q profile=%q bit_depth=%d", input.VideoCodec, input.AudioCodec, input.VideoPixelFormat, input.VideoProfile, input.VideoBitDepth)

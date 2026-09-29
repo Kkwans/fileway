@@ -167,6 +167,10 @@ import { useAuthStore } from "@/stores/auth";
 import { useAccountPreferencesStore } from "@/stores/accountPreferences";
 import { resolveControlsTimeoutMs } from "@/utils/playerControls";
 import { supportsH264CompatibilityPlayback } from "@/utils/videoPlayback";
+import {
+  videoClassHeight,
+  videoResolutionLabel,
+} from "@/utils/videoResolution";
 import PathPicker from "@/components/prompts/PathPicker.vue";
 
 type Policy = "native" | "compat" | "ask";
@@ -348,15 +352,7 @@ const downloadUrl = computed(
 );
 
 const resolutionLabel = computed(() => {
-  const h = sourceHeight.value;
-  const w = sourceWidth.value;
-  if (!h && !w) return "—";
-  if (h >= 2000) return "4K";
-  if (h >= 1300) return "2K";
-  if (h >= 900) return "1080p";
-  if (h >= 600) return "720p";
-  if (h >= 400) return "480p";
-  return w && h ? `${w}x${h}` : `${h}p`;
+  return videoResolutionLabel(sourceWidth.value, sourceHeight.value);
 });
 
 /**
@@ -367,7 +363,7 @@ const qualityOptions = computed(() => {
   if (actualMode.value !== "compat") {
     return [{ html: resolutionLabel.value, value: "native" }];
   }
-  const h = sourceHeight.value || 0;
+  const h = videoClassHeight(sourceWidth.value, sourceHeight.value);
   const opts: { html: string; value: Quality }[] = [
     {
       html: h ? `原画 ${resolutionLabel.value}` : "原画",

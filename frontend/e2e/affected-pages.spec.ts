@@ -287,8 +287,7 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
           videoCodec: "hevc",
           audioCodec: "aac",
           duration: 120,
-          width: 1920,
-          height: 1080,
+          resolution: { width: 3840, height: 1600 },
         });
       }
       if (path === "/api/media/sprite") return json(route, {});
@@ -504,6 +503,7 @@ test.describe("affected page browser gate", () => {
       page.locator(".header-title", { hasText: "fixture-video.mkv" })
     ).toBeVisible();
     await expect(page.locator(".art-player-stage")).toBeVisible();
+    await expect(page.getByText("4K", { exact: true }).first()).toBeVisible();
     const favoriteAction = page.getByRole("button", {
       name: "收藏",
       exact: true,

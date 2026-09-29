@@ -143,6 +143,15 @@ func TestFFmpegArgsExposeGrowingPlaylistAsSeekableEvent(t *testing.T) {
 }
 
 func TestQualityProfilesAreDistinctAndNeverUpscale(t *testing.T) {
+	if got := ProfileForDimensions("4k", 3840, 1600); got != "h264-main-2160p-aac-hls4-v1" {
+		t.Fatalf("cinema 4K profile = %q", got)
+	}
+	if got := ProfileForDimensions("2k", 3840, 1600); got != "h264-main-1440p-aac-hls4-v1" {
+		t.Fatalf("cinema 2K profile = %q", got)
+	}
+	if got := ProfileForDimensions("4k", 1920, 800); got != "h264-main-1080p-aac-hls4-v1" {
+		t.Fatalf("cinema 1080p no-upscale profile = %q", got)
+	}
 	if got := ProfileForQuality("1080p", 2160); got != "h264-main-1080p-aac-hls4-v1" {
 		t.Fatalf("1080 profile = %q", got)
 	}
