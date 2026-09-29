@@ -54,6 +54,7 @@ import { StatusError } from "@/api/utils";
 import { authMethod } from "@/utils/constants";
 import { logout } from "@/utils/auth";
 import type { IUser } from "@/types/user";
+import { useUnsavedChangesGuard } from "@/utils/unsavedChanges";
 
 const saving = ref(false);
 const error = ref<StatusError>();
@@ -61,6 +62,7 @@ const user = ref<IUser>();
 const createUserDir = ref<boolean>(false);
 const isCurrentPasswordRequired = ref<boolean>(false);
 const userFormEl = ref<HTMLFormElement | null>(null);
+const savedSignature = ref("");
 
 const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
@@ -77,6 +79,10 @@ onMounted(() => {
 function requestSave() {
   userFormEl.value?.requestSubmit?.();
 }
+
+const currentSignature = () => (user.value ? JSON.stringify(user.value) : "");
+const hasUnsavedChanges = () =>
+  savedSignature.value !== "" && currentSignature() !== savedSignature.value;
 
 const isNew = computed(() => route.path === "/settings/users/new");
 
@@ -110,6 +116,8 @@ const fetchData = async () => {
         : route.params.id;
       user.value = { ...(await api.get(parseInt(id))) };
     }
+    if (user.value?.perm.admin) user.value.lockPassword = false;
+    savedSignature.value = currentSignature();
   } catch (err) {
     if (err instanceof Error) {
       error.value = err;
@@ -143,6 +151,7 @@ const deleteUser = async (currentPassword: string) => {
   }
   try {
     await api.remove(user.value.id, currentPassword);
+    savedSignature.value = currentSignature();
     if (user.value.id == authStore.user?.id) {
       logout();
     } else {
@@ -169,17 +178,17 @@ const save = (event: Event) => {
       confirm: (event: Event, currentPassword: string) => {
         event.preventDefault();
         layoutStore.closeHovers();
-        send(currentPassword);
+        void send(currentPassword);
       },
     });
   } else {
-    send("");
+    void send("");
   }
 
   return true;
 };
 
-const send = async (currentPassword: string) => {
+const send = async (currentPassword: string, navigateOnCreate = true) => {
   if (saving.value || !user.value) {
     return false;
   }
@@ -194,7 +203,9 @@ const send = async (currentPassword: string) => {
       };
 
       const loc = await api.create(newUser, currentPassword);
-      router.push({ path: loc || "/settings/users" });
+      savedSignature.value = currentSignature();
+      if (navigateOnCreate)
+        await router.push({ path: loc || "/settings/users" });
       $showSuccess("用户已创建");
     } else {
       await api.update(submitted, ["all"], currentPassword);
@@ -207,15 +218,41 @@ const send = async (currentPassword: string) => {
         authStore.updateUser(safeUser);
       }
       user.value.password = "";
+      savedSignature.value = currentSignature();
 
       $showSuccess("用户已更新");
     }
+    return true;
   } catch (e: any) {
     $showError(e);
+    return false;
   } finally {
     saving.value = false;
   }
 };
+
+const saveForNavigation = async (): Promise<boolean> => {
+  if (!isCurrentPasswordRequired.value) return send("", false);
+  return new Promise<boolean>((resolve) => {
+    let submitted = false;
+    layoutStore.showHover({
+      prompt: "current-password",
+      close: async () => {
+        if (!submitted) resolve(false);
+        return "";
+      },
+      confirm: async (event: Event, currentPassword: string) => {
+        event.preventDefault();
+        if (submitted) return;
+        submitted = true;
+        layoutStore.closeHovers();
+        resolve(await send(currentPassword, false));
+      },
+    });
+  });
+};
+
+useUnsavedChangesGuard(hasUnsavedChanges, saveForNavigation);
 defineExpose({
   saveSettings: requestSave,
   saving,

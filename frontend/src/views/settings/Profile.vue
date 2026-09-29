@@ -337,6 +337,7 @@ import {
   validatePrefix,
 } from "@/utils/listingPreferences";
 import { resolveControlsTimeoutMs } from "@/utils/playerControls";
+import { useUnsavedChangesGuard } from "@/utils/unsavedChanges";
 const accountPreferences = useAccountPreferencesStore();
 const layoutStore = useLayoutStore();
 const authStore = useAuthStore();
@@ -480,15 +481,14 @@ async function onSettingsSave() {
   const accountId = authStore.user?.id;
   await (async () => {
     try {
-      const wantsPassword =
-        password.value &&
-        password.value === passwordConf.value &&
-        (!isCurrentPasswordRequired.value || currentPassword.value);
+      const hasPendingPassword = Boolean(
+        password.value || passwordConf.value || currentPassword.value
+      );
       const accountOk = await persistAccountPrefsNow();
       if (accountId !== authStore.user?.id) return;
       const playerOk = await persistPlayerPrefsNow();
       if (accountId !== authStore.user?.id) return;
-      if (wantsPassword) {
+      if (hasPendingPassword) {
         await updatePassword(new Event("submit"));
         return;
       }
@@ -558,7 +558,8 @@ const updatePassword = async (event: Event) => {
     (isCurrentPasswordRequired.value && currentPassword.value === "") ||
     authStore.user === null
   ) {
-    return;
+    $showError("请填写并确认新密码");
+    return false;
   }
 
   try {
@@ -569,10 +570,17 @@ const updatePassword = async (event: Event) => {
     await api.update(data, ["password"], currentPassword.value || undefined);
     password.value = passwordConf.value = currentPassword.value = "";
     $showSuccess("密码已更新");
+    return true;
   } catch (e: any) {
     $showError(e);
+    return false;
   }
 };
+
+useUnsavedChangesGuard(
+  () => Boolean(password.value || passwordConf.value || currentPassword.value),
+  () => updatePassword(new Event("submit"))
+);
 
 const updateSettings = async (event: Event) => {
   event.preventDefault();

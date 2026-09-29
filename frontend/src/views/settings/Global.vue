@@ -254,6 +254,7 @@ import {
 } from "@/utils/tokenExpiration";
 import Errors from "@/views/Errors.vue";
 import { computed, inject, onMounted, ref } from "vue";
+import { useUnsavedChangesGuard } from "@/utils/unsavedChanges";
 const error = ref<StatusError | null>(null);
 const originalSettings = ref<ISettings | null>(null);
 const settings = ref<ISettings | null>(null);
@@ -296,22 +297,15 @@ const capitalize = (name: string, where: string | RegExp = "_") => {
   return name.slice(0, -1);
 };
 
-const save = async () => {
-  if (settings.value === null || saving.value) return false;
-  if (pendingChunkSize.value !== null)
-    settings.value.tus.chunkSize = parseBytes(pendingChunkSize.value);
-  saving.value = true;
+const buildSettingsPayload = (): ISettings | null => {
+  if (settings.value === null) return null;
   const newSettings: ISettings = {
     ...JSON.parse(JSON.stringify(settings.value)),
     tokenExpirationTime: minutesToDuration(tokenExpirationMinutes.value),
-    shell:
-      settings.value?.shell
-        .join(" ")
-        .trim()
-        .split(" ")
-        .filter((s: string) => s !== "") ?? [],
     commands: {},
   };
+  if (pendingChunkSize.value !== null)
+    newSettings.tus.chunkSize = parseBytes(pendingChunkSize.value);
 
   const keys = Object.keys(settings.value.commands) as Array<
     keyof SettingsCommand
@@ -334,9 +328,27 @@ const save = async () => {
     .split(" ")
     .filter((s) => s !== "");
 
+  return newSettings;
+};
+
+const hasUnsavedChanges = () => {
+  const current = buildSettingsPayload();
+  return (
+    current !== null &&
+    originalSettings.value !== null &&
+    JSON.stringify(current) !== JSON.stringify(originalSettings.value)
+  );
+};
+
+const save = async () => {
+  if (saving.value) return false;
+  const newSettings = buildSettingsPayload();
+  if (newSettings === null) return false;
+  saving.value = true;
+
   try {
     await api.update(newSettings);
-    originalSettings.value = newSettings;
+    originalSettings.value = JSON.parse(JSON.stringify(newSettings));
     if (newSettings.branding.theme !== getTheme())
       setTheme(newSettings.branding.theme);
     $showSuccess("设置已更新");
@@ -349,6 +361,8 @@ const save = async () => {
 
   return true;
 };
+
+useUnsavedChangesGuard(hasUnsavedChanges, save);
 // Parse the user-friendly input (e.g., "20M" or "1T") to bytes
 const parseBytes = (input: string) => {
   const regex = /^(\d+)(\.\d+)?(B|K|KB|M|MB|G|GB|T|TB)?$/i;
@@ -390,7 +404,7 @@ onMounted(async () => {
   try {
     layoutStore.loading = true;
     const original: ISettings = await api.get();
-    const newSettings: ISettings = { ...original, commands: {} };
+    const newSettings: ISettings = JSON.parse(JSON.stringify(original));
 
     const keys = Object.keys(original.commands) as Array<keyof SettingsCommand>;
     for (const key of keys) {
@@ -398,12 +412,12 @@ onMounted(async () => {
       commandObject.value[key] = original.commands[key]!.join("\n");
     }
 
-    originalSettings.value = original;
     settings.value = newSettings;
     shellValue.value = newSettings.shell.join(" ");
     tokenExpirationMinutes.value = durationToMinutes(
       newSettings.tokenExpirationTime
     );
+    originalSettings.value = buildSettingsPayload();
   } catch (err) {
     if (err instanceof Error) {
       error.value = err;
