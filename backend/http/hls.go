@@ -28,6 +28,7 @@ type mediaHLSStartRequest struct {
 	Format              string `json:"format,omitempty"`
 	Quality             string `json:"quality,omitempty"`
 	SubtitleStreamIndex *int   `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex    *int   `json:"audioStreamIndex,omitempty"`
 }
 
 type mediaHLSTaskArgs struct {
@@ -37,6 +38,7 @@ type mediaHLSTaskArgs struct {
 	Format              string `json:"format,omitempty"`
 	Profile             string `json:"profile,omitempty"`
 	SubtitleStreamIndex *int   `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex    *int   `json:"audioStreamIndex,omitempty"`
 }
 
 type mediaHLSResponse struct {
@@ -46,6 +48,7 @@ type mediaHLSResponse struct {
 	Identity            string    `json:"identity"`
 	Profile             string    `json:"profile"`
 	SubtitleStreamIndex *int      `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex    *int      `json:"audioStreamIndex,omitempty"`
 	State               hls.State `json:"state"`
 	Error               string    `json:"error,omitempty"`
 	UpdatedAt           int64     `json:"updatedAt"`
@@ -100,6 +103,12 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 			}
 			input.SubtitleStream = request.SubtitleStreamIndex
 		}
+		if request.AudioStreamIndex != nil {
+			if request.Format == "mp4" || !validAudioStream(input.AudioStreams, *request.AudioStreamIndex) {
+				return http.StatusBadRequest, fmt.Errorf("所选内挂音轨不可用于兼容播放")
+			}
+			input.AudioStream = request.AudioStreamIndex
+		}
 		var task *tasks.Task
 		reserve := service.Reserve
 		sourceQuality := request.Quality == "source"
@@ -135,7 +144,7 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 				return service.ReserveWithProfile(source, profile, start)
 			}
 		}
-		if input.SubtitleStream != nil {
+		if input.SubtitleStream != nil || input.AudioStream != nil {
 			quality := request.Quality
 			if quality == "" || quality == "native" {
 				quality = "1080p"
@@ -272,6 +281,9 @@ func mediaHLSInputWithContext(ctx context.Context, d *data, owner *users.User, v
 			for _, track := range probe.SubtitleTracks {
 				input.SubtitleStreams = append(input.SubtitleStreams, hls.SubtitleStream{Index: track.Index, Codec: track.Codec})
 			}
+			for _, track := range probe.AudioTracks {
+				input.AudioStreams = append(input.AudioStreams, hls.AudioStream{Index: track.Index, Codec: track.Codec})
+			}
 			input.DurationSeconds = probe.Duration
 			log.Printf("media HLS codec probe video=%q audio=%q pix_fmt=%q profile=%q bit_depth=%d", input.VideoCodec, input.AudioCodec, input.VideoPixelFormat, input.VideoProfile, input.VideoBitDepth)
 		} else {
@@ -284,6 +296,15 @@ func mediaHLSInputWithContext(ctx context.Context, d *data, owner *users.User, v
 func validPGSSubtitleStream(streams []hls.SubtitleStream, index int) bool {
 	for _, stream := range streams {
 		if stream.Index == index && stream.Codec == "hdmv_pgs_subtitle" {
+			return true
+		}
+	}
+	return false
+}
+
+func validAudioStream(streams []hls.AudioStream, index int) bool {
+	for _, stream := range streams {
+		if stream.Index == index {
 			return true
 		}
 	}
@@ -323,7 +344,7 @@ func enqueueMediaHLSTask(runtime *tasks.Runtime, d *data, owner *users.User, ser
 	} else if hls.IsCopyProfile(job.Profile) {
 		format = "copy"
 	}
-	args, err := json.Marshal(mediaHLSTaskArgs{Path: job.Path, CacheID: job.ID, Identity: job.Identity, Format: format, Profile: job.Profile, SubtitleStreamIndex: job.SubtitleStream})
+	args, err := json.Marshal(mediaHLSTaskArgs{Path: job.Path, CacheID: job.ID, Identity: job.Identity, Format: format, Profile: job.Profile, SubtitleStreamIndex: job.SubtitleStream, AudioStreamIndex: job.AudioStream})
 	if err != nil {
 		return nil, err
 	}
@@ -354,6 +375,7 @@ func mediaHLSStatusResponse(baseURL string, status hls.Status) mediaHLSResponse 
 		ID: status.ID, TaskID: status.TaskID, Path: status.Path,
 		Identity: status.Identity, Profile: status.Profile, State: status.State,
 		SubtitleStreamIndex: status.SubtitleStream,
+		AudioStreamIndex:    status.AudioStream,
 		Error:               status.Error, UpdatedAt: status.UpdatedAt,
 		LastAccessAt: status.LastAccessAt, SizeBytes: status.SizeBytes,
 		ProcessedSeconds: status.ProcessedSeconds,

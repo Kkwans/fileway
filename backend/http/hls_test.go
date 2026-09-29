@@ -156,6 +156,13 @@ func TestPGSSubtitleSelectionRequiresAnAvailableBitmapTrack(t *testing.T) {
 	}
 }
 
+func TestAudioSelectionRequiresAnAvailableTrack(t *testing.T) {
+	streams := []hls.AudioStream{{Index: 1, Codec: "truehd"}, {Index: 4, Codec: "ac3"}}
+	if !validAudioStream(streams, 4) || validAudioStream(streams, 2) {
+		t.Fatal("absent embedded audio track was accepted")
+	}
+}
+
 func TestMediaHLSReserveForFormatPreservesExplicitArtifactType(t *testing.T) {
 	service := newHTTPHLSService(t, false)
 	input := hls.Input{

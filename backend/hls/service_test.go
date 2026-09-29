@@ -209,6 +209,41 @@ func TestPGSSubtitleUsesDistinctCacheAndOverlay(t *testing.T) {
 	}
 }
 
+func TestAudioTrackSelectionUsesDistinctCacheAndFFmpegMap(t *testing.T) {
+	service := newFakeService(t, 1, DefaultMaxBytes, 0)
+	audio := 4
+	subtitle := 6
+	input := Input{UserID: 1, Path: "/movie.mkv", Identity: "v1", SourcePath: "/source.mkv"}
+	start := func(job Job) (string, error) { return "task-" + job.ID, nil }
+	plain, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.AudioStream = &audio
+	selected, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SubtitleStream = &subtitle
+	combined, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.ID == selected.ID || selected.ID == combined.ID || combined.ID == plain.ID {
+		t.Fatal("audio or combined track selection reused another artifact")
+	}
+	if selected.AudioStream == nil || *selected.AudioStream != audio {
+		t.Fatalf("selected audio = %#v", selected.AudioStream)
+	}
+	hlsArgs := strings.Join(ffmpegTrackArgs("/source.mkv", "/tmp/segment.ts", "/tmp/index.m3u8", 1920, 1080, &subtitle, &audio), "\x00")
+	webmArgs := strings.Join(webMTrackArgs("/source.mkv", "/tmp/index.webm", 1920, 1080, &subtitle, &audio), "\x00")
+	for _, args := range []string{hlsArgs, webmArgs} {
+		if !strings.Contains(args, "-map\x000:4") || !strings.Contains(args, "[0:v:0][0:6]overlay") {
+			t.Fatalf("selected tracks missing from FFmpeg args: %q", args)
+		}
+	}
+}
+
 func TestWebMQualityChangesTheTranscodeAndCacheProfile(t *testing.T) {
 	wide := WebMProfileForQuality("1080p", 2160)
 	narrow := WebMProfileForQuality("480p", 2160)

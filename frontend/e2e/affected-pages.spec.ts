@@ -288,6 +288,12 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
           audioCodec: "aac",
           duration: 120,
           resolution: { width: 3840, height: 1600 },
+          audioTracks: [
+            { index: 1, codec: "truehd", language: "eng", title: "英语 Atmos" },
+            { index: 2, codec: "ac3", language: "eng", title: "英语 AC-3" },
+            { index: 3, codec: "dts", language: "chi", title: "长影国配 DTS" },
+            { index: 4, codec: "ac3", language: "chi", title: "长影国配 AC-3" },
+          ],
           subtitleTracks: [
             {
               index: 5,
@@ -599,6 +605,48 @@ test.describe("affected page browser gate", () => {
     await panel.locator('[data-name="sub-off"]').click();
     await expect.poll(() => requests.length).toBeGreaterThanOrEqual(3);
     expect(requests.at(-1)).not.toHaveProperty("subtitleStreamIndex");
+  });
+
+  test("lists four embedded audio tracks and selects the Chinese dub", async ({
+    page,
+  }) => {
+    test.setTimeout(75_000);
+    const unknownRequests: string[] = [];
+    const requests: Array<Record<string, unknown>> = [];
+    await installFixtureApi(page, unknownRequests);
+    await page.route(/\/api\/media\/hls(?:\?|$)/, async (route) => {
+      if (route.request().method() === "POST") {
+        requests.push(JSON.parse(route.request().postData() || "{}"));
+      }
+      await json(route, { state: "failed", error: "fixture 不启动转码" });
+    });
+    await login(page);
+    await page.goto("/files/fixture-video.mkv");
+    await expect(page.locator(".art-player-stage")).toBeVisible();
+    await page.locator(".art-control-setting").click();
+    const panel = page.locator(".art-setting-panel.art-current");
+    await panel.locator('[data-name="playback-audio"]').click();
+    await expect(panel.locator('[data-name^="audio-track-"]')).toHaveCount(4);
+    await expect(panel.locator('[data-name="audio-track-3"]')).toContainText(
+      "长影国配"
+    );
+    await panel.locator('[data-name="audio-track-3"]').click();
+    await expect.poll(() => requests.length).toBeGreaterThanOrEqual(1);
+    expect(requests.at(-1)).toMatchObject({ audioStreamIndex: 3 });
+
+    await page.waitForTimeout(350);
+    const subtitleRow = panel.locator('[data-name="playback-subtitle"]');
+    if (!(await subtitleRow.isVisible()))
+      await page.locator(".art-control-setting").click();
+    if (!(await subtitleRow.isVisible()))
+      await page.locator(".art-control-setting").click();
+    await subtitleRow.click();
+    await panel.locator('[data-name="sub-track-1"]').click();
+    await expect.poll(() => requests.length).toBeGreaterThanOrEqual(2);
+    expect(requests.at(-1)).toMatchObject({
+      audioStreamIndex: 3,
+      subtitleStreamIndex: 6,
+    });
   });
 
   test("captures affected pages across themes and viewport sizes", async ({

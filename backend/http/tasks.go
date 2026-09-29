@@ -117,6 +117,12 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 			}
 			input.SubtitleStream = args.SubtitleStreamIndex
 		}
+		if args.AudioStreamIndex != nil {
+			if !validAudioStream(input.AudioStreams, *args.AudioStreamIndex) {
+				return nil, http.StatusConflict, fmt.Errorf("原内挂音轨已不可用")
+			}
+			input.AudioStream = args.AudioStreamIndex
+		}
 		reserve := reserveHLSForFormat(hlsServices[0], args.Format)
 		if args.Profile != "" {
 			reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {

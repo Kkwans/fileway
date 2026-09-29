@@ -88,6 +88,7 @@ export interface HLSPlaybackStatus {
   identity: string;
   profile: string;
   subtitleStreamIndex?: number;
+  audioStreamIndex?: number;
   state: HLSPlaybackState;
   error?: string;
   updatedAt: number;
@@ -236,7 +237,8 @@ export async function startHLSPlayback(
   path: string,
   format: "hls" | "mp4" | "webm" = "hls",
   quality: "source" | "4k" | "2k" | "1080p" | "720p" | "480p" = "source",
-  subtitleStreamIndex?: number
+  subtitleStreamIndex?: number,
+  audioStreamIndex?: number
 ): Promise<HLSPlaybackStatus> {
   const response = await fetchURL("/api/media/hls", {
     method: "POST",
@@ -246,6 +248,7 @@ export async function startHLSPlayback(
       ...(format === "hls" ? {} : { format }),
       quality,
       ...(subtitleStreamIndex === undefined ? {} : { subtitleStreamIndex }),
+      ...(audioStreamIndex === undefined ? {} : { audioStreamIndex }),
     }),
   });
   return response.json() as Promise<HLSPlaybackStatus>;

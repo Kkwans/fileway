@@ -250,4 +250,19 @@ describe("媒体 API", () => {
       subtitleStreamIndex: 6,
     });
   });
+
+  it("组合选择内挂音轨和字幕时同时传递两个流索引", async () => {
+    mocks.fetchURL.mockResolvedValue(
+      new Response(
+        JSON.stringify({ id: "multi-track-cache-id", state: "queued" })
+      )
+    );
+    await startHLSPlayback("/电影/示例.mkv", "hls", "1080p", 6, 4);
+    expect(JSON.parse(mocks.fetchURL.mock.calls[0][1].body as string)).toEqual({
+      path: "/电影/示例.mkv",
+      quality: "1080p",
+      subtitleStreamIndex: 6,
+      audioStreamIndex: 4,
+    });
+  });
 });

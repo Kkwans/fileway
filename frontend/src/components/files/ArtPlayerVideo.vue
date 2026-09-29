@@ -210,6 +210,8 @@ const sourceWidth = ref(0);
 const sourceHeight = ref(0);
 const embeddedSubtitleTracks = ref<MediaTrack[]>([]);
 const embeddedSubtitleIndex = ref<number | null>(null);
+const embeddedAudioTracks = ref<MediaTrack[]>([]);
+const embeddedAudioIndex = ref<number | null>(null);
 const playerRoot = ref<HTMLElement | null>(null);
 const subtitlePickerOpen = ref(false);
 const extraSubtitles = ref<{ url: string; name: string; path?: string }[]>([]);
@@ -994,6 +996,41 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
   return item.html || "字幕";
 }
 
+function currentAudioLabel() {
+  if (embeddedAudioIndex.value === null) return "默认音轨";
+  const track = embeddedAudioTracks.value.find(
+    (item) => item.index === embeddedAudioIndex.value
+  );
+  return track?.title || track?.language || "内挂音轨";
+}
+
+function switchAudioTrack(item: { value: string; html: string }) {
+  if (switchingEngine) {
+    notice("请等待当前播放方式切换完成");
+    return currentAudioLabel();
+  }
+  const index = item.value === "__default__" ? null : Number(item.value);
+  if (
+    index !== null &&
+    !embeddedAudioTracks.value.some((track) => track.index === index)
+  ) {
+    notice("所选音轨已不可用");
+    return currentAudioLabel();
+  }
+  if (embeddedAudioIndex.value === index) return currentAudioLabel();
+  embeddedAudioIndex.value = index;
+  notice("正在切换内挂音轨，使用兼容转码…");
+  void switchEngine(
+    "compat",
+    actualMode.value === "compat"
+      ? transcodeQuality.value
+      : preferredCompatQuality(),
+    true
+  );
+  syncPlayerLabels();
+  return currentAudioLabel();
+}
+
 function persistPlaybackPosition(force = false) {
   const video = art.value?.video as HTMLVideoElement | undefined;
   if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
@@ -1150,6 +1187,8 @@ function settingIconKey(name: string): string {
       return "playbackRate";
     case "playback-quality":
       return "aspectRatio";
+    case "playback-audio":
+      return "volume";
     case "playback-subtitle":
     case "subtitle-size":
     case "subtitle-position":
@@ -1230,6 +1269,10 @@ async function switchEngine(
     refreshSubtitlePicker();
     notice("原生播放不支持内挂 PGS 字幕，已关闭字幕");
   }
+  if (mode === "native" && embeddedAudioIndex.value !== null) {
+    embeddedAudioIndex.value = null;
+    notice("原生播放已恢复默认音轨");
+  }
   switchingEngine = true;
   const token = ++switchToken;
   const resume = captureResume();
@@ -1290,7 +1333,8 @@ async function switchEngine(
         props.path,
         format,
         backendQuality,
-        embeddedSubtitleIndex.value ?? undefined
+        embeddedSubtitleIndex.value ?? undefined,
+        embeddedAudioIndex.value ?? undefined
       );
       while (
         token === switchToken &&
@@ -1460,6 +1504,7 @@ async function loadMediaInfo() {
       sourceHeight.value = info.resolution.height || 0;
     }
     embeddedSubtitleTracks.value = info.subtitleTracks || [];
+    embeddedAudioTracks.value = info.audioTracks || [];
     const savedTrack = embeddedSubtitleTracks.value.find(
       (track) =>
         track.codec === "hdmv_pgs_subtitle" &&
@@ -1736,6 +1781,13 @@ function syncPlayerLabels() {
   );
   const subName = currentSubtitleLabel();
   syncSettingEcho("playback-subtitle", subName);
+  syncSettingEcho(
+    "playback-audio",
+    currentAudioLabel(),
+    embeddedAudioIndex.value === null
+      ? "audio-default"
+      : `audio-track-${embeddedAudioIndex.value}`
+  );
 }
 
 function applyRate(rate: number, persist = true) {
@@ -1847,6 +1899,32 @@ function buildSettings() {
         return qualityDisplay();
       },
     },
+    ...(embeddedAudioTracks.value.length > 1
+      ? [
+          {
+            width,
+            name: "playback-audio",
+            html: "音轨",
+            icon: iconClone("volume") || iconClone("config"),
+            tooltip: currentAudioLabel(),
+            selector: [
+              {
+                name: "audio-default",
+                html: "默认（源文件首轨）",
+                value: "__default__",
+                default: embeddedAudioIndex.value === null,
+              },
+              ...embeddedAudioTracks.value.map((track) => ({
+                name: `audio-track-${track.index}`,
+                html: `${track.title || track.language || `音轨 ${track.index}`} · ${track.codec.toUpperCase()}`,
+                value: String(track.index),
+                default: embeddedAudioIndex.value === track.index,
+              })),
+            ],
+            onSelect: switchAudioTrack,
+          },
+        ]
+      : []),
     {
       width,
       name: "playback-subtitle",

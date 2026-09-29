@@ -77,12 +77,19 @@ type Input struct {
 	VideoHeight      int
 	SubtitleStreams  []SubtitleStream
 	SubtitleStream   *int
+	AudioStreams     []AudioStream
+	AudioStream      *int
 	// DurationSeconds is the probed source duration used to render truthful
 	// compatibility progress while a WebM artifact is being generated.
 	DurationSeconds float64
 }
 
 type SubtitleStream struct {
+	Index int
+	Codec string
+}
+
+type AudioStream struct {
 	Index int
 	Codec string
 }
@@ -96,6 +103,7 @@ type Job struct {
 	Profile         string
 	DurationSeconds float64
 	SubtitleStream  *int
+	AudioStream     *int
 }
 
 // IsWebMProfile reports whether a compatibility artifact is a complete WebM
@@ -174,6 +182,7 @@ type Status struct {
 	Identity       string `json:"identity"`
 	Profile        string `json:"profile"`
 	SubtitleStream *int   `json:"subtitleStreamIndex,omitempty"`
+	AudioStream    *int   `json:"audioStreamIndex,omitempty"`
 	State          State  `json:"state"`
 	Error          string `json:"error,omitempty"`
 	UpdatedAt      int64  `json:"updatedAt"`
@@ -392,12 +401,16 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 	if input.SubtitleStream != nil {
 		cacheIdentity += "\x00subtitle=" + strconv.Itoa(*input.SubtitleStream)
 	}
+	if input.AudioStream != nil {
+		cacheIdentity += "\x00audio=" + strconv.Itoa(*input.AudioStream)
+	}
 	job := Job{
 		ID:     cacheKey(input.UserID, input.Path, cacheIdentity, profile),
 		UserID: input.UserID, Path: input.Path, Identity: input.Identity,
 		SourcePath: input.SourcePath, Profile: profile,
 		DurationSeconds: input.DurationSeconds,
 		SubtitleStream:  input.SubtitleStream,
+		AudioStream:     input.AudioStream,
 	}
 
 	service.mu.Lock()
@@ -413,6 +426,7 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 		Profile: job.Profile, State: StateQueued, UpdatedAt: now,
 		DurationSeconds: job.DurationSeconds,
 		SubtitleStream:  job.SubtitleStream,
+		AudioStream:     job.AudioStream,
 	}, sourcePath: job.SourcePath}
 	service.entries[job.ID] = current
 	taskID, err := start(job)
@@ -483,8 +497,8 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	playlist := filepath.Join(directory, "index.m3u8")
 	segmentPattern := filepath.Join(directory, "segment-%06d.ts")
 	args := ffmpegArgs(job.SourcePath, segmentPattern, playlist, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile))
-	if job.SubtitleStream != nil {
-		args = ffmpegSubtitleArgs(job.SourcePath, segmentPattern, playlist, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile), *job.SubtitleStream)
+	if job.SubtitleStream != nil || job.AudioStream != nil {
+		args = ffmpegTrackArgs(job.SourcePath, segmentPattern, playlist, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile), job.SubtitleStream, job.AudioStream)
 	}
 	if IsCopyProfile(job.Profile) {
 		args = copyFFmpegArgs(job.SourcePath, segmentPattern, playlist)
@@ -565,8 +579,8 @@ func (service *Service) runWebM(ctx context.Context, job Job, directory string) 
 	temporary := filepath.Join(directory, "index.webm.tmp")
 	output := filepath.Join(directory, "index.webm")
 	args := webMArgs(job.SourcePath, temporary, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile))
-	if job.SubtitleStream != nil {
-		args = webMSubtitleArgs(job.SourcePath, temporary, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile), *job.SubtitleStream)
+	if job.SubtitleStream != nil || job.AudioStream != nil {
+		args = webMTrackArgs(job.SourcePath, temporary, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile), job.SubtitleStream, job.AudioStream)
 	}
 	command := exec.CommandContext(ctx, service.ffmpegPath, args...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
@@ -944,18 +958,39 @@ func ffmpegArgs(source, segmentPattern, playlist string, maxWidth, maxHeight int
 }
 
 func ffmpegSubtitleArgs(source, segmentPattern, playlist string, maxWidth, maxHeight, streamIndex int) []string {
-	filter := fmt.Sprintf("[0:v:0][0:%d]overlay,%s[v]", streamIndex, boundedVideoScale(maxWidth, maxHeight))
-	return []string{
+	return ffmpegTrackArgs(source, segmentPattern, playlist, maxWidth, maxHeight, &streamIndex, nil)
+}
+
+func selectedAudioMap(streamIndex *int) string {
+	if streamIndex == nil {
+		return "0:a:0?"
+	}
+	return fmt.Sprintf("0:%d", *streamIndex)
+}
+
+func videoTrackArgs(maxWidth, maxHeight int, subtitleStream *int) []string {
+	if subtitleStream == nil {
+		return []string{"-map", "0:v:0", "-vf", boundedVideoScale(maxWidth, maxHeight)}
+	}
+	filter := fmt.Sprintf("[0:v:0][0:%d]overlay,%s[v]", *subtitleStream, boundedVideoScale(maxWidth, maxHeight))
+	return []string{"-filter_complex", filter, "-map", "[v]", "-filter_complex_threads", "1"}
+}
+
+func ffmpegTrackArgs(source, segmentPattern, playlist string, maxWidth, maxHeight int, subtitleStream, audioStream *int) []string {
+	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin", "-i", source,
-		"-filter_complex", filter, "-map", "[v]", "-map", "0:a:0?",
+	}
+	args = append(args, videoTrackArgs(maxWidth, maxHeight, subtitleStream)...)
+	args = append(args, "-map", selectedAudioMap(audioStream))
+	return append(args,
 		"-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-pix_fmt", "yuv420p",
-		"-threads", "1", "-filter_complex_threads", "1",
+		"-threads", "1", "-filter_threads", "1",
 		"-c:a", "aac", "-b:a", "128k", "-ac", "2",
 		"-force_key_frames", "expr:gte(t,n_forced*4)",
 		"-f", "hls", "-hls_time", "4", "-hls_list_size", "0", "-hls_playlist_type", "event",
 		"-hls_flags", "independent_segments+temp_file",
 		"-hls_segment_filename", segmentPattern, playlist,
-	}
+	)
 }
 
 func copyFFmpegArgs(source, segmentPattern, playlist string) []string {
@@ -987,15 +1022,21 @@ func webMArgs(source, output string, maxWidth, maxHeight int) []string {
 }
 
 func webMSubtitleArgs(source, output string, maxWidth, maxHeight, streamIndex int) []string {
-	filter := fmt.Sprintf("[0:v:0][0:%d]overlay,%s[v]", streamIndex, boundedVideoScale(maxWidth, maxHeight))
-	return []string{
+	return webMTrackArgs(source, output, maxWidth, maxHeight, &streamIndex, nil)
+}
+
+func webMTrackArgs(source, output string, maxWidth, maxHeight int, subtitleStream, audioStream *int) []string {
+	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin", "-i", source,
-		"-filter_complex", filter, "-map", "[v]", "-map", "0:a:0?",
+	}
+	args = append(args, videoTrackArgs(maxWidth, maxHeight, subtitleStream)...)
+	args = append(args, "-map", selectedAudioMap(audioStream))
+	return append(args,
 		"-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "1.5M",
-		"-row-mt", "1", "-threads", "2", "-filter_complex_threads", "1", "-pix_fmt", "yuv420p",
+		"-row-mt", "1", "-threads", "2", "-pix_fmt", "yuv420p",
 		"-c:a", "libopus", "-b:a", "128k", "-ac", "2",
 		"-progress", "pipe:1", "-f", "webm", output,
-	}
+	)
 }
 
 func webMCopyArgs(source, output string) []string {
