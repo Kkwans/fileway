@@ -133,7 +133,7 @@ onUnmounted(() => {
   fetchDataController.abort();
 });
 
-watch(route, () => {
+watch([() => route.path, () => route.query.edit], () => {
   fetchData();
 });
 watch(reload, (newValue) => {

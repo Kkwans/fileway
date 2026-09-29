@@ -8,6 +8,13 @@ export const FILE_VIEW_MODES = [
 
 export type FileViewMode = (typeof FILE_VIEW_MODES)[number];
 
+export function parseFileViewMode(value: unknown): FileViewMode | null {
+  return typeof value === "string" &&
+    FILE_VIEW_MODES.includes(value as FileViewMode)
+    ? (value as FileViewMode)
+    : null;
+}
+
 export interface FileListingSortItem {
   isDir: boolean;
   name: string;

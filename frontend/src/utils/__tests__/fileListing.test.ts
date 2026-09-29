@@ -4,6 +4,7 @@ import {
   getFileTypeLabel,
   normalizeFileKey,
   normalizeViewMode,
+  parseFileViewMode,
   selectForContextMenu,
   sortListingItems,
   sortItemsByType,
@@ -43,6 +44,14 @@ describe("file listing preferences", () => {
   it("falls back to the grid view for invalid stored data", () => {
     expect(normalizeViewMode("unknown")).toBe("mosaic");
     expect(normalizeViewMode(null)).toBe("mosaic");
+  });
+
+  it("accepts only current view modes in the URL", () => {
+    expect(parseFileViewMode("details")).toBe("details");
+    expect(parseFileViewMode("windows-icons")).toBe("windows-icons");
+    expect(parseFileViewMode("list")).toBeNull();
+    expect(parseFileViewMode(["details"])).toBeNull();
+    expect(parseFileViewMode(undefined)).toBeNull();
   });
 
   it("preserves existing views and migrates removed legacy modes", () => {

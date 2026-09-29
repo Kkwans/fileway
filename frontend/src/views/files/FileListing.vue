@@ -1041,6 +1041,7 @@ import {
   cycleListingSort,
   normalizeFileKey,
   normalizeViewMode,
+  parseFileViewMode,
   selectForContextMenu,
   sortListingItems,
 } from "@/utils/fileListing";
@@ -1136,13 +1137,16 @@ const fileStore = useFileStore();
 const layoutStore = useLayoutStore();
 const listingPreferencesStore = useListingPreferencesStore();
 const accountPreferencesStore = useAccountPreferencesStore();
+const route = useRoute();
+const router = useRouter();
 
 // View mode dropdown
 const showViewDropdown = ref<boolean>(false);
 const viewDropdownRef = ref<HTMLElement | null>(null);
 const storedViewMode = localStorage.getItem("nas-file-browser-view-mode");
 const currentViewMode = ref<ViewModeType>(
-  normalizeViewMode(storedViewMode ?? authStore.user?.viewMode)
+  parseFileViewMode(route.query.view) ??
+    normalizeViewMode(storedViewMode ?? authStore.user?.viewMode)
 );
 const viewModes = [
   {
@@ -1233,8 +1237,6 @@ const sortStateLabel = computed(() => {
 
 const { req } = storeToRefs(fileStore);
 
-const route = useRoute();
-const router = useRouter();
 const navigation = useNavigationStore();
 const listingUserId = authStore.user?.id;
 let listingRoute = route.fullPath;
@@ -1244,7 +1246,9 @@ if (returningState) {
   currentSortBy.value = returningState.sortBy;
   currentSortAsc.value = returningState.sortAsc;
   sortIsOverridden.value = returningState.sortOverridden;
-  currentViewMode.value = normalizeViewMode(returningState.viewMode);
+  currentViewMode.value =
+    parseFileViewMode(route.query.view) ??
+    normalizeViewMode(storedViewMode ?? authStore.user?.viewMode);
   inlineSearch.value = returningState.search;
   showLimit.value = Math.max(
     50,
@@ -1279,6 +1283,22 @@ onBeforeRouteUpdate((to, from) => {
   leavingDirectory = to.path !== from.path;
   if (!leavingDirectory) listingRoute = to.fullPath;
 });
+
+watch(
+  () => route.query.view,
+  (value) => {
+    currentViewMode.value =
+      parseFileViewMode(value) ??
+      normalizeViewMode(
+        localStorage.getItem("nas-file-browser-view-mode") ??
+          authStore.user?.viewMode
+      );
+    nextTick(() => {
+      setItemWeight();
+      fillWindow();
+    });
+  }
+);
 
 const listing = ref<HTMLElement | null>(null);
 let listingResizeObserver: ResizeObserver | null = null;
@@ -2114,6 +2134,13 @@ const selectViewMode = (mode: ViewModeType) => {
   currentViewMode.value = mode;
   localStorage.setItem("nas-file-browser-view-mode", mode);
   showViewDropdown.value = false;
+  if (route.query.view !== mode) {
+    void router.push({
+      path: route.path,
+      query: { ...route.query, view: mode },
+      hash: route.hash,
+    });
+  }
 
   // Also update server-side preference if logged in
   if (authStore.user?.id) {
