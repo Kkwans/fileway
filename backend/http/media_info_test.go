@@ -23,7 +23,8 @@ func TestMediaInfoRequiresExplicitLocationRequest(t *testing.T) {
 		return mediaProbeResult{
 			Format: "mov,mp4", Duration: 12.5, BitRate: 1200,
 			VideoCodec: "h264", AudioCodec: "aac", Width: 1920, Height: 1080,
-			Location: "+31.2304+121.4737/",
+			SubtitleTracks: []mediaTrack{{Index: 5, Codec: "hdmv_pgs_subtitle", Title: "中文字幕"}},
+			Location:       "+31.2304+121.4737/",
 		}, nil
 	}
 
@@ -33,6 +34,9 @@ func TestMediaInfoRequiresExplicitLocationRequest(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "location") || strings.Contains(response.Body.String(), "31.2304") {
 		t.Fatalf("basic response leaked location: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"subtitleTracks":[{"index":5,"codec":"hdmv_pgs_subtitle","title":"中文字幕"}]`) {
+		t.Fatalf("missing embedded subtitle track: %s", response.Body.String())
 	}
 	response = h.request(t, owner.ID, mediaInfoHandler(probe), http.MethodGet, "/media/info?path=/film.mp4&includeLocation=true", nil, nil)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "+31.2304+121.4737/") {
@@ -81,5 +85,20 @@ func TestSummarizeFFprobeKeepsLocationOptIn(t *testing.T) {
 	}
 	if with.VideoPixelFormat != "yuv420p10le" || with.VideoProfile != "Main 10" || with.VideoBitDepth != 10 {
 		t.Fatalf("video compatibility details = %#v", with)
+	}
+}
+
+func TestSummarizeFFprobeListsEmbeddedTracks(t *testing.T) {
+	document := ffprobeDocument{}
+	audio := ffprobeStream{Index: 3, CodecType: "audio", CodecName: "ac3", Tags: map[string]string{"language": "chi", "title": "国配"}}
+	subtitle := ffprobeStream{Index: 7, CodecType: "subtitle", CodecName: "hdmv_pgs_subtitle", Tags: map[string]string{"language": "chi", "title": "简中特效"}}
+	subtitle.Disposition.Default = 1
+	document.Streams = []ffprobeStream{audio, subtitle}
+	result := summarizeFFprobe(document, false)
+	if len(result.AudioTracks) != 1 || result.AudioTracks[0].Index != 3 || result.AudioTracks[0].Title != "国配" {
+		t.Fatalf("audio tracks = %#v", result.AudioTracks)
+	}
+	if len(result.SubtitleTracks) != 1 || result.SubtitleTracks[0].Index != 7 || result.SubtitleTracks[0].Codec != "hdmv_pgs_subtitle" || !result.SubtitleTracks[0].Default {
+		t.Fatalf("subtitle tracks = %#v", result.SubtitleTracks)
 	}
 }

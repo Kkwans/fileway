@@ -52,6 +52,8 @@ export interface MediaInformation {
   bitRate?: number;
   videoCodec?: string;
   audioCodec?: string;
+  audioTracks?: MediaTrack[];
+  subtitleTracks?: MediaTrack[];
   channels?: number;
   sampleRate?: number;
   title?: string;
@@ -60,6 +62,15 @@ export interface MediaInformation {
   date?: string;
   location?: string;
   technicalError?: string;
+}
+
+export interface MediaTrack {
+  index: number;
+  codec: string;
+  language?: string;
+  title?: string;
+  default?: boolean;
+  forced?: boolean;
 }
 
 export type HLSPlaybackState =
