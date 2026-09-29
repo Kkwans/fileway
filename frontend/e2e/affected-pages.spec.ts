@@ -288,6 +288,44 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
           audioCodec: "aac",
           duration: 120,
           resolution: { width: 3840, height: 1600 },
+          subtitleTracks: [
+            {
+              index: 5,
+              codec: "hdmv_pgs_subtitle",
+              language: "eng",
+              title: "英文",
+            },
+            {
+              index: 6,
+              codec: "hdmv_pgs_subtitle",
+              language: "chi",
+              title: "简中特效",
+            },
+            {
+              index: 7,
+              codec: "hdmv_pgs_subtitle",
+              language: "chi",
+              title: "中英特效",
+            },
+            {
+              index: 8,
+              codec: "hdmv_pgs_subtitle",
+              language: "chi",
+              title: "简体中文",
+            },
+            {
+              index: 9,
+              codec: "hdmv_pgs_subtitle",
+              language: "chi",
+              title: "繁体中文",
+            },
+            {
+              index: 10,
+              codec: "hdmv_pgs_subtitle",
+              language: "chi",
+              title: "繁体中文",
+            },
+          ],
         });
       }
       if (path === "/api/media/sprite") return json(route, {});
@@ -516,6 +554,51 @@ test.describe("affected page browser gate", () => {
     await expect(page.locator(".header-task-center")).toHaveCount(0);
 
     expect(unknownRequests).toEqual([]);
+  });
+
+  test("lists six embedded PGS tracks and sends the chosen track to compatibility playback", async ({
+    page,
+  }) => {
+    test.setTimeout(75_000);
+    const unknownRequests: string[] = [];
+    const requests: Array<Record<string, unknown>> = [];
+    await installFixtureApi(page, unknownRequests);
+    await page.route(/\/api\/media\/hls(?:\?|$)/, async (route) => {
+      if (route.request().method() === "POST") {
+        requests.push(JSON.parse(route.request().postData() || "{}"));
+      }
+      await json(route, { state: "failed", error: "fixture 不启动转码" });
+    });
+    await login(page);
+    await page.goto("/files/fixture-video.mkv");
+    await expect(page.locator(".art-player-stage")).toBeVisible();
+    const panel = page.locator(".art-setting-panel.art-current");
+    async function openSubtitles() {
+      await page.waitForTimeout(350);
+      if (await panel.locator('[data-name="sub-off"]').isVisible()) return;
+      const row = panel.locator('[data-name="playback-subtitle"]');
+      if (!(await row.isVisible()))
+        await page.locator(".art-control-setting").click();
+      await row.click();
+    }
+    await openSubtitles();
+    await expect(panel.locator('[data-name^="sub-track-"]')).toHaveCount(6);
+    await expect(panel.locator('[data-name="sub-track-1"]')).toContainText(
+      "简中特效"
+    );
+    await panel.locator('[data-name="sub-track-1"]').click();
+    await expect.poll(() => requests.length).toBeGreaterThanOrEqual(1);
+    expect(requests.at(-1)).toMatchObject({ subtitleStreamIndex: 6 });
+
+    await openSubtitles();
+    await panel.locator('[data-name="sub-track-2"]').click();
+    await expect.poll(() => requests.length).toBeGreaterThanOrEqual(2);
+    expect(requests.at(-1)).toMatchObject({ subtitleStreamIndex: 7 });
+
+    await openSubtitles();
+    await panel.locator('[data-name="sub-off"]').click();
+    await expect.poll(() => requests.length).toBeGreaterThanOrEqual(3);
+    expect(requests.at(-1)).not.toHaveProperty("subtitleStreamIndex");
   });
 
   test("captures affected pages across themes and viewport sizes", async ({

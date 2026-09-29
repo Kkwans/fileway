@@ -167,6 +167,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useAccountPreferencesStore } from "@/stores/accountPreferences";
 import { resolveControlsTimeoutMs } from "@/utils/playerControls";
 import { supportsH264CompatibilityPlayback } from "@/utils/videoPlayback";
+import type { MediaTrack } from "@/api/media";
 import {
   videoClassHeight,
   videoResolutionLabel,
@@ -207,6 +208,8 @@ const rateDialogVisible = ref(false);
 const rateInput = ref<HTMLInputElement | null>(null);
 const sourceWidth = ref(0);
 const sourceHeight = ref(0);
+const embeddedSubtitleTracks = ref<MediaTrack[]>([]);
+const embeddedSubtitleIndex = ref<number | null>(null);
 const playerRoot = ref<HTMLElement | null>(null);
 const subtitlePickerOpen = ref(false);
 const extraSubtitles = ref<{ url: string; name: string; path?: string }[]>([]);
@@ -227,13 +230,24 @@ const videoDirPath = computed(() => {
 });
 
 const allSubtitleItems = computed(() => {
+  const embedded = embeddedSubtitleTracks.value
+    .filter((track) => track.codec === "hdmv_pgs_subtitle")
+    .map((track) => ({
+      url: embeddedSubtitleValue(track.index),
+      name: `内挂 · ${track.title || track.language || `字幕 ${track.index}`} (PGS)`,
+      path: undefined as string | undefined,
+    }));
   const base = (props.subtitles || []).map((s) => ({
     url: s.url,
     name: s.name || s.lang || "字幕",
     path: undefined as string | undefined,
   }));
-  return [...base, ...extraSubtitles.value];
+  return [...embedded, ...base, ...extraSubtitles.value];
 });
+
+function embeddedSubtitleValue(index: number) {
+  return `embedded:${encodeURIComponent(props.path)}:${index}`;
+}
 
 async function scanSiblingSubtitles() {
   try {
@@ -922,6 +936,33 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
     };
   } | null;
   if (!p?.subtitle) return item.html || "关";
+  if (switchingEngine) {
+    notice("请等待当前播放方式切换完成");
+    return currentSubtitleLabel();
+  }
+  const embedded = embeddedSubtitleTracks.value.find(
+    (track) => embeddedSubtitleValue(track.index) === item.value
+  );
+  if (embedded) {
+    embeddedSubtitleIndex.value = embedded.index;
+    p.subtitle.url = "";
+    subtitlePrefs.value.enabled = true;
+    subtitlePrefs.value.url = item.value;
+    persistSubtitlePrefs();
+    syncPlayerLabels();
+    syncSubtitleCheck();
+    notice("内挂 PGS 字幕需要兼容转码，正在切换…");
+    void switchEngine(
+      "compat",
+      actualMode.value === "compat"
+        ? transcodeQuality.value
+        : preferredCompatQuality(),
+      true
+    );
+    return item.html || "内挂字幕";
+  }
+  const hadEmbedded = embeddedSubtitleIndex.value !== null;
+  embeddedSubtitleIndex.value = null;
   if (!item.value) {
     p.subtitle.url = "";
     subtitlePrefs.value.enabled = false;
@@ -929,6 +970,7 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
     persistSubtitlePrefs();
     syncPlayerLabels();
     syncSubtitleCheck();
+    if (hadEmbedded) void switchEngine("compat", transcodeQuality.value, true);
     return "关";
   }
   const type = subtitleTypeFromUrl(item.value);
@@ -948,6 +990,7 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
   applySubtitleChrome();
   syncPlayerLabels();
   syncSubtitleCheck();
+  if (hadEmbedded) void switchEngine("compat", transcodeQuality.value, true);
   return item.html || "字幕";
 }
 
@@ -1179,6 +1222,14 @@ async function switchEngine(
   fromAuto = false
 ) {
   if (switchingEngine) return;
+  if (mode === "native" && embeddedSubtitleIndex.value !== null) {
+    embeddedSubtitleIndex.value = null;
+    subtitlePrefs.value.enabled = false;
+    subtitlePrefs.value.url = "";
+    persistSubtitlePrefs();
+    refreshSubtitlePicker();
+    notice("原生播放不支持内挂 PGS 字幕，已关闭字幕");
+  }
   switchingEngine = true;
   const token = ++switchToken;
   const resume = captureResume();
@@ -1238,7 +1289,8 @@ async function switchEngine(
       let status = await mediaApi.startHLSPlayback(
         props.path,
         format,
-        backendQuality
+        backendQuality,
+        embeddedSubtitleIndex.value ?? undefined
       );
       while (
         token === switchToken &&
@@ -1288,7 +1340,9 @@ async function switchEngine(
         startCompatProgressPolling(status.id);
       notice(
         fromAuto
-          ? "原生无法播放，已切换兼容转码"
+          ? embeddedSubtitleIndex.value !== null
+            ? "已切换兼容转码以显示内挂字幕"
+            : "原生无法播放，已切换兼容转码"
           : `已切换兼容 · ${qualityLabel(transcodeQuality.value)}`
       );
       applyResume({ ...resume, rate: currentRate.value });
@@ -1405,6 +1459,14 @@ async function loadMediaInfo() {
       sourceWidth.value = info.resolution.width || 0;
       sourceHeight.value = info.resolution.height || 0;
     }
+    embeddedSubtitleTracks.value = info.subtitleTracks || [];
+    const savedTrack = embeddedSubtitleTracks.value.find(
+      (track) =>
+        track.codec === "hdmv_pgs_subtitle" &&
+        embeddedSubtitleValue(track.index) === subtitlePrefs.value.url
+    );
+    embeddedSubtitleIndex.value =
+      subtitlePrefs.value.enabled && savedTrack ? savedTrack.index : null;
   } catch {
     /* optional */
   }
@@ -1796,7 +1858,11 @@ function buildSettings() {
           name: "sub-off",
           html: "关闭",
           value: "__off__",
-          default: !subtitlePrefs.value.enabled,
+          default:
+            !subtitlePrefs.value.enabled ||
+            !allSubtitleItems.value.some(
+              (subtitle) => subtitle.url === subtitlePrefs.value.url
+            ),
         },
         ...allSubtitleItems.value.map((s, i) => ({
           name: `sub-track-${i}`,
@@ -1914,7 +1980,7 @@ function currentSubtitleLabel() {
   const hit = allSubtitleItems.value.find(
     (s) => s.url === subtitlePrefs.value.url
   );
-  return hit?.name || "已开启";
+  return hit?.name || "关";
 }
 
 /**
@@ -2175,7 +2241,7 @@ onMounted(async () => {
     (subtitlePrefs.value.url &&
       props.subtitles?.find((s) => s.url === subtitlePrefs.value.url)) ||
     props.subtitles?.[0];
-  if (pick) {
+  if (pick && embeddedSubtitleIndex.value === null) {
     if (!subtitlePrefs.value.url && subtitlePrefs.value.enabled) {
       subtitlePrefs.value.url = pick.url;
       subtitlePrefs.value.enabled = true;
@@ -2191,7 +2257,10 @@ onMounted(async () => {
     }
   }
   const startCompatUrl =
-    !askVisible.value && (policy.value === "compat" || forceCompatContainer);
+    !askVisible.value &&
+    (policy.value === "compat" ||
+      forceCompatContainer ||
+      embeddedSubtitleIndex.value !== null);
   if (startCompatUrl) {
     actualMode.value = "compat";
   }

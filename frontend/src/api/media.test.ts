@@ -238,4 +238,16 @@ describe("媒体 API", () => {
       },
     ]);
   });
+
+  it("选择内挂 PGS 轨道时传递准确的流索引", async () => {
+    mocks.fetchURL.mockResolvedValue(
+      new Response(JSON.stringify({ id: "pgs-cache-id", state: "queued" }))
+    );
+    await startHLSPlayback("/电影/示例.mkv", "hls", "1080p", 6);
+    expect(JSON.parse(mocks.fetchURL.mock.calls[0][1].body as string)).toEqual({
+      path: "/电影/示例.mkv",
+      quality: "1080p",
+      subtitleStreamIndex: 6,
+    });
+  });
 });
