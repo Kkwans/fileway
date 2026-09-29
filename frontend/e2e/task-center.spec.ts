@@ -314,6 +314,20 @@ test.describe("NAS File Browser browser gate", () => {
         expect(metrics.workspaceTop as number).toBeGreaterThanOrEqual(
           (metrics.headerBottom as number) - 1
         );
+        if (viewport.width <= 640) {
+          const filterLabel = page
+            .locator(".task-center-panel-actions .task-center-filter span")
+            .first();
+          const clearAction = page
+            .locator(".task-center-panel-actions .task-center-clear-action")
+            .first();
+          expect((await filterLabel.boundingBox())?.height).toBeLessThanOrEqual(
+            20
+          );
+          expect(
+            (await clearAction.boundingBox())?.height
+          ).toBeGreaterThanOrEqual(44);
+        }
         geometry.push({ theme, viewport: viewport.name, ...metrics });
         await page.screenshot({
           path: testInfo.outputPath(

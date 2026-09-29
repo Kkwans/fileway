@@ -137,10 +137,12 @@
 
 .task-center-filter {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   color: var(--color-text-muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .task-center-filter select {
@@ -656,7 +658,10 @@
   }
 
   .task-center-clear-action {
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    min-height: 44px;
     justify-content: center;
   }
   .task-center-item {
