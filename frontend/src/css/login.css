@@ -253,21 +253,26 @@
 }
 
 /* --- Toggle Link --- */
-#login form > p {
+#login .login-mode-toggle {
+  display: block;
+  width: fit-content;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   text-align: center;
-  color: var(--textPrimary, #64646e);
+  color: #1677ff;
   font-weight: 500;
-  font-size: 0.85em;
-  margin: 1.25em 0 0;
-  padding: 0.4em;
+  font-size: 0.875rem;
+  margin: 1rem auto 0;
+  padding: 0.25rem 0;
   border-radius: 0.4em;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease;
 }
 
-#login form > p:hover {
-  color: var(--blue, #2196f3);
-  background: rgba(33, 150, 243, 0.04);
+#login .login-mode-toggle:hover {
+  color: #0958d9;
+  text-decoration: underline;
+  text-underline-offset: 0.1875rem;
 }
 
 /* --- reCAPTCHA --- */
@@ -361,11 +366,11 @@
   box-shadow: 0 6px 24px rgba(33, 150, 243, 0.3);
 }
 
-:root.dark #login form > p {
+:root.dark #login .login-mode-toggle {
   color: rgba(255, 255, 255, 0.45);
 }
 
-:root.dark #login form > p:hover {
+:root.dark #login .login-mode-toggle:hover {
   color: var(--blue, #2196f3);
   background: rgba(33, 150, 243, 0.08);
 }
@@ -503,21 +508,6 @@
   border-color: #bfdbfe;
   background: #eff6ff;
   color: #1d4ed8;
-}
-
-#login form > p:not(.logout-message) {
-  width: fit-content;
-  margin: 1rem auto 0;
-  padding: 0.25rem 0;
-  color: #1677ff;
-  font-size: 0.875rem;
-}
-
-#login form > p:not(.logout-message):hover {
-  color: #0958d9;
-  background: transparent;
-  text-decoration: underline;
-  text-underline-offset: 0.1875rem;
 }
 
 :root.dark #login {

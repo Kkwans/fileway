@@ -7,6 +7,26 @@ import { StatusError } from "@/api/utils";
 import { setSafeTimeout } from "@/api/utils";
 import type { IUser } from "@/types/user";
 
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
+async function fetchAuth(url: string, body: unknown): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(
+    () => controller.abort(),
+    AUTH_REQUEST_TIMEOUT_MS
+  );
+  try {
+    return await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 export function parseToken(token: string) {
   // falsy or malformed jwt will throw InvalidTokenError
   const data = jwtDecode<
@@ -59,13 +79,7 @@ export async function login(
 ) {
   const data = { username, password, recaptcha };
 
-  const res = await fetch(`${baseURL}/api/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
+  const res = await fetchAuth(`${baseURL}/api/login`, data);
 
   const body = await res.text();
 
@@ -102,13 +116,7 @@ export async function renew(jwt: string) {
 export async function signup(username: string, password: string) {
   const data = { username, password };
 
-  const res = await fetch(`${baseURL}/api/signup`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
+  const res = await fetchAuth(`${baseURL}/api/signup`, data);
 
   if (res.status !== 200) {
     const body = await res.text();

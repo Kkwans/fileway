@@ -7,26 +7,40 @@
       <p v-if="reason != null" class="logout-message">
         {{ logoutReasonText }}
       </p>
-      <div v-if="error !== ''" class="wrong">{{ error }}</div>
+      <div v-if="error !== ''" class="wrong" role="alert">{{ error }}</div>
 
+      <label class="sr-only" for="login-username">用户名</label>
       <input
+        id="login-username"
         autofocus
         class="input input--block"
         type="text"
+        name="username"
+        autocomplete="username"
         autocapitalize="off"
         v-model="username"
         placeholder="用户名"
       />
+      <label class="sr-only" for="login-password">密码</label>
       <input
+        id="login-password"
         class="input input--block"
         type="password"
+        name="password"
+        :autocomplete="createMode ? 'new-password' : 'current-password'"
         v-model="password"
         placeholder="密码"
       />
+      <label v-if="createMode" class="sr-only" for="login-password-confirm"
+        >确认密码</label
+      >
       <input
+        id="login-password-confirm"
         class="input input--block"
         v-if="createMode"
         type="password"
+        name="password-confirm"
+        autocomplete="new-password"
         v-model="passwordConfirm"
         placeholder="确认密码"
       />
@@ -43,9 +57,14 @@
         {{ createMode ? "注册" : "登录" }}
       </button>
 
-      <p @click="toggleMode" v-if="signup">
+      <button
+        v-if="signup"
+        class="login-mode-toggle"
+        type="button"
+        @click="toggleMode"
+      >
         {{ createMode ? "已有账号？去登录" : "没有账号？去注册" }}
-      </p>
+      </button>
     </form>
   </div>
 </template>
@@ -61,7 +80,7 @@ import {
   recaptchaKey,
   signup,
 } from "@/utils/constants";
-import { inject, onMounted, ref, computed } from "vue";
+import { onMounted, ref, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import AppIcon from "@/components/ui/AppIcon.vue";
 
@@ -76,8 +95,6 @@ const route = useRoute();
 const router = useRouter();
 
 const toggleMode = () => (createMode.value = !createMode.value);
-
-const $showError = inject<IToastError>("$showError")!;
 
 const reason = route.query["logout-reason"] ?? null;
 const loginTitle = computed(() => getLoginTitle(name));
@@ -130,9 +147,17 @@ const submit = async (event: Event) => {
         } else {
           error.value = e.message;
         }
+      } else if (e.status === 0) {
+        error.value = "无法连接服务器，请检查网络后重试";
       } else {
-        $showError(e);
+        error.value = "操作失败，请稍后重试";
       }
+    } else if (e instanceof Error && e.name === "AbortError") {
+      error.value = "连接超时，请稍后重试";
+    } else if (e instanceof TypeError) {
+      error.value = "无法连接服务器，请检查网络后重试";
+    } else {
+      error.value = "操作失败，请稍后重试";
     }
   } finally {
     loading.value = false;
