@@ -52,6 +52,20 @@
         </button>
       </section>
 
+      <section
+        v-else-if="!archivePath && !currentTask && !listing"
+        class="archive-state archive-state--empty"
+      >
+        <AppIcon name="file-archive" :size="24" />
+        <div>
+          <strong>选择压缩包开始浏览</strong>
+          <p>从文件列表打开 ZIP 或 TAR 压缩包，即可查看其中的文件。</p>
+        </div>
+        <router-link class="archive-state-link" to="/files/">
+          去文件列表
+        </router-link>
+      </section>
+
       <template v-if="listing && !loading">
         <section class="archive-overview" aria-label="压缩包摘要">
           <article>
@@ -503,11 +517,10 @@ async function loadFromRoute() {
   loadError.value = "";
   extractReport.value = null;
   const routePath = archivePathFromRoute();
-  if (routePath) {
-    archivePath.value = routePath;
-    destination.value = parentPath(routePath);
-  }
+  archivePath.value = routePath;
+  destination.value = parentPath(routePath);
   const taskId = typeof route.query.task === "string" ? route.query.task : "";
+  if (!routePath && !taskId) listing.value = null;
   try {
     if (taskId) {
       const task = await taskApi.get(taskId);
@@ -531,8 +544,6 @@ async function loadFromRoute() {
       (!listing.value || listing.value.archivePath !== archivePath.value)
     ) {
       await loadListing(archivePath.value);
-    } else if (!archivePath.value && !taskId) {
-      loadError.value = "缺少要打开的压缩包路径。";
     }
   } catch (error) {
     if (sequence !== routeLoadSequence || disposed) return;
@@ -775,6 +786,13 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 17px;
 }
+.archive-state--empty {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.archive-state--empty > div {
+  flex: 1 1 calc(100% - 39px);
+}
 .archive-state > .app-icon {
   color: var(--blue);
   width: 27px;
@@ -796,15 +814,24 @@ onBeforeUnmount(() => {
   color: var(--textPrimary);
   font-size: 10px;
 }
-.archive-state button {
-  margin-left: auto;
-  min-height: 36px;
+.archive-state button,
+.archive-state-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
   padding: 0 13px;
   border: 1px solid var(--borderPrimary);
   border-radius: 8px;
   color: var(--textSecondary);
   background: var(--surfaceSecondary);
   cursor: pointer;
+}
+.archive-state button {
+  margin-left: auto;
+}
+.archive-state-link {
+  margin-left: 39px;
 }
 .archive-state--error > .app-icon {
   color: var(--red);
