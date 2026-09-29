@@ -278,6 +278,8 @@ const doubleTapDelay = ref<number>(320);
 const startPosition = ref<{ x: number; y: number } | null>(null);
 const moveThreshold = ref<number>(10);
 
+defineOptions({ inheritAttrs: false });
+
 const $showError = inject<IToastError>("$showError")!;
 const router = useRouter();
 

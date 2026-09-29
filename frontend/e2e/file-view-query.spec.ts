@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test";
 
 test("文件视图由有效 URL 参数控制，并随前进后退恢复", async ({ page }) => {
   let resourceRequests = 0;
+  const consoleWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") consoleWarnings.push(message.text());
+  });
   const user = {
     id: 1,
     username: "fixture",
@@ -153,4 +157,5 @@ test("文件视图由有效 URL 参数控制，并随前进后退恢复", async 
   await expect(listing).toHaveClass(/compact-grid/);
   await page.goto("/files/");
   await expect(listing).toHaveClass(/compact-grid/);
+  expect(consoleWarnings).toEqual([]);
 });

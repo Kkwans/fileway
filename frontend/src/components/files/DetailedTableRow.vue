@@ -178,6 +178,8 @@ import type {
 } from "@/types/file";
 import type { FileActionMenuAction } from "@/utils/fileActionMenu";
 
+defineOptions({ inheritAttrs: false });
+
 const $showError = inject<IToastError>("$showError")!;
 const router = useRouter();
 const authStore = useAuthStore();
