@@ -44,6 +44,33 @@ test("压缩包入口区分未选择路径与读取失败", async ({ page }, tes
           contentType: "application/json",
           body: JSON.stringify(user),
         });
+      } else if (path === "/api/tasks") {
+        const counts = {
+          all: 0,
+          active: 0,
+          attention: 0,
+          canceled: 0,
+          completed: 0,
+          archived: 0,
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            items: [],
+            nextCursor: "",
+            total: 0,
+            counts,
+            categoryCounts: { file: counts, background: counts },
+            owners: [],
+          }),
+        });
+      } else if (path === "/api/transfers") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ items: [], total: 0 }),
+        });
       } else if (path === "/api/task-center/events") {
         await route.fulfill({
           status: 200,
