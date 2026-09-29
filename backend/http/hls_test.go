@@ -149,6 +149,13 @@ func TestMediaHLSQualityValidation(t *testing.T) {
 	}
 }
 
+func TestPGSSubtitleSelectionRequiresAnAvailableBitmapTrack(t *testing.T) {
+	streams := []hls.SubtitleStream{{Index: 5, Codec: "hdmv_pgs_subtitle"}, {Index: 6, Codec: "subrip"}}
+	if !validPGSSubtitleStream(streams, 5) || validPGSSubtitleStream(streams, 6) || validPGSSubtitleStream(streams, 99) {
+		t.Fatal("unsupported or absent embedded subtitle was accepted")
+	}
+}
+
 func TestMediaHLSReserveForFormatPreservesExplicitArtifactType(t *testing.T) {
 	service := newHTTPHLSService(t, false)
 	input := hls.Input{

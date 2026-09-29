@@ -174,6 +174,41 @@ func TestQualityProfilesAreDistinctAndNeverUpscale(t *testing.T) {
 	}
 }
 
+func TestPGSSubtitleUsesDistinctCacheAndOverlay(t *testing.T) {
+	service := newFakeService(t, 1, DefaultMaxBytes, 0)
+	first, second := 5, 6
+	input := Input{UserID: 1, Path: "/movie.mkv", Identity: "v1", SourcePath: "/source.mkv"}
+	start := func(job Job) (string, error) { return "task-" + job.ID, nil }
+	plain, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SubtitleStream = &first
+	english, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.SubtitleStream = &second
+	chinese, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.ID == english.ID || plain.ID == chinese.ID || english.ID == chinese.ID {
+		t.Fatal("subtitle selection reused another artifact")
+	}
+	if english.SubtitleStream == nil || *english.SubtitleStream != first {
+		t.Fatalf("selected subtitle = %#v", english.SubtitleStream)
+	}
+	hlsArgs := strings.Join(ffmpegSubtitleArgs("/source.mkv", "/tmp/segment.ts", "/tmp/index.m3u8", 1920, 1080, first), "\x00")
+	webmArgs := strings.Join(webMSubtitleArgs("/source.mkv", "/tmp/index.webm", 1920, 1080, second), "\x00")
+	if !strings.Contains(hlsArgs, "[0:v:0][0:5]overlay") || !strings.Contains(hlsArgs, "-map\x00[v]") {
+		t.Fatalf("HLS subtitle overlay missing: %q", hlsArgs)
+	}
+	if !strings.Contains(webmArgs, "[0:v:0][0:6]overlay") || !strings.Contains(webmArgs, "-map\x00[v]") {
+		t.Fatalf("WebM subtitle overlay missing: %q", webmArgs)
+	}
+}
+
 func TestWebMQualityChangesTheTranscodeAndCacheProfile(t *testing.T) {
 	wide := WebMProfileForQuality("1080p", 2160)
 	narrow := WebMProfileForQuality("480p", 2160)

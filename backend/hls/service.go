@@ -75,9 +75,16 @@ type Input struct {
 	VideoBitDepth    int
 	VideoWidth       int
 	VideoHeight      int
+	SubtitleStreams  []SubtitleStream
+	SubtitleStream   *int
 	// DurationSeconds is the probed source duration used to render truthful
 	// compatibility progress while a WebM artifact is being generated.
 	DurationSeconds float64
+}
+
+type SubtitleStream struct {
+	Index int
+	Codec string
 }
 
 type Job struct {
@@ -88,6 +95,7 @@ type Job struct {
 	SourcePath      string
 	Profile         string
 	DurationSeconds float64
+	SubtitleStream  *int
 }
 
 // IsWebMProfile reports whether a compatibility artifact is a complete WebM
@@ -160,16 +168,17 @@ func CanCopyWebMMedia(videoCodec, audioCodec string) bool {
 }
 
 type Status struct {
-	ID           string `json:"id"`
-	TaskID       string `json:"taskId,omitempty"`
-	Path         string `json:"path"`
-	Identity     string `json:"identity"`
-	Profile      string `json:"profile"`
-	State        State  `json:"state"`
-	Error        string `json:"error,omitempty"`
-	UpdatedAt    int64  `json:"updatedAt"`
-	LastAccessAt int64  `json:"lastAccessAt,omitempty"`
-	SizeBytes    int64  `json:"sizeBytes,omitempty"`
+	ID             string `json:"id"`
+	TaskID         string `json:"taskId,omitempty"`
+	Path           string `json:"path"`
+	Identity       string `json:"identity"`
+	Profile        string `json:"profile"`
+	SubtitleStream *int   `json:"subtitleStreamIndex,omitempty"`
+	State          State  `json:"state"`
+	Error          string `json:"error,omitempty"`
+	UpdatedAt      int64  `json:"updatedAt"`
+	LastAccessAt   int64  `json:"lastAccessAt,omitempty"`
+	SizeBytes      int64  `json:"sizeBytes,omitempty"`
 	// ProcessedSeconds is reported for compatibility transcodes that cannot
 	// expose a playable artifact until the complete file is ready.  It is
 	// deliberately a duration, not a guessed percentage.
@@ -379,11 +388,16 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 	if start == nil {
 		return Status{}, false, fmt.Errorf("HLS task starter is required")
 	}
+	cacheIdentity := input.Identity
+	if input.SubtitleStream != nil {
+		cacheIdentity += "\x00subtitle=" + strconv.Itoa(*input.SubtitleStream)
+	}
 	job := Job{
-		ID:     cacheKey(input.UserID, input.Path, input.Identity, profile),
+		ID:     cacheKey(input.UserID, input.Path, cacheIdentity, profile),
 		UserID: input.UserID, Path: input.Path, Identity: input.Identity,
 		SourcePath: input.SourcePath, Profile: profile,
 		DurationSeconds: input.DurationSeconds,
+		SubtitleStream:  input.SubtitleStream,
 	}
 
 	service.mu.Lock()
@@ -398,6 +412,7 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 		ID: job.ID, UserID: job.UserID, Path: job.Path, Identity: job.Identity,
 		Profile: job.Profile, State: StateQueued, UpdatedAt: now,
 		DurationSeconds: job.DurationSeconds,
+		SubtitleStream:  job.SubtitleStream,
 	}, sourcePath: job.SourcePath}
 	service.entries[job.ID] = current
 	taskID, err := start(job)
@@ -468,6 +483,9 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	playlist := filepath.Join(directory, "index.m3u8")
 	segmentPattern := filepath.Join(directory, "segment-%06d.ts")
 	args := ffmpegArgs(job.SourcePath, segmentPattern, playlist, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile))
+	if job.SubtitleStream != nil {
+		args = ffmpegSubtitleArgs(job.SourcePath, segmentPattern, playlist, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile), *job.SubtitleStream)
+	}
 	if IsCopyProfile(job.Profile) {
 		args = copyFFmpegArgs(job.SourcePath, segmentPattern, playlist)
 	}
@@ -547,6 +565,9 @@ func (service *Service) runWebM(ctx context.Context, job Job, directory string) 
 	temporary := filepath.Join(directory, "index.webm.tmp")
 	output := filepath.Join(directory, "index.webm")
 	args := webMArgs(job.SourcePath, temporary, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile))
+	if job.SubtitleStream != nil {
+		args = webMSubtitleArgs(job.SourcePath, temporary, profileMaxWidth(job.Profile), profileMaxHeight(job.Profile), *job.SubtitleStream)
+	}
 	command := exec.CommandContext(ctx, service.ffmpegPath, args...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
@@ -922,6 +943,21 @@ func ffmpegArgs(source, segmentPattern, playlist string, maxWidth, maxHeight int
 	}
 }
 
+func ffmpegSubtitleArgs(source, segmentPattern, playlist string, maxWidth, maxHeight, streamIndex int) []string {
+	filter := fmt.Sprintf("[0:v:0][0:%d]overlay,%s[v]", streamIndex, boundedVideoScale(maxWidth, maxHeight))
+	return []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin", "-i", source,
+		"-filter_complex", filter, "-map", "[v]", "-map", "0:a:0?",
+		"-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-pix_fmt", "yuv420p",
+		"-threads", "1", "-filter_complex_threads", "1",
+		"-c:a", "aac", "-b:a", "128k", "-ac", "2",
+		"-force_key_frames", "expr:gte(t,n_forced*4)",
+		"-f", "hls", "-hls_time", "4", "-hls_list_size", "0", "-hls_playlist_type", "event",
+		"-hls_flags", "independent_segments+temp_file",
+		"-hls_segment_filename", segmentPattern, playlist,
+	}
+}
+
 func copyFFmpegArgs(source, segmentPattern, playlist string) []string {
 	return []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin", "-i", source,
@@ -947,6 +983,18 @@ func webMArgs(source, output string, maxWidth, maxHeight int) []string {
 		"-c:a", "libopus", "-b:a", "128k", "-ac", "2",
 		"-progress", "pipe:1",
 		"-f", "webm", output,
+	}
+}
+
+func webMSubtitleArgs(source, output string, maxWidth, maxHeight, streamIndex int) []string {
+	filter := fmt.Sprintf("[0:v:0][0:%d]overlay,%s[v]", streamIndex, boundedVideoScale(maxWidth, maxHeight))
+	return []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin", "-i", source,
+		"-filter_complex", filter, "-map", "[v]", "-map", "0:a:0?",
+		"-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "1.5M",
+		"-row-mt", "1", "-threads", "2", "-filter_complex_threads", "1", "-pix_fmt", "yuv420p",
+		"-c:a", "libopus", "-b:a", "128k", "-ac", "2",
+		"-progress", "pipe:1", "-f", "webm", output,
 	}
 }
 

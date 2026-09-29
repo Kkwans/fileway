@@ -111,7 +111,18 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		if err != nil {
 			return nil, status, err
 		}
+		if args.SubtitleStreamIndex != nil {
+			if !validPGSSubtitleStream(input.SubtitleStreams, *args.SubtitleStreamIndex) {
+				return nil, http.StatusConflict, fmt.Errorf("原内挂字幕轨已不可用")
+			}
+			input.SubtitleStream = args.SubtitleStreamIndex
+		}
 		reserve := reserveHLSForFormat(hlsServices[0], args.Format)
+		if args.Profile != "" {
+			reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {
+				return hlsServices[0].ReserveWithProfile(source, args.Profile, start)
+			}
+		}
 		_, created, reserveErr := reserve(input, func(job hls.Job) (string, error) {
 			retry, err = enqueueMediaHLSTask(runtime, d, owner, hlsServices[0], job, original.ID)
 			if err != nil {
