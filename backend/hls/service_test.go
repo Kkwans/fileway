@@ -196,15 +196,18 @@ func TestPGSSubtitleUsesDistinctCacheAndOverlay(t *testing.T) {
 	if plain.ID == english.ID || plain.ID == chinese.ID || english.ID == chinese.ID {
 		t.Fatal("subtitle selection reused another artifact")
 	}
+	if english.ID == cacheKey(input.UserID, input.Path, input.Identity+"\x00subtitle=5", DefaultProfile) {
+		t.Fatal("subtitle selection reused a cache artifact with the old EOF behavior")
+	}
 	if english.SubtitleStream == nil || *english.SubtitleStream != first {
 		t.Fatalf("selected subtitle = %#v", english.SubtitleStream)
 	}
 	hlsArgs := strings.Join(ffmpegSubtitleArgs("/source.mkv", "/tmp/segment.ts", "/tmp/index.m3u8", 1920, 1080, first), "\x00")
 	webmArgs := strings.Join(webMSubtitleArgs("/source.mkv", "/tmp/index.webm", 1920, 1080, second), "\x00")
-	if !strings.Contains(hlsArgs, "[0:v:0][0:5]overlay") || !strings.Contains(hlsArgs, "-map\x00[v]") {
+	if !strings.Contains(hlsArgs, "[0:v:0][0:5]overlay=shortest=1") || !strings.Contains(hlsArgs, "-map\x00[v]") {
 		t.Fatalf("HLS subtitle overlay missing: %q", hlsArgs)
 	}
-	if !strings.Contains(webmArgs, "[0:v:0][0:6]overlay") || !strings.Contains(webmArgs, "-map\x00[v]") {
+	if !strings.Contains(webmArgs, "[0:v:0][0:6]overlay=shortest=1") || !strings.Contains(webmArgs, "-map\x00[v]") {
 		t.Fatalf("WebM subtitle overlay missing: %q", webmArgs)
 	}
 }

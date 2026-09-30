@@ -402,7 +402,7 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 	}
 	cacheIdentity := input.Identity
 	if input.SubtitleStream != nil {
-		cacheIdentity += "\x00subtitle=" + strconv.Itoa(*input.SubtitleStream)
+		cacheIdentity += "\x00subtitle=" + strconv.Itoa(*input.SubtitleStream) + "\x00pgs-overlay-shortest-v1"
 	}
 	if input.AudioStream != nil {
 		cacheIdentity += "\x00audio=" + strconv.Itoa(*input.AudioStream)
@@ -984,7 +984,9 @@ func videoTrackArgs(maxWidth, maxHeight int, subtitleStream *int, hdr bool) []st
 	if subtitleStream == nil {
 		return []string{"-map", "0:v:0", "-vf", filter}
 	}
-	graph := fmt.Sprintf("[0:v:0][0:%d]overlay,%s[v]", *subtitleStream, filter)
+	// PGS decoding emits a terminal canvas frame; it must not extend the
+	// encoded timeline beyond the main video's EOF.
+	graph := fmt.Sprintf("[0:v:0][0:%d]overlay=shortest=1,%s[v]", *subtitleStream, filter)
 	return []string{"-filter_complex", graph, "-map", "[v]", "-filter_complex_threads", "1"}
 }
 
