@@ -906,7 +906,6 @@ function subtitleTypeFromUrl(url: string): "vtt" | "srt" | "ass" {
 function subtitleStyleFromPrefs(): Partial<CSSStyleDeclaration> {
   return {
     fontSize: SUBTITLE_SIZE_PX[subtitlePrefs.value.size] || "20px",
-    bottom: `${subtitlePrefs.value.bottom}px`,
   } as Partial<CSSStyleDeclaration>;
 }
 
@@ -934,7 +933,6 @@ function applySubtitleChrome() {
       }
     )?.subtitle;
     sub?.style?.("fontSize", SUBTITLE_SIZE_PX[subtitlePrefs.value.size]);
-    sub?.style?.("bottom", `${subtitlePrefs.value.bottom}px`);
   } catch {
     /* ignore */
   }
@@ -2789,6 +2787,12 @@ onBeforeUnmount(() => {
   opacity: 0 !important;
   pointer-events: none !important;
   visibility: hidden !important;
+}
+.art-player-stage :deep(.art-video-player.art-control-show .art-subtitle),
+.art-player-stage :deep(.art-video-player.art-hover .art-subtitle) {
+  bottom: calc(
+    var(--art-control-height) + var(--art-subtitle-bottom)
+  ) !important;
 }
 .art-player-stage--mobile :deep(.art-pip),
 .art-player-stage--mobile :deep(.art-fullscreen-web),
