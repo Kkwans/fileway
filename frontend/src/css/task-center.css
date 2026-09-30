@@ -348,18 +348,89 @@
   -webkit-box-orient: vertical;
   overflow-wrap: anywhere;
   line-height: 1.5;
+  font-size: 15px;
+  font-weight: 600;
 }
 .task-center-item--media .task-center-status {
   flex-shrink: 0;
 }
 .task-center-item--media .task-center-output-path {
-  white-space: normal;
-  font-size: 0.75rem;
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 .task-center-item--media .task-center-item-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
-  max-width: 15rem;
+  margin-inline-start: auto;
+  gap: 8px;
+}
+.task-center-item-footer {
+  display: contents;
+}
+.task-center-list--cards {
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+.task-center-list--cards .task-center-item {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+.task-center-item.task-center-item--media {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 20px;
+  gap: 20px;
+}
+.task-center-item--media .task-center-item-icon {
+  position: absolute;
+  top: 20px;
+  inset-inline-start: 20px;
+}
+.task-center-item--media .task-center-item-title {
+  min-height: 34px;
+  padding-inline-start: 46px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.task-center-item--media .task-center-status {
+  margin-top: 4px;
+}
+.task-center-item--media .task-center-item-footer {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+.task-center-item--media .task-center-item-time {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  text-align: start;
+}
+.task-center-item--media .task-center-item-duration {
+  font-size: 12px;
+}
+.task-center-item--media .task-center-item-actions button {
+  min-height: 44px;
+  font-size: 13px;
+  padding-inline: 14px;
+}
+.task-center-item--media
+  .task-center-play-link:not(.task-center-location-link) {
+  color: var(--color-on-accent, #fff);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.task-center-item--media
+  .task-center-play-link:not(.task-center-location-link):hover {
+  background: color-mix(in srgb, var(--color-accent) 90%, #000);
 }
 .task-center-play-link {
   display: inline-flex;
@@ -384,23 +455,57 @@
 }
 
 .task-center-media-progress .task-center-progress-summary {
+  align-items: baseline;
+  font-size: 13px;
+}
+.task-center-item--media .task-center-media-progress {
+  margin-top: 20px;
+  max-width: none;
+  gap: 10px;
+}
+.task-center-item--media .task-center-progress-summary strong {
+  font-size: 14px;
+}
+.task-center-media-time {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
-  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
 
 .task-center-media-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem 1.25rem;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 10px 0 0;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--color-surface-muted);
   color: var(--color-text-muted);
   font-size: 0.75rem;
   line-height: 1.6;
   font-variant-numeric: tabular-nums;
 }
 
-.task-center-media-metrics strong {
+.task-center-media-metrics dt {
+  font-size: 12px;
+}
+.task-center-media-metrics dd {
+  margin: 5px 0 0;
   color: var(--color-text);
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.task-center-media-metrics dd small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .task-center-progress-summary,
@@ -697,9 +802,34 @@
   .task-center-filter select {
     min-height: 44px;
   }
+  .task-center-media-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
+  .task-center-item.task-center-item--media {
+    padding: 16px;
+  }
+  .task-center-item--media .task-center-item-icon {
+    top: 16px;
+    inset-inline-start: 16px;
+  }
+  .task-center-item--media .task-center-item-title {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .task-center-item--media .task-center-item-title strong {
+    flex: 1 1 100%;
+  }
+  .task-center-item--media .task-center-status {
+    margin-top: 0;
+  }
+  .task-center-item--media .task-center-item-actions {
+    width: 100%;
+    margin-inline-start: 0;
+    justify-content: flex-start;
+  }
   .task-center-workspace {
     width: min(100% - 24px, 540px);
     padding-top: 16px;

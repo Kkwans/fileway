@@ -114,19 +114,26 @@
           </p>
         </div>
         <div v-else>
-          <div class="task-center-list-head" aria-hidden="true">
+          <div
+            v-if="!hasMediaTasks"
+            class="task-center-list-head"
+            aria-hidden="true"
+          >
             <span>任务</span>
             <span>时间</span>
             <span>耗时</span>
             <span>操作</span>
           </div>
-          <div class="task-center-list">
+          <div
+            class="task-center-list"
+            :class="{ 'task-center-list--cards': hasMediaTasks }"
+          >
             <article
               v-for="task in tasksStore.items"
               :key="task.id"
               class="task-center-item"
               :class="{
-                'task-center-item--media': task.type === 'media.transcode',
+                'task-center-item--media': task.type.startsWith('media.'),
               }"
             >
               <span class="task-center-item-icon" :class="`is-${task.status}`">
@@ -134,14 +141,15 @@
               </span>
               <div class="task-center-item-main">
                 <div class="task-center-item-title">
-                  <strong>{{ task.title }}</strong>
+                  <strong :title="task.title">{{ task.title }}</strong>
                   <span
+                    v-if="!task.media || !isTaskActive(task)"
                     class="task-center-status"
                     :class="`is-${task.status}`"
                     >{{ statusLabel(task.status) }}</span
                   >
                 </div>
-                <p>
+                <p v-if="!task.type.startsWith('media.')">
                   {{ taskTypeLabel(task.type) }}
                 </p>
                 <p
@@ -153,11 +161,11 @@
                 </p>
                 <div v-if="task.media" class="task-center-media-progress">
                   <div class="task-center-progress-summary">
-                    <strong>{{ mediaPhaseLabel(task) }}</strong>
+                    <span>{{ mediaPhaseLabel(task) }}</span>
                     <span v-if="task.media.durationSeconds > 0">
-                      {{ taskProgressPercent(taskProgress(task)) }}% ·
-                      {{ formatMediaTime(task.media.processedSeconds) }} /
-                      {{ formatMediaTime(task.media.durationSeconds) }}
+                      <strong
+                        >{{ taskProgressPercent(taskProgress(task)) }}%</strong
+                      >
                     </span>
                   </div>
                   <div
@@ -176,29 +184,46 @@
                     ></span>
                   </div>
                   <div
+                    v-if="task.media.durationSeconds > 0"
+                    class="task-center-media-time"
+                  >
+                    <span
+                      >已处理
+                      {{ formatMediaTime(taskProgress(task).value) }}</span
+                    >
+                    <span
+                      >视频时长
+                      {{ formatMediaTime(task.media.durationSeconds) }}</span
+                    >
+                  </div>
+                  <dl
                     v-if="isTaskActive(task)"
                     class="task-center-media-metrics"
                   >
-                    <span
-                      >转码速度
-                      <strong>{{ mediaSpeedLabel(task) }}</strong></span
-                    >
-                    <span v-if="task.media.fps > 0"
-                      >{{ task.media.fps.toFixed(1) }} fps</span
-                    >
-                    <span
-                      >剩余
-                      <strong>{{
-                        formatMediaTime(mediaEstimate(task).remaining)
-                      }}</strong></span
-                    >
-                    <span
-                      >预计总耗时
-                      <strong>{{
-                        formatMediaTime(mediaEstimate(task).total)
-                      }}</strong></span
-                    >
-                  </div>
+                    <div>
+                      <dt>转码速度</dt>
+                      <dd>{{ mediaSpeedLabel(task) }}</dd>
+                    </div>
+                    <div>
+                      <dt>处理帧率</dt>
+                      <dd>
+                        {{
+                          task.media.fps > 0 ? task.media.fps.toFixed(1) : "—"
+                        }}
+                        <small v-if="task.media.fps > 0">fps</small>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>预计剩余</dt>
+                      <dd>
+                        {{ formatMediaTime(mediaEstimate(task).remaining) }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>预计总耗时</dt>
+                      <dd>{{ formatMediaTime(mediaEstimate(task).total) }}</dd>
+                    </div>
+                  </dl>
                   <p v-if="task.error" class="task-center-error">
                     {{ task.error }}
                   </p>
@@ -273,83 +298,86 @@
                   {{ task.error }}
                 </p>
               </div>
-              <time
-                class="task-center-item-time"
-                :datetime="new Date(task.createdAt).toISOString()"
-              >
-                <span>{{ taskTimeParts(task.createdAt).date }}</span>
-                <span>{{ taskTimeParts(task.createdAt).clock }}</span>
-              </time>
-              <span class="task-center-item-duration">{{
-                taskDuration(task)
-              }}</span>
-              <div class="task-center-item-actions">
-                <router-link
-                  v-if="
-                    task.type === 'media.transcode' &&
-                    task.sourcePath &&
-                    (task.media?.playableSeconds || 0) > 0 &&
-                    ['running', 'completed'].includes(task.status)
-                  "
-                  class="task-center-play-link"
-                  :to="
-                    task.status === 'completed' && task.outputPath
-                      ? encodeResourceRoute(task.outputPath)
-                      : {
-                          path: encodeResourceRoute(task.sourcePath),
-                          query: { transcode: task.id },
-                        }
-                  "
+              <div class="task-center-item-footer">
+                <time
+                  class="task-center-item-time"
+                  :datetime="new Date(task.createdAt).toISOString()"
                 >
-                  <AppIcon name="play" :size="16" />{{
-                    task.status === "completed" ? "播放成品" : "边转边播"
-                  }}
-                </router-link>
-                <button
-                  v-if="task.status === 'completed' && task.outputPath"
-                  type="button"
-                  @click="downloadOutput(task)"
+                  <span>{{ taskTimeParts(task.createdAt).date }}</span>
+                  <span>{{ taskTimeParts(task.createdAt).clock }}</span>
+                </time>
+                <span class="task-center-item-duration"
+                  ><span v-if="task.type.startsWith('media.')">已耗时 </span
+                  >{{ taskDuration(task) }}</span
                 >
-                  下载
-                </button>
-                <router-link
-                  v-if="task.status === 'completed' && task.outputPath"
-                  class="task-center-play-link"
-                  :to="
-                    encodeResourceRoute(
-                      task.outputPath.slice(
-                        0,
-                        task.outputPath.lastIndexOf('/')
-                      ) || '/'
-                    )
-                  "
-                  >所在目录</router-link
-                >
-                <button
-                  v-if="isTaskActive(task)"
-                  type="button"
-                  :disabled="busyIds.has(task.id)"
-                  @click="cancelTask(task.id)"
-                >
-                  取消
-                </button>
-                <button
-                  v-else-if="canRetry(task)"
-                  type="button"
-                  class="primary"
-                  :disabled="busyIds.has(task.id)"
-                  @click="retryTask(task.id)"
-                >
-                  重试
-                </button>
-                <button
-                  v-if="canArchive(task)"
-                  type="button"
-                  :disabled="busyIds.has(task.id)"
-                  @click="archiveTask(task.id)"
-                >
-                  删除记录
-                </button>
+                <div class="task-center-item-actions">
+                  <router-link
+                    v-if="
+                      task.type === 'media.transcode' &&
+                      task.sourcePath &&
+                      (task.media?.playableSeconds || 0) > 0 &&
+                      ['running', 'completed'].includes(task.status)
+                    "
+                    class="task-center-play-link"
+                    :to="
+                      task.status === 'completed' && task.outputPath
+                        ? encodeResourceRoute(task.outputPath)
+                        : {
+                            path: encodeResourceRoute(task.sourcePath),
+                            query: { transcode: task.id },
+                          }
+                    "
+                  >
+                    <AppIcon name="play" :size="16" />{{
+                      task.status === "completed" ? "播放成品" : "边转边播"
+                    }}
+                  </router-link>
+                  <button
+                    v-if="task.status === 'completed' && task.outputPath"
+                    type="button"
+                    @click="downloadOutput(task)"
+                  >
+                    下载
+                  </button>
+                  <router-link
+                    v-if="task.status === 'completed' && task.outputPath"
+                    class="task-center-play-link task-center-location-link"
+                    :to="
+                      encodeResourceRoute(
+                        task.outputPath.slice(
+                          0,
+                          task.outputPath.lastIndexOf('/')
+                        ) || '/'
+                      )
+                    "
+                    >所在目录</router-link
+                  >
+                  <button
+                    v-if="isTaskActive(task)"
+                    type="button"
+                    :disabled="busyIds.has(task.id)"
+                    @click="cancelTask(task.id)"
+                  >
+                    取消
+                  </button>
+                  <button
+                    v-else-if="canRetry(task)"
+                    type="button"
+                    class="primary"
+                    :disabled="busyIds.has(task.id)"
+                    @click="retryTask(task.id)"
+                  >
+                    重试
+                  </button>
+                  <button
+                    v-if="canArchive(task)"
+                    type="button"
+                    :disabled="busyIds.has(task.id)"
+                    @click="archiveTask(task.id)"
+                  >
+                    删除记录
+                  </button>
+                </div>
               </div>
             </article>
           </div>
@@ -817,6 +845,9 @@ const loadingCurrent = computed(() => {
   if (activeTab.value === "history") return historyStore.loading;
   return transfersStore.loading;
 });
+const hasMediaTasks = computed(() =>
+  tasksStore.items.some((task) => task.type.startsWith("media."))
+);
 
 function groupUploadTransfers(items: DisplayTransfer[]): DisplayTransfer[] {
   const groups = new Map<string, DisplayTransfer>();

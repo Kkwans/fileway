@@ -438,6 +438,11 @@ test.describe("affected page browser gate", () => {
     test.setTimeout(120000);
     const unknownRequests: string[] = [];
     const submissions: Array<Record<string, unknown>> = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
     await installFixtureApi(page, unknownRequests);
     const task = {
       id: "export-one",
@@ -557,8 +562,39 @@ test.describe("affected page browser gate", () => {
             `transcode-task-${theme}-${viewport.name}.png`
           ),
         });
+        const geometry = await page
+          .locator(".task-center-item--media")
+          .evaluate((card) => {
+            const track = card
+              .querySelector(".task-center-progress-track")!
+              .getBoundingClientRect();
+            const metrics = Array.from(
+              card.querySelectorAll(".task-center-media-metrics dd"),
+              (item) => item.getBoundingClientRect()
+            );
+            const actions = Array.from(
+              card.querySelectorAll(".task-center-item-actions > *"),
+              (item) => item.getBoundingClientRect().height
+            );
+            return {
+              trackWidth: track.width,
+              metrics: metrics.map((rect) => ({
+                top: rect.top,
+                left: rect.left,
+              })),
+              actions,
+            };
+          });
+        expect(geometry.trackWidth).toBeGreaterThan(
+          viewport.width < 640 ? 240 : 350
+        );
+        expect(geometry.actions.every((height) => height >= 44)).toBe(true);
+        expect(geometry.metrics[0].top).toBe(geometry.metrics[1].top);
+        if (viewport.width > 899)
+          expect(geometry.metrics[0].top).toBe(geometry.metrics[3].top);
       }
     }
+    expect(errors).toEqual([]);
   });
 
   test("compatibility timeline seeks to ungenerated media and keeps the full source duration", async ({
