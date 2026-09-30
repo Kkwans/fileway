@@ -111,7 +111,8 @@ const thumbnailStyle = computed(() => {
   bottom: calc(var(--art-control-height, 46px) + 10px);
   left: var(--art-padding, 10px);
   right: var(--art-padding, 10px);
-  z-index: 110;
+  /* Above ArtPlayer controls (60), below its settings menu (90). */
+  z-index: 70;
   color: #fff;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
