@@ -953,6 +953,7 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
     persistSubtitlePrefs();
     syncPlayerLabels();
     syncSubtitleCheck();
+    void nextTick(refreshSubtitlePicker);
     notice("内挂 PGS 字幕需要兼容转码，正在切换…");
     void switchEngine(
       "compat",
@@ -972,6 +973,7 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
     persistSubtitlePrefs();
     syncPlayerLabels();
     syncSubtitleCheck();
+    void nextTick(refreshSubtitlePicker);
     if (hadEmbedded) void switchEngine("compat", transcodeQuality.value, true);
     return "关";
   }
@@ -992,6 +994,7 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
   applySubtitleChrome();
   syncPlayerLabels();
   syncSubtitleCheck();
+  void nextTick(refreshSubtitlePicker);
   if (hadEmbedded) void switchEngine("compat", transcodeQuality.value, true);
   return item.html || "字幕";
 }
@@ -1954,87 +1957,97 @@ function buildSettings() {
           html: "从其他目录添加字幕…",
           value: "__pick__",
         },
-        {
-          name: "sub-size",
-          html: "字幕大小",
-          selector: [
-            {
-              name: "sub-size-sm",
-              html: "小",
-              value: "__size_sm__",
-              default: subtitlePrefs.value.size === "sm",
-            },
-            {
-              name: "sub-size-md",
-              html: "中",
-              value: "__size_md__",
-              default: subtitlePrefs.value.size === "md",
-            },
-            {
-              name: "sub-size-lg",
-              html: "大",
-              value: "__size_lg__",
-              default: subtitlePrefs.value.size === "lg",
-            },
-          ],
-          onSelect(item: { html: string; value: string }) {
-            const size = item.value.slice(7, -2);
-            if (size === "sm" || size === "md" || size === "lg") {
-              subtitlePrefs.value.size = size;
-              persistSubtitlePrefs();
-              applySubtitleChrome();
-            }
-            return item.html;
-          },
-        },
-        {
-          name: "sub-pos",
-          html: "字幕位置",
-          selector: [
-            {
-              name: "sub-pos-15",
-              html: "低（贴底）",
-              value: "__pos_15__",
-              default: subtitlePrefs.value.bottom <= 20,
-            },
-            {
-              name: "sub-pos-40",
-              html: "中",
-              value: "__pos_40__",
-              default:
-                subtitlePrefs.value.bottom > 20 &&
-                subtitlePrefs.value.bottom <= 50,
-            },
-            {
-              name: "sub-pos-80",
-              html: "高",
-              value: "__pos_80__",
-              default: subtitlePrefs.value.bottom > 50,
-            },
-          ],
-          onSelect(item: { html: string; value: string }) {
-            const bottom = Number(item.value.slice(6, -2));
-            if (bottom === 15 || bottom === 40 || bottom === 80) {
-              subtitlePrefs.value.bottom = bottom;
-              persistSubtitlePrefs();
-              applySubtitleChrome();
-            }
-            return item.html;
-          },
-        },
-        {
-          name: "sub-offset",
-          html: "时间偏移",
-          range: [subtitlePrefs.value.offset, -10, 10, 0.1],
-          onRange(this: unknown, item: { range?: number[] }) {
-            const n = Number(item?.range?.[0] ?? 0);
-            subtitlePrefs.value.offset = Math.round(n * 10) / 10;
-            persistSubtitlePrefs();
-            applySubtitleChrome();
-            syncSettingEcho("playback-subtitle", currentSubtitleLabel());
-            return `${subtitlePrefs.value.offset > 0 ? "+" : ""}${subtitlePrefs.value.offset}s`;
-          },
-        },
+        ...(embeddedSubtitleIndex.value === null
+          ? [
+              {
+                name: "sub-size",
+                html: "字幕大小",
+                selector: [
+                  {
+                    name: "sub-size-sm",
+                    html: "小",
+                    value: "__size_sm__",
+                    default: subtitlePrefs.value.size === "sm",
+                  },
+                  {
+                    name: "sub-size-md",
+                    html: "中",
+                    value: "__size_md__",
+                    default: subtitlePrefs.value.size === "md",
+                  },
+                  {
+                    name: "sub-size-lg",
+                    html: "大",
+                    value: "__size_lg__",
+                    default: subtitlePrefs.value.size === "lg",
+                  },
+                ],
+                onSelect(item: { html: string; value: string }) {
+                  const size = item.value.slice(7, -2);
+                  if (size === "sm" || size === "md" || size === "lg") {
+                    subtitlePrefs.value.size = size;
+                    persistSubtitlePrefs();
+                    applySubtitleChrome();
+                  }
+                  return item.html;
+                },
+              },
+              {
+                name: "sub-pos",
+                html: "字幕位置",
+                selector: [
+                  {
+                    name: "sub-pos-15",
+                    html: "低（贴底）",
+                    value: "__pos_15__",
+                    default: subtitlePrefs.value.bottom <= 20,
+                  },
+                  {
+                    name: "sub-pos-40",
+                    html: "中",
+                    value: "__pos_40__",
+                    default:
+                      subtitlePrefs.value.bottom > 20 &&
+                      subtitlePrefs.value.bottom <= 50,
+                  },
+                  {
+                    name: "sub-pos-80",
+                    html: "高",
+                    value: "__pos_80__",
+                    default: subtitlePrefs.value.bottom > 50,
+                  },
+                ],
+                onSelect(item: { html: string; value: string }) {
+                  const bottom = Number(item.value.slice(6, -2));
+                  if (bottom === 15 || bottom === 40 || bottom === 80) {
+                    subtitlePrefs.value.bottom = bottom;
+                    persistSubtitlePrefs();
+                    applySubtitleChrome();
+                  }
+                  return item.html;
+                },
+              },
+              {
+                name: "sub-offset",
+                html: "时间偏移",
+                range: [subtitlePrefs.value.offset, -10, 10, 0.1],
+                onRange(this: unknown, item: { range?: number[] }) {
+                  const n = Number(item?.range?.[0] ?? 0);
+                  subtitlePrefs.value.offset = Math.round(n * 10) / 10;
+                  persistSubtitlePrefs();
+                  applySubtitleChrome();
+                  syncSettingEcho("playback-subtitle", currentSubtitleLabel());
+                  return `${subtitlePrefs.value.offset > 0 ? "+" : ""}${subtitlePrefs.value.offset}s`;
+                },
+              },
+            ]
+          : [
+              {
+                name: "sub-pgs-info",
+                html: "PGS 字幕已合成到画面，样式不可调整",
+                value: "__info__",
+              },
+            ]),
       ],
       onSelect(item: { html: string; value: string; name?: string }) {
         const v = item?.value;
@@ -2047,6 +2060,7 @@ function buildSettings() {
           syncSubtitleCheck();
           return currentSubtitleLabel();
         }
+        if (v === "__info__") return currentSubtitleLabel();
         return switchSubtitle(item);
       },
     },

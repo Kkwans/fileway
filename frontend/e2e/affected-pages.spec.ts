@@ -597,6 +597,8 @@ test.describe("affected page browser gate", () => {
     expect(requests.at(-1)).toMatchObject({ subtitleStreamIndex: 6 });
 
     await openSubtitles();
+    await expect(panel.locator('[data-name="sub-pgs-info"]')).toBeVisible();
+    await expect(panel.locator('[data-name="sub-size"]')).toHaveCount(0);
     await panel.locator('[data-name="sub-track-2"]').click();
     await expect.poll(() => requests.length).toBeGreaterThanOrEqual(2);
     expect(requests.at(-1)).toMatchObject({ subtitleStreamIndex: 7 });
@@ -605,6 +607,8 @@ test.describe("affected page browser gate", () => {
     await panel.locator('[data-name="sub-off"]').click();
     await expect.poll(() => requests.length).toBeGreaterThanOrEqual(3);
     expect(requests.at(-1)).not.toHaveProperty("subtitleStreamIndex");
+    await openSubtitles();
+    await expect(panel.locator('[data-name="sub-size"]')).toBeVisible();
   });
 
   test("lists four embedded audio tracks and selects the Chinese dub", async ({
