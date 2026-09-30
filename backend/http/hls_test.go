@@ -136,6 +136,9 @@ func TestMediaHLSFormatUsesRemuxForCompatibleStreams(t *testing.T) {
 	if got := mediaHLSFormatForInput(hls.Input{VideoCodec: "hevc", AudioCodec: "aac"}); got != "hls" {
 		t.Fatalf("HEVC streams format = %q, want hls", got)
 	}
+	if got := mediaHLSFormatForInput(hls.Input{VideoCodec: "h264", AudioCodec: "aac", HDR: true}); got != "hls" {
+		t.Fatalf("HDR streams format = %q, want hls tone map", got)
+	}
 }
 
 func TestMediaHLSQualityValidation(t *testing.T) {

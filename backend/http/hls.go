@@ -49,6 +49,7 @@ type mediaHLSResponse struct {
 	Profile             string    `json:"profile"`
 	SubtitleStreamIndex *int      `json:"subtitleStreamIndex,omitempty"`
 	AudioStreamIndex    *int      `json:"audioStreamIndex,omitempty"`
+	HDRToneMapped       bool      `json:"hdrToneMapped,omitempty"`
 	State               hls.State `json:"state"`
 	Error               string    `json:"error,omitempty"`
 	UpdatedAt           int64     `json:"updatedAt"`
@@ -115,21 +116,21 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 		copySafe := mediaHLSFormatForInput(input) == "copy"
 		if request.Format == "webm" {
 			reserve = service.ReserveWebM
-			if sourceQuality && hls.CanCopyWebMMedia(input.VideoCodec, input.AudioCodec) {
+			if sourceQuality && !input.HDR && hls.CanCopyWebMMedia(input.VideoCodec, input.AudioCodec) {
 				reserve = service.ReserveWebMCopy
 			} else if mediaHLSExplicitQuality(request.Quality) || sourceQuality {
 				profile := hls.WebMProfileForDimensions(request.Quality, input.VideoWidth, input.VideoHeight)
 				reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {
 					return service.ReserveWithProfile(source, profile, start)
 				}
-			} else if hls.CanCopyWebMMedia(input.VideoCodec, input.AudioCodec) {
+			} else if !input.HDR && hls.CanCopyWebMMedia(input.VideoCodec, input.AudioCodec) {
 				reserve = service.ReserveWebMCopy
 			}
 		} else if request.Format == "mp4" {
 			// Prefer a seekable MP4 remux for H.264/AAC sources. If probing
 			// cannot prove the streams are copy-safe, keep the HLS fallback so
 			// HEVC/DTS and similar files still get a playable path.
-			if hls.CanCopyMediaWithDetails(input.VideoCodec, input.AudioCodec, input.VideoPixelFormat, input.VideoProfile, input.VideoBitDepth) {
+			if !input.HDR && hls.CanCopyMediaWithDetails(input.VideoCodec, input.AudioCodec, input.VideoPixelFormat, input.VideoProfile, input.VideoBitDepth) {
 				reserve = service.ReserveMP4Copy
 			}
 		} else if request.Format != "" && request.Format != "hls" {
@@ -272,6 +273,7 @@ func mediaHLSInputWithContext(ctx context.Context, d *data, owner *users.User, v
 		cancel()
 		if probeErr == nil {
 			input.VideoCodec = probe.VideoCodec
+			input.HDR = probe.VideoTransfer == "smpte2084"
 			input.AudioCodec = probe.AudioCodec
 			input.VideoPixelFormat = probe.VideoPixelFormat
 			input.VideoProfile = probe.VideoProfile
@@ -327,6 +329,9 @@ func mediaHLSQualityAllowed(quality string) bool {
 }
 
 func mediaHLSFormatForInput(input hls.Input) string {
+	if input.HDR {
+		return "hls"
+	}
 	if hls.CanCopyMediaWithDetails(input.VideoCodec, input.AudioCodec, input.VideoPixelFormat, input.VideoProfile, input.VideoBitDepth) {
 		return "copy"
 	}
@@ -376,6 +381,7 @@ func mediaHLSStatusResponse(baseURL string, status hls.Status) mediaHLSResponse 
 		Identity: status.Identity, Profile: status.Profile, State: status.State,
 		SubtitleStreamIndex: status.SubtitleStream,
 		AudioStreamIndex:    status.AudioStream,
+		HDRToneMapped:       status.HDR,
 		Error:               status.Error, UpdatedAt: status.UpdatedAt,
 		LastAccessAt: status.LastAccessAt, SizeBytes: status.SizeBytes,
 		ProcessedSeconds: status.ProcessedSeconds,

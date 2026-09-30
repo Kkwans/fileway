@@ -23,6 +23,7 @@ func TestMediaInfoRequiresExplicitLocationRequest(t *testing.T) {
 		return mediaProbeResult{
 			Format: "mov,mp4", Duration: 12.5, BitRate: 1200,
 			VideoCodec: "h264", AudioCodec: "aac", Width: 1920, Height: 1080,
+			VideoTransfer:  "smpte2084",
 			SubtitleTracks: []mediaTrack{{Index: 5, Codec: "hdmv_pgs_subtitle", Title: "中文字幕"}},
 			Location:       "+31.2304+121.4737/",
 		}, nil
@@ -37,6 +38,9 @@ func TestMediaInfoRequiresExplicitLocationRequest(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), `"subtitleTracks":[{"index":5,"codec":"hdmv_pgs_subtitle","title":"中文字幕"}]`) {
 		t.Fatalf("missing embedded subtitle track: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"hdr":true`) {
+		t.Fatalf("HDR transfer not exposed: %s", response.Body.String())
 	}
 	response = h.request(t, owner.ID, mediaInfoHandler(probe), http.MethodGet, "/media/info?path=/film.mp4&includeLocation=true", nil, nil)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "+31.2304+121.4737/") {
@@ -72,7 +76,7 @@ func TestSummarizeFFprobeKeepsLocationOptIn(t *testing.T) {
 	}
 	document.Streams = append(document.Streams, ffprobeStream{
 		CodecType: "video", CodecName: "hevc", Width: 3840, Height: 2160,
-		PixelFormat: "yuv420p10le", Profile: "Main 10", BitsPerRawSample: "10",
+		PixelFormat: "yuv420p10le", ColorTransfer: "smpte2084", Profile: "Main 10", BitsPerRawSample: "10",
 	})
 
 	without := summarizeFFprobe(document, false)
@@ -85,6 +89,9 @@ func TestSummarizeFFprobeKeepsLocationOptIn(t *testing.T) {
 	}
 	if with.VideoPixelFormat != "yuv420p10le" || with.VideoProfile != "Main 10" || with.VideoBitDepth != 10 {
 		t.Fatalf("video compatibility details = %#v", with)
+	}
+	if with.VideoTransfer != "smpte2084" {
+		t.Fatalf("HDR transfer = %q", with.VideoTransfer)
 	}
 }
 

@@ -235,12 +235,40 @@ func TestAudioTrackSelectionUsesDistinctCacheAndFFmpegMap(t *testing.T) {
 	if selected.AudioStream == nil || *selected.AudioStream != audio {
 		t.Fatalf("selected audio = %#v", selected.AudioStream)
 	}
-	hlsArgs := strings.Join(ffmpegTrackArgs("/source.mkv", "/tmp/segment.ts", "/tmp/index.m3u8", 1920, 1080, &subtitle, &audio), "\x00")
-	webmArgs := strings.Join(webMTrackArgs("/source.mkv", "/tmp/index.webm", 1920, 1080, &subtitle, &audio), "\x00")
+	hlsArgs := strings.Join(ffmpegTrackArgs("/source.mkv", "/tmp/segment.ts", "/tmp/index.m3u8", 1920, 1080, &subtitle, &audio, false), "\x00")
+	webmArgs := strings.Join(webMTrackArgs("/source.mkv", "/tmp/index.webm", 1920, 1080, &subtitle, &audio, false), "\x00")
 	for _, args := range []string{hlsArgs, webmArgs} {
 		if !strings.Contains(args, "-map\x000:4") || !strings.Contains(args, "[0:v:0][0:6]overlay") {
 			t.Fatalf("selected tracks missing from FFmpeg args: %q", args)
 		}
+	}
+}
+
+func TestHDRToneMapUsesDistinctCacheAndSDRFilter(t *testing.T) {
+	service := newFakeService(t, 1, DefaultMaxBytes, 0)
+	input := Input{UserID: 1, Path: "/movie.mkv", Identity: "v1", SourcePath: "/source.mkv"}
+	start := func(job Job) (string, error) { return "task-" + job.ID, nil }
+	plain, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.HDR = true
+	hdr, _, err := service.ReserveWithProfile(input, DefaultProfile, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.ID == hdr.ID || !hdr.HDR {
+		t.Fatalf("HDR artifact reused SDR cache: plain=%#v hdr=%#v", plain, hdr)
+	}
+	args := strings.Join(ffmpegTrackArgs("/source.mkv", "/tmp/segment.ts", "/tmp/index.m3u8", 1920, 1080, nil, nil, true), "\x00")
+	for _, want := range []string{"zscale=t=linear", "tonemap=tonemap=hable", "zscale=p=bt709:t=bt709:m=bt709", "-color_trc\x00bt709"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("HDR filter missing %q: %q", want, args)
+		}
+	}
+	webmArgs := strings.Join(webMTrackArgs("/source.mkv", "/tmp/index.webm", 1920, 1080, nil, nil, true), "\x00")
+	if !strings.Contains(webmArgs, "tonemap=tonemap=hable") || !strings.Contains(webmArgs, "-color_trc\x00bt709") {
+		t.Fatalf("WebM HDR filter missing: %q", webmArgs)
 	}
 }
 

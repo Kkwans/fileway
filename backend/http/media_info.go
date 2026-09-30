@@ -27,6 +27,7 @@ type mediaInfoResponse struct {
 	Duration       float64                `json:"duration,omitempty"`
 	BitRate        int64                  `json:"bitRate,omitempty"`
 	VideoCodec     string                 `json:"videoCodec,omitempty"`
+	HDR            bool                   `json:"hdr,omitempty"`
 	AudioCodec     string                 `json:"audioCodec,omitempty"`
 	AudioTracks    []mediaTrack           `json:"audioTracks,omitempty"`
 	SubtitleTracks []mediaTrack           `json:"subtitleTracks,omitempty"`
@@ -54,6 +55,7 @@ type mediaProbeResult struct {
 	Duration         float64
 	BitRate          int64
 	VideoCodec       string
+	VideoTransfer    string
 	AudioCodec       string
 	AudioTracks      []mediaTrack
 	SubtitleTracks   []mediaTrack
@@ -121,6 +123,7 @@ func (response *mediaInfoResponse) applyProbe(probe mediaProbeResult, includeLoc
 	response.Duration = probe.Duration
 	response.BitRate = probe.BitRate
 	response.VideoCodec = probe.VideoCodec
+	response.HDR = probe.VideoTransfer == "smpte2084"
 	response.AudioCodec = probe.AudioCodec
 	response.AudioTracks = probe.AudioTracks
 	response.SubtitleTracks = probe.SubtitleTracks
@@ -143,6 +146,7 @@ type ffprobeStream struct {
 	CodecType        string            `json:"codec_type"`
 	CodecName        string            `json:"codec_name"`
 	PixelFormat      string            `json:"pix_fmt"`
+	ColorTransfer    string            `json:"color_transfer"`
 	Profile          string            `json:"profile"`
 	BitsPerRawSample string            `json:"bits_per_raw_sample"`
 	Width            int               `json:"width"`
@@ -171,10 +175,10 @@ func defaultMediaProbe(ctx context.Context, path string, includeLocation bool) (
 	if err != nil {
 		return mediaProbeResult{}, fmt.Errorf("FFprobe 不可用: %w", err)
 	}
-	entries := "format=format_name,duration,bit_rate:format_tags=title,artist,album,date:stream=index,codec_type,codec_name,pix_fmt,profile,bits_per_raw_sample,width,height,channels,sample_rate:stream_tags=language,title:stream_disposition=default,forced"
+	entries := "format=format_name,duration,bit_rate:format_tags=title,artist,album,date:stream=index,codec_type,codec_name,pix_fmt,color_transfer,profile,bits_per_raw_sample,width,height,channels,sample_rate:stream_tags=language,title:stream_disposition=default,forced"
 	if includeLocation {
 		// Location is deliberately requested only after an explicit user action.
-		entries = "format:stream=index,codec_type,codec_name,pix_fmt,profile,bits_per_raw_sample,width,height,channels,sample_rate:stream_tags=language,title:stream_disposition=default,forced"
+		entries = "format:stream=index,codec_type,codec_name,pix_fmt,color_transfer,profile,bits_per_raw_sample,width,height,channels,sample_rate:stream_tags=language,title:stream_disposition=default,forced"
 	}
 	command := exec.CommandContext(ctx, ffprobePath,
 		"-v", "error",
@@ -225,6 +229,7 @@ func summarizeFFprobe(document ffprobeDocument, includeLocation bool) mediaProbe
 		case "video":
 			if result.VideoCodec == "" {
 				result.VideoCodec = stream.CodecName
+				result.VideoTransfer = stream.ColorTransfer
 				result.VideoPixelFormat = stream.PixelFormat
 				result.VideoProfile = stream.Profile
 				result.VideoBitDepth, _ = strconv.Atoi(stream.BitsPerRawSample)

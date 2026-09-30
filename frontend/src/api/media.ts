@@ -51,6 +51,7 @@ export interface MediaInformation {
   duration?: number;
   bitRate?: number;
   videoCodec?: string;
+  hdr?: boolean;
   audioCodec?: string;
   audioTracks?: MediaTrack[];
   subtitleTracks?: MediaTrack[];
@@ -89,6 +90,7 @@ export interface HLSPlaybackStatus {
   profile: string;
   subtitleStreamIndex?: number;
   audioStreamIndex?: number;
+  hdrToneMapped?: boolean;
   state: HLSPlaybackState;
   error?: string;
   updatedAt: number;
