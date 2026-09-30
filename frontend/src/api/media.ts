@@ -104,6 +104,8 @@ export interface HLSPlaybackStatus {
 }
 
 export interface VideoSprite {
+  state?: "preparing" | "ready" | "failed";
+  error?: string;
   path: string;
   number: number;
   column: number;

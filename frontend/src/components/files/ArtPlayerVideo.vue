@@ -1571,8 +1571,24 @@ async function loadMediaInfo() {
 
 async function loadVideoSprite() {
   try {
-    const sprite = await mediaApi.getVideoSprite(props.path);
-    if (!art.value) return;
+    let sprite = await mediaApi.getVideoSprite(props.path);
+    const startedAt = Date.now();
+    while (
+      sprite.state === "preparing" &&
+      art.value &&
+      Date.now() - startedAt < 180000
+    ) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      if (!art.value) return;
+      sprite = await mediaApi.getVideoSprite(props.path);
+    }
+    if (
+      !art.value ||
+      sprite.state === "failed" ||
+      !sprite.url ||
+      !sprite.number
+    )
+      return;
     art.value.thumbnails = {
       url: sprite.url,
       number: sprite.number,

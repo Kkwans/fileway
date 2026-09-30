@@ -5,11 +5,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/jpeg"
 	"math"
 	"net/http"
 	"net/url"
 	"os/exec"
+	"strconv"
+	"time"
 
 	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
@@ -20,7 +26,7 @@ const (
 	spriteColumns   = 10
 	spriteMaxWidth  = 160
 	spriteMaxHeight = 90
-	spriteVersion   = "video-sprite-v2-contain"
+	spriteVersion   = "video-sprite-v3-seek-full-timeline"
 )
 
 type videoSpriteResponse struct {
@@ -31,6 +37,9 @@ type videoSpriteResponse struct {
 	Height   int     `json:"height"`
 	Interval float64 `json:"interval"`
 	URL      string  `json:"url"`
+	State    string  `json:"state,omitempty"`
+	Error    string  `json:"error,omitempty"`
+	HDR      bool    `json:"-"`
 }
 
 type videoSpriteService struct {
@@ -62,9 +71,8 @@ func spriteSampling(duration float64) (float64, int) {
 	if duration <= 0 {
 		return 10, spriteMaxTiles
 	}
-	interval := math.Max(1, math.Min(30, duration/spriteMaxTiles))
-	number := int(math.Ceil(duration / interval))
-	return interval, max(1, min(spriteMaxTiles, number))
+	number := max(1, min(spriteMaxTiles, int(math.Ceil(duration))))
+	return duration / float64(number), number
 }
 
 func videoSpriteKey(file *files.FileInfo, meta videoSpriteResponse) string {
@@ -78,19 +86,39 @@ func (service *videoSpriteService) loadOrCreate(ctx context.Context, file *files
 	if service.cache == nil {
 		return videoSpriteResponse{}, nil, fmt.Errorf("雪碧图缓存未配置")
 	}
-	probe, err := defaultMediaProbe(ctx, file.RealPath(), false)
+	meta, err := describeVideoSprite(ctx, file)
 	if err != nil {
 		return videoSpriteResponse{}, nil, err
+	}
+	return service.loadForMeta(ctx, file, meta)
+}
+
+func describeVideoSprite(ctx context.Context, file *files.FileInfo) (videoSpriteResponse, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	probe, err := defaultMediaProbe(probeCtx, file.RealPath(), false)
+	if err != nil {
+		return videoSpriteResponse{}, err
 	}
 	width, height := spriteTileGeometry(probe.Width, probe.Height)
 	interval, number := spriteSampling(probe.Duration)
 	columns := min(spriteColumns, number)
 	meta := videoSpriteResponse{Path: file.Path, Number: number, Column: columns, Width: width, Height: height, Interval: interval}
+	meta.HDR = probe.VideoTransfer == "smpte2084"
+	return meta, nil
+}
+
+func (service *videoSpriteService) loadForMeta(ctx context.Context, file *files.FileInfo, meta videoSpriteResponse) (videoSpriteResponse, []byte, error) {
+	if service.cache == nil {
+		return meta, nil, fmt.Errorf("雪碧图缓存未配置")
+	}
 	key := videoSpriteKey(file, meta)
 	if cached, ok, loadErr := loadPreviewCache(ctx, service.cache, key); loadErr == nil && ok && len(cached) > 0 {
 		return meta, cached, nil
 	}
-	data, err := service.coordinator.Do(ctx, key, func(workCtx context.Context) ([]byte, error) {
+	data, err := service.coordinator.DoKeepAlive(ctx, key, func(workCtx context.Context) ([]byte, error) {
+		workCtx, cancel := context.WithTimeout(workCtx, 3*time.Minute)
+		defer cancel()
 		if cached, ok, loadErr := loadPreviewCache(workCtx, service.cache, key); loadErr == nil && ok && len(cached) > 0 {
 			return cached, nil
 		}
@@ -115,20 +143,42 @@ func generateVideoSprite(ctx context.Context, source string, meta videoSpriteRes
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg 不可用: %w", err)
 	}
-	rows := int(math.Ceil(float64(meta.Number) / float64(meta.Column)))
-	filter := fmt.Sprintf("fps=1/%.6f,scale=%d:%d:flags=fast_bilinear,tile=%dx%d", meta.Interval, meta.Width, meta.Height, meta.Column, rows)
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-i", source, "-vf", filter,
-		"-frames:v", "1", "-q:v", "5", "-f", "image2", "-vcodec", "mjpeg", "pipe:1"}
-	command := exec.CommandContext(ctx, ffmpegPath, args...)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("雪碧图生成失败: %s", stderr.String())
+	rows := (meta.Number + meta.Column - 1) / meta.Column
+	sheet := image.NewRGBA(image.Rect(0, 0, meta.Column*meta.Width, rows*meta.Height))
+	for i := 0; i < meta.Number; i++ {
+		args := spriteFrameArgs(source, float64(i)*meta.Interval, meta.Width, meta.Height)
+		if meta.HDR {
+			for i, value := range args {
+				if value == "-vf" {
+					args[i+1] += ",format=yuv420p10le,zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p"
+				}
+			}
+		}
+		command := exec.CommandContext(ctx, ffmpegPath, args...)
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil {
+			return nil, fmt.Errorf("缩略图 %d 生成失败: %s", i+1, stderr.String())
+		}
+		frame, err := jpeg.Decode(&stdout)
+		if err != nil {
+			return nil, fmt.Errorf("缩略图 %d 无效: %w", i+1, err)
+		}
+		x, y := i%meta.Column*meta.Width, i/meta.Column*meta.Height
+		draw.Draw(sheet, image.Rect(x, y, x+meta.Width, y+meta.Height), frame, frame.Bounds().Min, draw.Src)
 	}
-	if stdout.Len() == 0 {
-		return nil, fmt.Errorf("雪碧图为空")
+	var output bytes.Buffer
+	if err := jpeg.Encode(&output, sheet, &jpeg.Options{Quality: 80}); err != nil {
+		return nil, err
 	}
-	return stdout.Bytes(), nil
+	return output.Bytes(), nil
+}
+
+func spriteFrameArgs(source string, timestamp float64, width, height int) []string {
+	return []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "2",
+		"-skip_frame", "nokey", "-noaccurate_seek", "-ss", strconv.FormatFloat(timestamp, 'f', 6, 64), "-i", source, "-map", "0:v:0", "-an", "-sn",
+		"-vf", fmt.Sprintf("scale=%d:%d:flags=fast_bilinear", width, height), "-filter_threads", "1",
+		"-frames:v", "1", "-threads", "1", "-q:v", "5", "-f", "image2", "-vcodec", "mjpeg", "pipe:1"}
 }
 
 func videoSpriteFile(r *http.Request, d *data) (*files.FileInfo, int, error) {
@@ -157,10 +207,23 @@ func (service *videoSpriteService) metaHandler() handleFunc {
 		if err != nil {
 			return status, err
 		}
-		meta, _, err := service.loadOrCreate(r.Context(), file)
+		meta, err := describeVideoSprite(r.Context(), file)
 		if err != nil {
 			return http.StatusInternalServerError, err
 		}
+		ctx, cancel := context.WithTimeout(r.Context(), 600*time.Millisecond)
+		defer cancel()
+		_, _, err = service.loadForMeta(ctx, file, meta)
+		if errors.Is(err, context.DeadlineExceeded) {
+			meta.State = "preparing"
+			return renderJSONStatus(w, meta, http.StatusAccepted)
+		}
+		if err != nil {
+			meta.State = "failed"
+			meta.Error = "预览缩略图暂时不可用，可稍后重试"
+			return renderJSON(w, r, meta)
+		}
+		meta.State = "ready"
 		meta.URL = fmt.Sprintf("%s/api/media/sprite.jpg?path=%s", d.server.BaseURL, url.QueryEscape(file.Path))
 		return renderJSON(w, r, meta)
 	})

@@ -1,6 +1,9 @@
 package fbhttp
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSpriteTileGeometryPreservesSourceAspectInsideBounds(t *testing.T) {
 	tests := []struct {
@@ -23,11 +26,22 @@ func TestSpriteTileGeometryPreservesSourceAspectInsideBounds(t *testing.T) {
 
 func TestSpriteSamplingIsBounded(t *testing.T) {
 	interval, number := spriteSampling(3600)
-	if interval != 30 || number != 100 {
+	if interval != 36 || number != 100 {
 		t.Fatalf("long sampling = %.2f/%d", interval, number)
 	}
 	interval, number = spriteSampling(12)
 	if interval != 1 || number != 12 {
 		t.Fatalf("short sampling = %.2f/%d", interval, number)
+	}
+}
+
+func TestSpriteSamplesFullMovieAndSeeksBeforeDecoding(t *testing.T) {
+	interval, number := spriteSampling(10800)
+	if interval != 108 || number != 100 {
+		t.Fatalf("%v %v", interval, number)
+	}
+	args := strings.Join(spriteFrameArgs("film.mkv", 10692, 160, 66), " ")
+	if !strings.Contains(args, "-ss 10692.000000 -i film.mkv") || !strings.Contains(args, "-frames:v 1") {
+		t.Fatal(args)
 	}
 }
