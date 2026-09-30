@@ -1,0 +1,29 @@
+# Optional RK3588 acceleration override; apply with docker-compose.custom.yml.
+# Keep the software runtime available for rollback. No privileged/host network.
+services:
+  filebrowser:
+    build:
+      dockerfile: Dockerfile.rk3588
+    environment:
+      FB_HLS_ACCELERATOR: rkmpp
+      FB_HLS_ENCODE_THREADS: "4"
+    devices:
+      - /dev/mpp_service:/dev/mpp_service
+      - /dev/rga:/dev/rga
+      - /dev/mali0:/dev/mali0
+      - /dev/dma_heap/system:/dev/dma_heap/system
+      - /dev/dma_heap/cma:/dev/dma_heap/cma
+      - /dev/dri/card0:/dev/dri/card0
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    security_opt:
+      # MPP needs the read-only device tree beneath Docker's masked firmware path.
+      - systempaths=unconfined
+    volumes:
+      - type: bind
+        source: /sys/firmware/devicetree/base
+        target: /sys/firmware/devicetree/base
+        read_only: true
+    # Override the runtime base's /cache VOLUME without an anonymous volume;
+    # existing preview/HLS cache volumes remain mounted beneath it.
+    tmpfs:
+      - /cache

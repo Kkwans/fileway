@@ -61,6 +61,7 @@ type Config struct {
 	FFmpegPath    string
 	Profile       string
 	EncodeThreads int
+	Accelerator   string
 }
 
 type Input struct {
@@ -116,6 +117,9 @@ type Job struct {
 	SubtitleStream        *int
 	AudioStream           *int
 	HDR                   bool
+	VideoWidth            int
+	VideoHeight           int
+	VideoCodec            string
 	report                func(Progress) error
 }
 
@@ -248,6 +252,7 @@ type Service struct {
 	ffmpegPath      string
 	profile         string
 	encodeThreads   int
+	accelerator     string
 	workers         chan struct{}
 	playbackWorkers chan struct{}
 
@@ -294,6 +299,9 @@ func New(config Config) (*Service, error) {
 	if config.EncodeThreads < 1 || config.EncodeThreads > 4 {
 		return nil, fmt.Errorf("video encode threads must be between 1 and 4")
 	}
+	if config.Accelerator != "" && config.Accelerator != "software" && config.Accelerator != "rkmpp" {
+		return nil, fmt.Errorf("video accelerator must be software or rkmpp")
+	}
 	if err := os.MkdirAll(config.CacheDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create HLS cache directory: %w", err)
 	}
@@ -301,6 +309,7 @@ func New(config Config) (*Service, error) {
 		cacheDir: config.CacheDir, maxBytes: config.MaxBytes,
 		ffmpegPath: config.FFmpegPath, profile: config.Profile,
 		encodeThreads: config.EncodeThreads,
+		accelerator:   config.Accelerator,
 		workers:       make(chan struct{}, config.Workers), entries: make(map[string]*entry),
 		playbackWorkers: make(chan struct{}, 1),
 	}
@@ -480,6 +489,9 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 	if input.HDR {
 		cacheIdentity += "\x00hdr10-sdr-v1"
 	}
+	if service.accelerator == "rkmpp" && !IsCopyProfile(profile) && !IsMP4CopyProfile(profile) && !IsWebMCopyProfile(profile) {
+		cacheIdentity += "\x00rkmpp-rga-opencl-cqp18-v1"
+	}
 	job := Job{
 		ID:     cacheKey(input.UserID, input.Path, cacheIdentity, profile),
 		UserID: input.UserID, Path: input.Path, Identity: input.Identity,
@@ -492,6 +504,7 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 		SubtitleStream:        input.SubtitleStream,
 		AudioStream:           input.AudioStream,
 		HDR:                   input.HDR,
+		VideoWidth:            input.VideoWidth, VideoHeight: input.VideoHeight, VideoCodec: input.VideoCodec,
 	}
 	if input.WindowSeconds > 0 {
 		job.DurationSeconds = min(input.WindowSeconds, input.DurationSeconds-input.StartSeconds)

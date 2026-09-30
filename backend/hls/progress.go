@@ -24,6 +24,7 @@ type Progress struct {
 	UpdatedAt        int64   `json:"updatedAt"`
 	AdvancedAt       int64   `json:"advancedAt,omitempty"`
 	PlayableSeconds  float64 `json:"playableSeconds,omitempty"`
+	Method           string  `json:"method,omitempty"`
 }
 
 func (service *Service) RunWithProgress(ctx context.Context, job Job, report func(Progress) error) error {
@@ -66,6 +67,8 @@ func (service *Service) publishProgress(job Job, p Progress) error {
 // drained before Wait closes the pipe, including for very fast remux jobs.
 func (service *Service) startProgress(command *exec.Cmd, job Job) (<-chan error, error) {
 	command.Args = softwareThreadArgs(command.Args, service.encodeThreads)
+	var method string
+	command.Args, method = acceleratorArgs(command.Args, job, service.accelerator)
 	command.Args = playbackWindowArgs(command.Args, job)
 	if !containsProgressArg(command.Args) {
 		command.Args = append([]string{command.Args[0], "-progress", "pipe:1", "-stats_period", "1"}, command.Args[1:]...)
@@ -79,7 +82,7 @@ func (service *Service) startProgress(command *exec.Cmd, job Job) (<-chan error,
 	}
 	done := make(chan error, 1)
 	go func() {
-		err := readProgress(stdout, job.DurationSeconds, func(p Progress) error { return service.publishProgress(job, p) })
+		err := readProgress(stdout, job.DurationSeconds, func(p Progress) error { p.Method = method; return service.publishProgress(job, p) })
 		if err != nil {
 			_ = command.Process.Kill()
 		}

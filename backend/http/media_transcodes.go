@@ -226,7 +226,7 @@ func enqueueMediaTranscode(runtime *tasks.Runtime, d *data, owner *users.User, s
 			if input.DurationSeconds <= 0 || input.VideoWidth <= 0 || input.VideoHeight <= 0 {
 				return hls.Job{}, fmt.Errorf("无法确认视频尺寸与时长，请检查文件后重试")
 			}
-			return hls.Job{UserID: owner.ID, Path: input.Path, SourcePath: input.SourcePath, Profile: hls.MP4ExportProfile(input, args.Quality), DurationSeconds: input.DurationSeconds, HDR: input.HDR}, nil
+			return hls.Job{UserID: owner.ID, Path: input.Path, SourcePath: input.SourcePath, Profile: hls.MP4ExportProfile(input, args.Quality), DurationSeconds: input.DurationSeconds, HDR: input.HDR, VideoWidth: input.VideoWidth, VideoHeight: input.VideoHeight, VideoCodec: input.VideoCodec}, nil
 		}, temporary, task.ID, func(progress hls.Progress) error { return report(tasks.Progress{TotalItems: 1, Media: &progress}) })
 		if err != nil {
 			return nil, err

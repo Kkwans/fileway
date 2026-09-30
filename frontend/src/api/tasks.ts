@@ -31,6 +31,7 @@ export interface MediaProgress {
   updatedAt: number;
   advancedAt?: number;
   playableSeconds?: number;
+  method?: "remux" | "audio" | "software" | "hardware" | "hybrid";
 }
 
 export interface TaskItem {

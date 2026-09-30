@@ -469,6 +469,7 @@ test.describe("affected page browser gate", () => {
         updatedAt: Date.now(),
         advancedAt: Date.now(),
         playableSeconds: 1196,
+        method: "hardware",
       },
     };
     const counts = {
@@ -538,6 +539,9 @@ test.describe("affected page browser gate", () => {
     });
     expect(submissions[0]).not.toHaveProperty("destination");
     await expect(page.getByRole("link", { name: "边转边播" })).toBeVisible();
+    await expect(page.locator(".task-center-progress-summary")).toContainText(
+      "硬件转码"
+    );
     await expect(page.locator(".task-center-media-metrics")).toContainText(
       "0.50×"
     );

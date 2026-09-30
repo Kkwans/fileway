@@ -98,6 +98,7 @@ func init() {
 	flags.Uint64("hlsCacheMaxBytes", uint64(hls.DefaultMaxBytes), "HLS compatibility playback cache limit in bytes")
 	flags.Int("hlsProcessors", 1, "FFmpeg HLS compatibility playback processors count (1-2)")
 	flags.Int("hlsEncodeThreads", 4, "FFmpeg software decoding/encoding threads per job (1-4)")
+	flags.String("hlsAccelerator", "software", "video accelerator: software or rkmpp (requires Rockchip FFmpeg and devices)")
 	addServerFlags(flags)
 }
 
@@ -190,6 +191,7 @@ user created with the credentials from options "username" and "password".`,
 		hlsService, err := hls.New(hls.Config{
 			CacheDir: v.GetString("hlsCacheDir"), MaxBytes: int64(hlsMaxBytes), Workers: hlsWorkers,
 			EncodeThreads: v.GetInt("hlsEncodeThreads"),
+			Accelerator:   v.GetString("hlsAccelerator"),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to initialize HLS compatibility playback: %w", err)

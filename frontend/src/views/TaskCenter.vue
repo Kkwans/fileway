@@ -161,7 +161,12 @@
                 </p>
                 <div v-if="task.media" class="task-center-media-progress">
                   <div class="task-center-progress-summary">
-                    <span>{{ mediaPhaseLabel(task) }}</span>
+                    <span
+                      >{{ mediaPhaseLabel(task)
+                      }}<template v-if="task.media.method">
+                        · {{ mediaMethodLabel(task.media.method) }}</template
+                      ></span
+                    >
                     <span v-if="task.media.durationSeconds > 0">
                       <strong
                         >{{ taskProgressPercent(taskProgress(task)) }}%</strong
@@ -1319,6 +1324,16 @@ function mediaPhaseLabel(task: TaskItem) {
     encoding: "正在转码",
     finalizing: "整理成品",
   }[task.media!.phase];
+}
+function mediaMethodLabel(method: string) {
+  const labels: Record<string, string> = {
+    remux: "原画重新封装",
+    audio: "仅转换音轨",
+    software: "软件转码",
+    hardware: "硬件转码",
+    hybrid: "硬件解码 · 软件编码",
+  };
+  return labels[method] || method;
 }
 
 function taskProgressPercent(progress: TaskProgress) {
