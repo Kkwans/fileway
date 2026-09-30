@@ -51,6 +51,7 @@ export interface MediaInformation {
   duration?: number;
   bitRate?: number;
   videoCodec?: string;
+  videoBitDepth?: number;
   hdr?: boolean;
   audioCodec?: string;
   audioTracks?: MediaTrack[];

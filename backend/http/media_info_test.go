@@ -51,6 +51,19 @@ func TestMediaInfoRequiresExplicitLocationRequest(t *testing.T) {
 	}
 }
 
+func TestMediaInfoReportsBitDepthForBrowserCapabilityCheck(t *testing.T) {
+	for _, tc := range []struct {
+		pixel        string
+		probed, want int
+	}{{"yuv420p", 0, 8}, {"yuv420p10le", 0, 10}, {"yuv420p12le", 0, 12}, {"", 10, 10}, {"", 0, 0}} {
+		var response mediaInfoResponse
+		response.applyProbe(mediaProbeResult{VideoPixelFormat: tc.pixel, VideoBitDepth: tc.probed}, false)
+		if response.VideoBitDepth != tc.want {
+			t.Fatalf("%+v: %+v", tc, response)
+		}
+	}
+}
+
 func TestMediaInfoKeepsBaseFieldsWhenProbeFails(t *testing.T) {
 	h := newTrashHTTPHarness(t, users.User{Username: "owner", Perm: users.Permissions{Download: true}})
 	owner := firstTrashHTTPUser(h)

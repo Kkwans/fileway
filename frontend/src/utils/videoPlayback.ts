@@ -31,9 +31,6 @@ const VIDEO_MIME_TYPES: Record<string, string> = {
 
 const VIDEO_CODEC_PREFLIGHT_EXTENSIONS = new Set(["mp4", "m4v"]);
 const DEFINITELY_UNSUPPORTED_BROWSER_CODECS = new Set([
-  "hevc",
-  "h265",
-  "x265",
   "mpeg2video",
   "mpeg2",
   "mpeg1video",
@@ -125,7 +122,8 @@ const NATIVE_WEBM_AUDIO_CODECS = new Set(["opus", "vorbis"]);
 export function getNativeContainerPlayback(
   path: string,
   videoCodec?: string,
-  audioCodec?: string
+  audioCodec?: string,
+  bitDepth = 0
 ): NativeContainerPlayback {
   if (extensionOf(path) !== "mkv") return "unknown";
 
@@ -143,18 +141,47 @@ export function getNativeContainerPlayback(
     return /maybe|probably/i.test(support) ? "supported" : "unsupported";
   }
 
-  // H.264 is only safe to attach when the active browser advertises a
-  // proprietary decoder.  The current NAS Chromium does not, so it is
-  // rejected before any large Range request is made.
-  if (video === "h264") {
-    return supportsH264CompatibilityPlayback() ? "unknown" : "unsupported";
+  // Query the actual container AND codecs. Matroska itself is not a reason
+  // to encode a video when this browser advertises the required decoders.
+  if (video === "h264" || isHevcCodec(video)) {
+    if (video === "h264" && bitDepth > 8) return "unsupported";
+    if (audio && !["aac", "mp3"].includes(audio)) return "unsupported";
+    if (typeof document === "undefined") return "unknown";
+    const videoTags = isHevcCodec(video)
+      ? hevcCodecTags(bitDepth)
+      : ["avc1.640028"];
+    const audioTag =
+      audio === "aac" ? ",mp4a.40.2" : audio === "mp3" ? ",mp3" : "";
+    const probe = document.createElement("video");
+    return videoTags.some((tag) =>
+      /probably/i.test(
+        probe.canPlayType(`video/x-matroska; codecs="${tag}${audioTag}"`)
+      )
+    )
+      ? "supported"
+      : "unsupported";
   }
   if (isDefinitelyUnsupportedVideoCodec(video)) return "unsupported";
   return "unknown";
 }
 
+function hevcCodecTags(bitDepth: number) {
+  if (bitDepth > 10) return [];
+  if (bitDepth > 8) return ["hvc1.2.4.L153.B0"];
+  return bitDepth === 8
+    ? ["hvc1.1.6.L153.B0"]
+    : ["hvc1.1.6.L153.B0", "hvc1.2.4.L153.B0"];
+}
+
 export function isDefinitelyUnsupportedVideoCodec(codec?: string) {
   const normalized = normalizeCodec(codec);
+  if (isHevcCodec(normalized)) {
+    if (typeof document === "undefined") return true;
+    const probe = document.createElement("video");
+    return !hevcCodecTags(0).some((tag) =>
+      /probably/i.test(probe.canPlayType(`video/mp4; codecs="${tag}"`))
+    );
+  }
   return (
     normalized.length > 0 &&
     DEFINITELY_UNSUPPORTED_BROWSER_CODECS.has(normalized)
@@ -195,7 +222,7 @@ export function getDirectVideoFailureCopy(
       icon: "movie_filter",
       title: "当前浏览器无法解码 H.265 / HEVC",
       description:
-        "Chrome/Edge 桌面版通常不支持 HEVC 硬解，可能出现黑屏、极慢或只有声音。可一键「兼容播放」（服务端转 H.264/WebM），或下载后用本地播放器打开。手机浏览器有时能播 HEVC，故手机端可能正常。",
+        "此视频的编码组合无法在当前浏览器中正常播放。HEVC 支持取决于浏览器、系统和设备解码能力；可切换兼容播放，或下载后用本地播放器打开。",
     };
   }
   switch (failure) {

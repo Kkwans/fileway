@@ -14,6 +14,45 @@ import {
 } from "../videoPlayback";
 
 describe("视频播放源策略", () => {
+  it("按实际容器和编码能力允许 MKV 原生播放，并拒绝不匹配的音轨或位深", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const queries: string[] = [];
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        createElement: () => ({
+          canPlayType: (mime: string) => {
+            queries.push(mime);
+            return mime.includes("codecs=") ? "probably" : "maybe";
+          },
+        }),
+      },
+    });
+    try {
+      expect(getNativeContainerPlayback("/film.mkv", "h264", "aac", 8)).toBe(
+        "supported"
+      );
+      expect(getNativeContainerPlayback("/film.mkv", "h264", "aac", 10)).toBe(
+        "unsupported"
+      );
+      expect(getNativeContainerPlayback("/film.mkv", "hevc", "aac", 10)).toBe(
+        "supported"
+      );
+      expect(
+        getNativeContainerPlayback("/film.mkv", "hevc", "truehd", 10)
+      ).toBe("unsupported");
+      expect(getNativeContainerPlayback("/film.mkv", "hevc", "aac", 12)).toBe(
+        "unsupported"
+      );
+      expect(
+        queries.some((query) => query.includes("hvc1.2.4.L153.B0,mp4a.40.2"))
+      ).toBe(true);
+      expect(isDefinitelyUnsupportedVideoCodec("hevc")).toBe(false);
+    } finally {
+      if (original) Object.defineProperty(globalThis, "document", original);
+      else Reflect.deleteProperty(globalThis, "document");
+    }
+  });
   it("区分网络、解码与格式错误，网络失败不冒充格式不支持", () => {
     expect(getDirectVideoFailure(2)).toBe("network");
     expect(getDirectVideoFailure(3)).toBe("decode");

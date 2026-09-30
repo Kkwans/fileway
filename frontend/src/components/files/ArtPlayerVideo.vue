@@ -243,6 +243,7 @@ const playbackSession = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let activeCompatCacheID = "";
 let pendingSeek: number | null = null;
 const sourceVideoCodec = ref("");
+const sourceVideoBitDepth = ref(0);
 const sourceAudioCodec = ref("");
 const embeddedSubtitleTracks = ref<MediaTrack[]>([]);
 const embeddedSubtitleIndex = ref<number | null>(null);
@@ -623,13 +624,14 @@ function browserSupportsContainer(path: string): boolean | null {
     getNativeContainerPlayback(
       path,
       sourceVideoCodec.value,
-      sourceAudioCodec.value
+      sourceAudioCodec.value,
+      sourceVideoBitDepth.value
     ) === "supported"
   )
     return true;
   const ext = pathExt(path);
   if (!ext) return null;
-  // Browsers cannot play Matroska/FLV/RM containers even when the codec is OK.
+  // Unsupported or unconfirmed track/container combinations use compatibility.
   if (
     ["mkv", "mk3d", "mka", "flv", "f4v", "rm", "rmvb", "wmv", "avi"].includes(
       ext
@@ -1738,6 +1740,7 @@ async function loadMediaInfo() {
   try {
     const info = await mediaApi.getMediaInformation(props.path, false);
     sourceVideoCodec.value = info.videoCodec || "";
+    sourceVideoBitDepth.value = info.videoBitDepth || 0;
     sourceAudioCodec.value = info.audioCodec || "";
     sourceDuration.value = info.duration || 0;
     if (info.resolution) {

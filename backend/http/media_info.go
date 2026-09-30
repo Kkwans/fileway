@@ -27,6 +27,7 @@ type mediaInfoResponse struct {
 	Duration       float64                `json:"duration,omitempty"`
 	BitRate        int64                  `json:"bitRate,omitempty"`
 	VideoCodec     string                 `json:"videoCodec,omitempty"`
+	VideoBitDepth  int                    `json:"videoBitDepth,omitempty"`
 	HDR            bool                   `json:"hdr,omitempty"`
 	AudioCodec     string                 `json:"audioCodec,omitempty"`
 	AudioTracks    []mediaTrack           `json:"audioTracks,omitempty"`
@@ -123,6 +124,17 @@ func (response *mediaInfoResponse) applyProbe(probe mediaProbeResult, includeLoc
 	response.Duration = probe.Duration
 	response.BitRate = probe.BitRate
 	response.VideoCodec = probe.VideoCodec
+	response.VideoBitDepth = probe.VideoBitDepth
+	if response.VideoBitDepth == 0 {
+		switch {
+		case strings.Contains(probe.VideoPixelFormat, "12"):
+			response.VideoBitDepth = 12
+		case strings.Contains(probe.VideoPixelFormat, "10"):
+			response.VideoBitDepth = 10
+		case probe.VideoPixelFormat != "":
+			response.VideoBitDepth = 8
+		}
+	}
 	response.HDR = probe.VideoTransfer == "smpte2084"
 	response.AudioCodec = probe.AudioCodec
 	response.AudioTracks = probe.AudioTracks
