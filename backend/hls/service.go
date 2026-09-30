@@ -25,6 +25,8 @@ const (
 	DefaultProfile         = "h264-main-720p-aac-hls4-v1"
 	DefaultCopyProfile     = "h264-copy-hls-v1"
 	DefaultMP4CopyProfile  = "h264-aac-mp4-copy-v1"
+	DefaultAudioHLSProfile = "h264-copy-aac-hls-v1"
+	DefaultMP4AudioProfile = "h264-copy-aac-mp4-v1"
 	DefaultWebMProfile     = "vp9-720p-opus-webm-v1"
 	transcodeScaleVersion  = "bounded-width-height-v2"
 	DefaultWebMCopyProfile = "vp9-opus-webm-copy-v1"
@@ -126,13 +128,31 @@ func IsWebMCopyProfile(profile string) bool {
 // Chromium can consume.  It avoids a full video encode for MKV/MOV files that
 // already contain H.264 video and AAC (or no) audio.
 func IsCopyProfile(profile string) bool {
-	return profile == DefaultCopyProfile
+	return profile == DefaultCopyProfile || profile == DefaultAudioHLSProfile
 }
 
 // IsMP4CopyProfile reports a complete MP4 artifact containing the original
 // browser-compatible H.264/AAC streams. The source is remuxed, never encoded.
 func IsMP4CopyProfile(profile string) bool {
-	return profile == DefaultMP4CopyProfile
+	return profile == DefaultMP4CopyProfile || profile == DefaultMP4AudioProfile
+}
+
+func CanCopyVideo(input Input) bool {
+	return CanCopyMediaWithDetails(input.VideoCodec, "", input.VideoPixelFormat, input.VideoProfile, input.VideoBitDepth)
+}
+
+// QualityPreservesSource allows explicit quality choices to use stream copy
+// when they would not resize the source. Unknown dimensions stay conservative.
+func QualityPreservesSource(quality string, width, height int) bool {
+	if quality == "" || quality == "source" {
+		return true
+	}
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	limits := map[string][2]int{"4k": {3840, 2160}, "2k": {2560, 1440}, "1080p": {1920, 1080}, "720p": {1280, 720}, "480p": {854, 480}}
+	limit, ok := limits[quality]
+	return ok && width <= limit[0] && height <= limit[1]
 }
 
 // CanCopyMedia is deliberately conservative: copying an unsupported audio
@@ -517,6 +537,7 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	}
 	if IsCopyProfile(job.Profile) {
 		args = copyFFmpegArgs(job.SourcePath, segmentPattern, playlist)
+		args = copyTrackArgs(args, job)
 	}
 	command := exec.CommandContext(ctx, service.ffmpegPath, args...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
@@ -703,7 +724,7 @@ func (service *Service) runWebMCopy(ctx context.Context, job Job, directory stri
 func (service *Service) runMP4Copy(ctx context.Context, job Job, directory string) error {
 	temporary := filepath.Join(directory, "index.mp4.tmp")
 	output := filepath.Join(directory, "index.mp4")
-	command := exec.CommandContext(ctx, service.ffmpegPath, mp4CopyArgs(job.SourcePath, temporary)...)
+	command := exec.CommandContext(ctx, service.ffmpegPath, copyTrackArgs(mp4CopyArgs(job.SourcePath, temporary), job)...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
 	if err := service.runProgress(command, job); err != nil {

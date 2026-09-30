@@ -106,7 +106,7 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 			input.SubtitleStream = request.SubtitleStreamIndex
 		}
 		if request.AudioStreamIndex != nil {
-			if request.Format == "mp4" || !validAudioStream(input.AudioStreams, *request.AudioStreamIndex) {
+			if !validAudioStream(input.AudioStreams, *request.AudioStreamIndex) {
 				return http.StatusBadRequest, fmt.Errorf("所选内挂音轨不可用于兼容播放")
 			}
 			input.AudioStream = request.AudioStreamIndex
@@ -154,6 +154,32 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 			profile := hls.ProfileForDimensions(quality, input.VideoWidth, input.VideoHeight)
 			if request.Format == "webm" {
 				profile = hls.WebMProfileForDimensions(quality, input.VideoWidth, input.VideoHeight)
+			}
+			reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {
+				return service.ReserveWithProfile(source, profile, start)
+			}
+		}
+		// Container/audio incompatibility does not require re-encoding a safe
+		// video stream. This also applies to a selected alternate audio track.
+		if request.Format != "webm" && input.SubtitleStream == nil && !input.HDR &&
+			hls.CanCopyVideo(input) && hls.QualityPreservesSource(request.Quality, input.VideoWidth, input.VideoHeight) {
+			audioCodec := input.AudioCodec
+			if input.AudioStream != nil {
+				for _, track := range input.AudioStreams {
+					if track.Index == *input.AudioStream {
+						audioCodec = track.Codec
+					}
+				}
+			}
+			profile := hls.DefaultCopyProfile
+			if request.Format == "mp4" {
+				profile = hls.DefaultMP4CopyProfile
+			}
+			if audioCodec != "" && audioCodec != "aac" {
+				profile = hls.DefaultAudioHLSProfile
+				if request.Format == "mp4" {
+					profile = hls.DefaultMP4AudioProfile
+				}
 			}
 			reserve = func(source hls.Input, start hls.StartFunc) (hls.Status, bool, error) {
 				return service.ReserveWithProfile(source, profile, start)

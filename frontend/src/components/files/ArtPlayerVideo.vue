@@ -166,7 +166,10 @@ import { encodeResourceRoute } from "@/utils/url";
 import { useAuthStore } from "@/stores/auth";
 import { useAccountPreferencesStore } from "@/stores/accountPreferences";
 import { resolveControlsTimeoutMs } from "@/utils/playerControls";
-import { supportsH264CompatibilityPlayback } from "@/utils/videoPlayback";
+import {
+  getNativeContainerPlayback,
+  supportsH264CompatibilityPlayback,
+} from "@/utils/videoPlayback";
 import type { MediaTrack } from "@/api/media";
 import {
   videoClassHeight,
@@ -208,6 +211,8 @@ const rateDialogVisible = ref(false);
 const rateInput = ref<HTMLInputElement | null>(null);
 const sourceWidth = ref(0);
 const sourceHeight = ref(0);
+const sourceVideoCodec = ref("");
+const sourceAudioCodec = ref("");
 const embeddedSubtitleTracks = ref<MediaTrack[]>([]);
 const embeddedSubtitleIndex = ref<number | null>(null);
 const embeddedAudioTracks = ref<MediaTrack[]>([]);
@@ -427,6 +432,8 @@ function preferredCompatQuality(): Exclude<Quality, "native"> {
   ) {
     return transcodeQuality.value;
   }
+  if (sourceVideoCodec.value === "h264" && supportsH264CompatibilityPlayback())
+    return "source";
   const h = sourceHeight.value || 0;
   // Auto-compat defaults cap at 1080p to avoid surprise 4K ffmpeg cost.
   if (h >= 1300) return "1080p";
@@ -581,6 +588,14 @@ function formatClock(sec: number) {
 
 /** Container support — Matroska/legacy containers are not browser-native. */
 function browserSupportsContainer(path: string): boolean | null {
+  if (
+    getNativeContainerPlayback(
+      path,
+      sourceVideoCodec.value,
+      sourceAudioCodec.value
+    ) === "supported"
+  )
+    return true;
   const ext = pathExt(path);
   if (!ext) return null;
   // Browsers cannot play Matroska/FLV/RM containers even when the codec is OK.
@@ -1534,6 +1549,8 @@ function startCompatProgressPolling(id: string) {
 async function loadMediaInfo() {
   try {
     const info = await mediaApi.getMediaInformation(props.path, false);
+    sourceVideoCodec.value = info.videoCodec || "";
+    sourceAudioCodec.value = info.audioCodec || "";
     if (info.resolution) {
       sourceWidth.value = info.resolution.width || 0;
       sourceHeight.value = info.resolution.height || 0;
