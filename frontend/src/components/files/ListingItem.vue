@@ -77,6 +77,13 @@
         :name="name"
         :can-rename="Boolean(authStore.user?.perm.rename)"
         :can-download="Boolean(authStore.user?.perm.download)"
+        :can-transcode="
+          Boolean(
+            authStore.user?.perm.download &&
+            authStore.user?.perm.create &&
+            (isDir || type === 'video')
+          )
+        "
         :can-delete="Boolean(authStore.user?.perm.delete)"
         trigger-class="item-icon-button"
         @select="runFileAction"
@@ -205,6 +212,21 @@
         >
           <AppIcon name="trash" :size="19" />
           <span>删除</span>
+        </button>
+        <button
+          v-if="
+            authStore.user?.perm.download &&
+            authStore.user?.perm.create &&
+            (isDir || type === 'video')
+          "
+          type="button"
+          role="menuitem"
+          @click="
+            closeMobileActionSheet();
+            runFileAction('transcode');
+          "
+        >
+          <AppIcon name="film" :size="19" /><span>后台转码</span>
         </button>
         <button
           class="cancel"
@@ -412,6 +434,17 @@ const runMobileAction = (action: string) => {
 };
 
 const runFileAction = (action: FileActionMenuAction) => {
+  if (action === "transcode") {
+    layoutStore.showHover({
+      prompt: "transcode",
+      props: {
+        paths: [props.url],
+        initialDestination:
+          props.url.slice(0, props.url.lastIndexOf("/")) || "/files/",
+      },
+    });
+    return;
+  }
   if (action === "download") {
     downloadItem();
     return;

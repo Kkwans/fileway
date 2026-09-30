@@ -3,6 +3,7 @@ export type FileActionMenuAction =
   | "rename"
   | "move"
   | "download"
+  | "transcode"
   | "delete";
 
 type Rectangle = Pick<DOMRect, "top" | "right" | "bottom">;

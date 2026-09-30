@@ -9,6 +9,14 @@
     </div>
     <div class="compat-timeline__range">
       <span
+        v-if="transcodedEnd"
+        class="compat-timeline__available"
+        :style="{
+          left: '0%',
+          width: `${(100 * Math.min(duration, transcodedEnd)) / duration}%`,
+        }"
+      ></span>
+      <span
         class="compat-timeline__available"
         :style="{
           left: `${(100 * availableStart) / duration}%`,
@@ -60,6 +68,7 @@ const props = defineProps<{
   availableEnd: number;
   busy: boolean;
   sprite?: VideoSprite;
+  transcodedEnd?: number;
 }>();
 const emit = defineEmits<{ seek: [seconds: number] }>();
 const dragging = ref(false);

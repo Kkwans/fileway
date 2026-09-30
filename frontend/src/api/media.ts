@@ -83,6 +83,8 @@ export type HLSPlaybackState =
   | "canceled";
 
 export interface HLSPlaybackStatus {
+  quality?: string;
+  progress?: import("./tasks").MediaProgress;
   sourceDurationSeconds?: number;
   startSeconds?: number;
   windowSeconds?: number;
@@ -237,6 +239,28 @@ export function getMediaInformation(
 export function getVideoSprite(path: string): Promise<VideoSprite> {
   return fetchJSON<VideoSprite>(
     `/api/media/sprite?path=${encodeURIComponent(path)}`
+  );
+}
+
+export async function startTranscodes(
+  paths: string[],
+  quality: string,
+  destination: string
+) {
+  const response = await fetchURL("/api/media/transcodes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths, quality, destination }),
+  });
+  return response.json() as Promise<{
+    items: import("./tasks").TaskItem[];
+    failures: Array<{ path: string; error: string }>;
+  }>;
+}
+
+export function getTranscodePlayback(id: string): Promise<HLSPlaybackStatus> {
+  return fetchJSON<HLSPlaybackStatus>(
+    `/api/media/transcodes/${encodeURIComponent(id)}/playback`
   );
 }
 

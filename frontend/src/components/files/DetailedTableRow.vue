@@ -111,6 +111,13 @@
         :name="name"
         :can-rename="Boolean(authStore.user?.perm.rename)"
         :can-download="Boolean(authStore.user?.perm.download)"
+        :can-transcode="
+          Boolean(
+            authStore.user?.perm.download &&
+            authStore.user?.perm.create &&
+            (isDir || type === 'video')
+          )
+        "
         :can-delete="Boolean(authStore.user?.perm.delete)"
         @select="runFileAction"
       />
@@ -404,6 +411,17 @@ const downloadItem = () => {
   }
 };
 const runFileAction = (action: FileActionMenuAction) => {
+  if (action === "transcode") {
+    layoutStore.showHover({
+      prompt: "transcode",
+      props: {
+        paths: [props.url],
+        initialDestination:
+          props.url.slice(0, props.url.lastIndexOf("/")) || "/files/",
+      },
+    });
+    return;
+  }
   if (action === "download") {
     downloadItem();
     return;

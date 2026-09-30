@@ -99,6 +99,15 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		ownerData := *d
 		ownerData.user = owner
 		retry, err = enqueueTrashSizeTask(runtime, &ownerData, args.ID, original.ID)
+	} else if original.Type == tasks.TypeMediaTranscode {
+		if len(hlsServices) == 0 || hlsServices[0] == nil {
+			return nil, http.StatusConflict, fmt.Errorf("视频转码服务不可用")
+		}
+		var args mediaTranscodeArgs
+		if err := json.Unmarshal(original.Args, &args); err != nil {
+			return nil, http.StatusConflict, err
+		}
+		retry, err = enqueueMediaTranscode(runtime, d, owner, hlsServices[0], args, original.ID)
 	} else if original.Type == tasks.TypeMediaHLS {
 		if len(hlsServices) == 0 || hlsServices[0] == nil {
 			return nil, http.StatusConflict, fmt.Errorf("兼容播放服务不可用")
@@ -360,6 +369,8 @@ func canRunTaskType(user *users.User, taskType tasks.Type) bool {
 		return user.Perm.Download && user.Perm.Create
 	case tasks.TypeMediaHLS:
 		return user.Perm.Download
+	case tasks.TypeMediaTranscode:
+		return user.Perm.Download && user.Perm.Create
 	case tasks.TypeFileCopy:
 		return user.Perm.Create
 	case tasks.TypeFileMove:

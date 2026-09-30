@@ -142,12 +142,22 @@
         <AudioPreview v-else-if="fileStore.req?.type == 'audio'" :name="name" />
         <ArtPlayerVideo
           v-if="useArtPlayer && fileStore.req?.type == 'video'"
-          :key="'art-' + fileStore.req.path"
+          :key="
+            'art-' +
+            fileStore.req.path +
+            '-' +
+            String(route.query.transcode || '')
+          "
           :path="fileStore.req.path"
           :source="previewUrl"
           :poster="videoPosterUrl"
           :download-source="downloadUrl"
           :subtitles="subtitleItems"
+          :transcode-task-id="
+            typeof route.query.transcode === 'string'
+              ? route.query.transcode
+              : undefined
+          "
         />
         <VideoPlayer
           v-else-if="fileStore.req?.type == 'video'"

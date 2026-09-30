@@ -241,11 +241,12 @@ type entry struct {
 type StartFunc func(job Job) (taskID string, err error)
 
 type Service struct {
-	cacheDir   string
-	maxBytes   int64
-	ffmpegPath string
-	profile    string
-	workers    chan struct{}
+	cacheDir        string
+	maxBytes        int64
+	ffmpegPath      string
+	profile         string
+	workers         chan struct{}
+	playbackWorkers chan struct{}
 
 	mu      sync.Mutex
 	entries map[string]*entry
@@ -291,6 +292,7 @@ func New(config Config) (*Service, error) {
 		cacheDir: config.CacheDir, maxBytes: config.MaxBytes,
 		ffmpegPath: config.FFmpegPath, profile: config.Profile,
 		workers: make(chan struct{}, config.Workers), entries: make(map[string]*entry),
+		playbackWorkers: make(chan struct{}, 1),
 	}
 	if err := service.loadCompleted(); err != nil {
 		return nil, err
@@ -335,6 +337,9 @@ func ProfileForQuality(quality string, sourceHeight int) string {
 // ProfileForDimensions keeps cinema-width 4K sources at their source class
 // even when the cropped frame is shorter than 2160 pixels.
 func ProfileForDimensions(quality string, sourceWidth, sourceHeight int) string {
+	if quality == "source" && sourceWidth > 0 && sourceHeight > 0 {
+		return fmt.Sprintf("h264-main-source-%dx%d-aac-hls4-v1", sourceWidth, sourceHeight)
+	}
 	classHeight := sourceHeight
 	if widthHeight := (sourceWidth*9 + 8) / 16; widthHeight > classHeight {
 		classHeight = widthHeight
@@ -370,6 +375,9 @@ func encodeProfileForHeight(height int) string {
 }
 
 func profileMaxWidth(profile string) int {
+	if width, _ := sourceProfileDimensions(profile); width > 0 {
+		return width
+	}
 	switch {
 	case strings.Contains(profile, "2160p"):
 		return 3840
@@ -385,6 +393,9 @@ func profileMaxWidth(profile string) int {
 }
 
 func profileMaxHeight(profile string) int {
+	if _, height := sourceProfileDimensions(profile); height > 0 {
+		return height
+	}
 	switch {
 	case strings.Contains(profile, "2160p"):
 		return 2160
@@ -397,6 +408,21 @@ func profileMaxHeight(profile string) int {
 	default:
 		return 720
 	}
+}
+
+func sourceProfileDimensions(profile string) (int, int) {
+	_, rest, ok := strings.Cut(profile, "-source-")
+	if !ok {
+		return 0, 0
+	}
+	dimensions, _, _ := strings.Cut(rest, "-")
+	widthText, heightText, ok := strings.Cut(dimensions, "x")
+	if !ok {
+		return 0, 0
+	}
+	width, _ := strconv.Atoi(widthText)
+	height, _ := strconv.Atoi(heightText)
+	return width, height
 }
 
 // ReserveCopy creates an HLS playlist by copying already browser-compatible
@@ -510,9 +536,15 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	if err := service.reportPhase(job, "queued"); err != nil {
 		return err
 	}
+	workers := service.workers
+	// Short interactive windows have a reserved slot so a long background
+	// export cannot make seeking wait for an entire movie to finish.
+	if job.WindowSeconds > 0 && job.SessionID != "" {
+		workers = service.playbackWorkers
+	}
 	select {
-	case service.workers <- struct{}{}:
-		defer func() { <-service.workers }()
+	case workers <- struct{}{}:
+		defer func() { <-workers }()
 	case <-ctx.Done():
 		service.finish(job.ID, StateCanceled, "任务已取消", 0)
 		return ctx.Err()

@@ -48,6 +48,7 @@ type mediaHLSTaskArgs struct {
 }
 
 type mediaHLSResponse struct {
+	Quality               string        `json:"quality,omitempty"`
 	ID                    string        `json:"id"`
 	TaskID                string        `json:"taskId,omitempty"`
 	Path                  string        `json:"path"`

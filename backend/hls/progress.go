@@ -23,6 +23,7 @@ type Progress struct {
 	StartedAt        int64   `json:"startedAt,omitempty"`
 	UpdatedAt        int64   `json:"updatedAt"`
 	AdvancedAt       int64   `json:"advancedAt,omitempty"`
+	PlayableSeconds  float64 `json:"playableSeconds,omitempty"`
 }
 
 func (service *Service) RunWithProgress(ctx context.Context, job Job, report func(Progress) error) error {

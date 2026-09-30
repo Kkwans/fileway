@@ -347,7 +347,7 @@ func validateTaskFilter(filter taskFilterSnapshot) error {
 
 func validTaskType(taskType tasks.Type) bool {
 	switch taskType {
-	case tasks.TypeTrashSize, tasks.TypeTrashClear, tasks.TypeDuplicateAnalysis, tasks.TypeDuplicateCleanup, tasks.TypeStorageAnalysis, tasks.TypeArchiveExtract, tasks.TypeMediaHLS:
+	case tasks.TypeTrashSize, tasks.TypeTrashClear, tasks.TypeDuplicateAnalysis, tasks.TypeDuplicateCleanup, tasks.TypeStorageAnalysis, tasks.TypeArchiveExtract, tasks.TypeMediaHLS, tasks.TypeMediaTranscode:
 		return true
 	case tasks.TypeFileCopy, tasks.TypeFileMove:
 		return true

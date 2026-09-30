@@ -125,6 +125,9 @@
               v-for="task in tasksStore.items"
               :key="task.id"
               class="task-center-item"
+              :class="{
+                'task-center-item--media': task.type === 'media.transcode',
+              }"
             >
               <span class="task-center-item-icon" :class="`is-${task.status}`">
                 <app-icon :name="taskIcon(task.status)" :size="19" />
@@ -140,6 +143,13 @@
                 </div>
                 <p>
                   {{ taskTypeLabel(task.type) }}
+                </p>
+                <p
+                  v-if="task.outputPath"
+                  class="task-center-output-path"
+                  :title="task.outputPath"
+                >
+                  保存至 {{ task.outputPath }}
                 </p>
                 <div v-if="task.media" class="task-center-media-progress">
                   <div class="task-center-progress-summary">
@@ -274,6 +284,47 @@
                 taskDuration(task)
               }}</span>
               <div class="task-center-item-actions">
+                <router-link
+                  v-if="
+                    task.type === 'media.transcode' &&
+                    task.sourcePath &&
+                    (task.media?.playableSeconds || 0) > 0 &&
+                    ['running', 'completed'].includes(task.status)
+                  "
+                  class="task-center-play-link"
+                  :to="
+                    task.status === 'completed' && task.outputPath
+                      ? encodeResourceRoute(task.outputPath)
+                      : {
+                          path: encodeResourceRoute(task.sourcePath),
+                          query: { transcode: task.id },
+                        }
+                  "
+                >
+                  <AppIcon name="play" :size="16" />{{
+                    task.status === "completed" ? "播放成品" : "边转边播"
+                  }}
+                </router-link>
+                <button
+                  v-if="task.status === 'completed' && task.outputPath"
+                  type="button"
+                  @click="downloadOutput(task)"
+                >
+                  下载
+                </button>
+                <router-link
+                  v-if="task.status === 'completed' && task.outputPath"
+                  class="task-center-play-link"
+                  :to="
+                    encodeResourceRoute(
+                      task.outputPath.slice(
+                        0,
+                        task.outputPath.lastIndexOf('/')
+                      ) || '/'
+                    )
+                  "
+                  >所在目录</router-link
+                >
                 <button
                   v-if="isTaskActive(task)"
                   type="button"
@@ -617,6 +668,8 @@ import Action from "@/components/header/Action.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import type { AppIconName } from "@/components/ui/iconRegistry";
 import type { TaskItem, TaskStatus, TaskType } from "@/api/tasks";
+import { files } from "@/api";
+import { encodeResourceRoute } from "@/utils/url";
 import type {
   TransferItem,
   TransferKind,
@@ -1046,7 +1099,8 @@ function canRetry(task: TaskItem) {
     !task.archivedAt &&
     (task.status === "failed" ||
       task.status === "interrupted" ||
-      (task.status === "canceled" && task.type === "media.hls"))
+      (task.status === "canceled" &&
+        ["media.hls", "media.transcode"].includes(task.type)))
   );
 }
 
@@ -1114,6 +1168,7 @@ function taskTypeLabel(type: TaskType) {
       "analysis.storage": "空间分析",
       "archive.extract": "压缩包解压",
       "media.hls": "兼容播放",
+      "media.transcode": "视频转码 · MP4",
     } satisfies Record<TaskType, string>
   )[type];
 }
@@ -1199,7 +1254,15 @@ function transferEta(item: DisplayTransfer) {
 }
 
 function taskProgress(task: TaskItem): TaskProgress {
-  return getTaskProgress(task);
+  const progress = getTaskProgress(task);
+  return task.status === "completed" && progress.max
+    ? { ...progress, value: progress.max }
+    : progress;
+}
+
+function downloadOutput(task: TaskItem) {
+  if (task.outputPath)
+    files.download(null, encodeResourceRoute(task.outputPath));
 }
 
 function mediaEstimate(task: TaskItem) {

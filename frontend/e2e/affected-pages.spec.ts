@@ -432,6 +432,124 @@ async function geometry(page: Page) {
 }
 
 test.describe("affected page browser gate", () => {
+  test("submits directory transcodes at source quality and displays live task metrics across viewports", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(120000);
+    const unknownRequests: string[] = [];
+    const submissions: Array<Record<string, unknown>> = [];
+    await installFixtureApi(page, unknownRequests);
+    const task = {
+      id: "export-one",
+      userId: 1,
+      ownerName: "fixture",
+      type: "media.transcode",
+      title: "银翼杀手2049 · " + "原画与多音轨视频文件名".repeat(8),
+      status: "running",
+      createdAt: Date.now() - 60000,
+      startedAt: Date.now() - 60000,
+      totalItems: 1,
+      processedItems: 0,
+      totalBytes: 0,
+      processedBytes: 0,
+      sourcePath: "/fixture-video.mkv",
+      outputPath: "/视频输出/银翼杀手2049.source.mp4",
+      media: {
+        phase: "encoding",
+        durationSeconds: 9000,
+        processedSeconds: 1200,
+        speed: 0.5,
+        fps: 12,
+        startedAt: Date.now() - 60000,
+        updatedAt: Date.now(),
+        advancedAt: Date.now(),
+        playableSeconds: 1196,
+      },
+    };
+    const counts = {
+      all: 1,
+      active: 1,
+      attention: 0,
+      canceled: 0,
+      completed: 0,
+      archived: 0,
+    };
+    await page.route(/\/api\/tasks(?:\?|$)/, (route) => {
+      task.media.updatedAt = Date.now();
+      task.media.advancedAt = Date.now();
+      return json(route, {
+        items: [task],
+        total: 1,
+        counts,
+        categoryCounts: {
+          file: { ...counts, all: 0, active: 0 },
+          background: counts,
+        },
+        owners: ["fixture"],
+      });
+    });
+    await page.route(/\/api\/media\/transcodes(?:\?|$)/, async (route) => {
+      submissions.push(JSON.parse(route.request().postData() || "{}"));
+      await json(route, { items: [task], failures: [] }, 202);
+    });
+    await login(page);
+    await page.goto("/files/");
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    await page.getByRole("button", { name: "后台转码", exact: true }).click();
+    await expect(page.getByLabel("画质 / 分辨率")).toHaveValue("source");
+    for (const theme of themes) {
+      await setTheme(page, theme);
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth
+          )
+        ).toBe(true);
+        await page.screenshot({
+          path: testInfo.outputPath(
+            `transcode-dialog-${theme}-${viewport.name}.png`
+          ),
+        });
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("button", { name: "开始后台转码" }).click();
+    await expect(page).toHaveURL(/\/tasks\?tab=background/);
+    expect(submissions[0]).toMatchObject({
+      paths: ["/"],
+      quality: "source",
+      destination: "/",
+    });
+    await expect(page.getByRole("link", { name: "边转边播" })).toBeVisible();
+    await expect(page.locator(".task-center-media-metrics")).toContainText(
+      "0.50×"
+    );
+    await expect(page.locator(".task-center-media-metrics")).toContainText(
+      "预计总耗时"
+    );
+    await expect(page.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "1200"
+    );
+    for (const theme of themes) {
+      await setTheme(page, theme);
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth
+          )
+        ).toBe(true);
+        await page.screenshot({
+          path: testInfo.outputPath(
+            `transcode-task-${theme}-${viewport.name}.png`
+          ),
+        });
+      }
+    }
+  });
+
   test("compatibility timeline seeks to ungenerated media and keeps the full source duration", async ({
     page,
   }, testInfo) => {
@@ -467,7 +585,7 @@ test.describe("affected page browser gate", () => {
     await page.route(/\/api\/test-window\.webm/, (route) =>
       route.fulfill({
         contentType: "video/webm",
-          path: path.resolve(import.meta.dirname, "fixtures/timeline.webm"),
+        path: path.resolve(import.meta.dirname, "fixtures/timeline.webm"),
       })
     );
     await login(page);

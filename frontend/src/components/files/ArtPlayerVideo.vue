@@ -23,6 +23,7 @@
         :available-end="timelineAvailableEnd"
         :busy="busy"
         :sprite="timelineSprite"
+        :transcoded-end="backgroundPlayableEnd"
         @seek="seekTo"
       />
     </Teleport>
@@ -213,6 +214,7 @@ const props = defineProps<{
   poster?: string;
   downloadSource?: string;
   subtitles?: { url: string; lang?: string; name?: string }[];
+  transcodeTaskId?: string;
 }>();
 
 const authStore = useAuthStore();
@@ -233,6 +235,10 @@ const compatOffset = ref(0);
 const timelinePosition = ref(0);
 const timelineAvailableEnd = ref(0);
 const timelineSprite = ref<mediaApi.VideoSprite>();
+const backgroundPlayableEnd = ref(0);
+let backgroundPollTimer: number | undefined;
+let backgroundDetached = false;
+let backgroundQualityApplied = false;
 const playbackSession = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let activeCompatCacheID = "";
 let pendingSeek: number | null = null;
@@ -1785,6 +1791,74 @@ async function loadVideoSprite() {
   }
 }
 
+async function attachBackgroundTranscode() {
+  if (!props.transcodeTaskId || backgroundDetached || !art.value) return;
+  try {
+    const status = await mediaApi.getTranscodePlayback(props.transcodeTaskId);
+    if (backgroundDetached || !art.value) return;
+    if (!backgroundQualityApplied && status.quality) {
+      const q =
+        status.quality === "4k"
+          ? "2160p"
+          : status.quality === "2k"
+            ? "1440p"
+            : status.quality;
+      if (["source", "2160p", "1440p", "1080p", "720p", "480p"].includes(q))
+        transcodeQuality.value = q as Quality;
+      backgroundQualityApplied = true;
+      syncPlayerLabels();
+      refreshQualityPickers();
+    }
+    backgroundPlayableEnd.value = status.progress?.playableSeconds || 0;
+    if (status.sourceDurationSeconds)
+      sourceDuration.value = status.sourceDurationSeconds;
+    if (
+      !activeCompatCacheID &&
+      !hlsInstance &&
+      supportsH264CompatibilityPlayback() &&
+      status.playlistUrl
+    ) {
+      actualMode.value = "compat";
+      compatOffset.value = 0;
+      await attachHls(createURL(status.playlistUrl.replace(/^\/+/, ""), {}));
+      applyResume({
+        position: lastSavedPosition,
+        playing: true,
+        rate: currentRate.value,
+      });
+    }
+    if (status.state === "failed" || status.state === "canceled") {
+      detachHls();
+      art.value.video.pause();
+      notice(status.error || "后台转码已停止，可在任务中心重试");
+    }
+    if (
+      status.state === "completed" &&
+      status.sourceUrl &&
+      !activeCompatCacheID &&
+      supportsH264CompatibilityPlayback()
+    ) {
+      const resume = captureResume();
+      detachHls();
+      art.value.url = createURL(status.sourceUrl.replace(/^\/+/, ""), {});
+      applyResume(resume);
+      backgroundPlayableEnd.value = sourceDuration.value;
+      return;
+    }
+    if (!["failed", "canceled", "completed"].includes(status.state))
+      backgroundPollTimer = window.setTimeout(
+        () => void attachBackgroundTranscode(),
+        1500
+      );
+  } catch {
+    if (!backgroundDetached)
+      backgroundPollTimer = window.setTimeout(
+        () => void attachBackgroundTranscode(),
+        3000
+      );
+  }
+}
+
 function chooseMode(mode: ActualMode) {
   askVisible.value = false;
   void switchEngine(mode);
@@ -2564,7 +2638,8 @@ onMounted(async () => {
   // (metadata/buffered often empty until nearly the whole file is read).
   const containerOk = browserSupportsContainer(props.path);
   const ext = pathExt(props.path);
-  const forceCompatContainer = containerOk === false;
+  const forceCompatContainer =
+    containerOk === false || Boolean(props.transcodeTaskId);
   if (!askVisible.value && forceCompatContainer) {
     actualMode.value = "compat";
   }
@@ -2668,7 +2743,12 @@ onMounted(async () => {
         ? `.${ext} 使用兼容转码以显示加载进度`
         : "按账号策略使用兼容转码…"
     );
-    void switchEngine("compat", preferredCompatQuality(), true);
+    if (props.transcodeTaskId && supportsH264CompatibilityPlayback()) {
+      void attachBackgroundTranscode();
+    } else {
+      void switchEngine("compat", preferredCompatQuality(), true);
+      if (props.transcodeTaskId) void attachBackgroundTranscode();
+    }
   }
 
   art.value.on("ready", () => {
@@ -2887,6 +2967,8 @@ watch(isPortrait, () => {
 });
 
 onBeforeUnmount(() => {
+  backgroundDetached = true;
+  if (backgroundPollTimer) window.clearTimeout(backgroundPollTimer);
   if (activeCompatCacheID)
     void mediaApi.cancelHLSPlayback(activeCompatCacheID).catch(() => {});
   ++switchToken;

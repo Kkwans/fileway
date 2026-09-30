@@ -32,6 +32,7 @@ const (
 	TypeStorageAnalysis      Type = "analysis.storage"
 	TypeArchiveExtract       Type = "archive.extract"
 	TypeMediaHLS             Type = "media.hls"
+	TypeMediaTranscode       Type = "media.transcode"
 )
 
 type Status string
@@ -66,6 +67,8 @@ type Task struct {
 	Error          string          `json:"error,omitempty"`
 	RetryOf        string          `json:"retryOf,omitempty"`
 	Media          *hls.Progress   `json:"media,omitempty"`
+	SourcePath     string          `json:"sourcePath,omitempty"`
+	OutputPath     string          `json:"outputPath,omitempty"`
 	Args           json.RawMessage `json:"-"`
 	Result         json.RawMessage `json:"-"`
 }
@@ -98,7 +101,7 @@ func (task *Task) CanRetry() bool {
 	if task.Status == StatusFailed || task.Status == StatusInterrupted {
 		return true
 	}
-	return task.Status == StatusCanceled && (task.Type == TypeFileCopy || task.Type == TypeFileMove || task.Type == TypeDuplicateCleanup || task.Type == TypeMediaHLS)
+	return task.Status == StatusCanceled && (task.Type == TypeFileCopy || task.Type == TypeFileMove || task.Type == TypeDuplicateCleanup || task.Type == TypeMediaHLS || task.Type == TypeMediaTranscode)
 }
 
 func (task *Task) CanArchive() bool {

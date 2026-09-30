@@ -355,6 +355,13 @@
           label="上传"
           @action="uploadFunc"
         />
+        <action
+          v-if="headerButtons.transcode"
+          app-icon="film"
+          label="后台转码"
+          :counter="fileStore.selectedCount"
+          @action="transcode"
+        />
         <action app-icon="info" label="详细信息" show="info" />
         <action
           app-icon="select"
@@ -905,6 +912,15 @@
             @click="runContextAnalysis"
           />
           <MenuItemButton
+            v-if="headerButtons.transcode"
+            icon="film"
+            label="后台转码"
+            @click="
+              hideContextMenu();
+              transcode();
+            "
+          />
+          <MenuItemButton
             icon="info"
             label="详细信息"
             @click="showContextPrompt('info')"
@@ -997,6 +1013,13 @@
               >
                 <AppIcon name="chart-storage" :size="19" />
                 <span>分析</span>
+              </button>
+              <button
+                v-if="headerButtons.transcode"
+                class="selection-btn action-btn"
+                @click="transcode"
+              >
+                <AppIcon name="film" :size="19" /><span>后台转码</span>
               </button>
               <button
                 v-if="headerButtons.delete"
@@ -1438,6 +1461,13 @@ const headerButtons = computed(() => {
     // sends, otherwise real users silently lose the upload action.
     upload: authStore.user?.perm.create,
     download: authStore.user?.perm.download,
+    transcode:
+      authStore.user?.perm.download &&
+      authStore.user?.perm.create &&
+      (fileStore.selectedCount === 0 ||
+        fileStore.selectedItems.some(
+          (item) => item.isDir || item.type === "video"
+        )),
     shell: authStore.user?.perm.execute && enableExec,
     delete: fileStore.selectedCount > 0 && authStore.user?.perm.delete,
     rename: fileStore.selectedCount > 0 && authStore.user?.perm.rename,
@@ -2091,6 +2121,19 @@ const resizeListing = throttle((entries: ResizeObserverEntry[]) => {
   // Fill but not fit the window
   fillWindow();
 }, 100);
+
+const transcode = () => {
+  if (!fileStore.req) return;
+  layoutStore.showHover({
+    prompt: "transcode",
+    props: {
+      paths: fileStore.selectedCount
+        ? fileStore.selectedItems.map((item) => item.url)
+        : [route.path],
+      initialDestination: route.path,
+    },
+  });
+};
 
 const download = () => {
   if (fileStore.req === null) return;

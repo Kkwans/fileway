@@ -73,12 +73,14 @@ const props = withDefaults(
     name: string;
     canRename?: boolean;
     canDownload?: boolean;
+    canTranscode?: boolean;
     canDelete?: boolean;
     triggerClass?: string;
   }>(),
   {
     canRename: false,
     canDownload: false,
+    canTranscode: false,
     canDelete: false,
     triggerClass: "detail-action-button",
   }
@@ -109,6 +111,8 @@ const actions = computed<MenuAction[]>(() => {
   if (props.canDelete) {
     items.push({ id: "delete", label: "删除", icon: "trash" });
   }
+  if (props.canTranscode)
+    items.push({ id: "transcode", label: "后台转码", icon: "film" });
   return items;
 });
 

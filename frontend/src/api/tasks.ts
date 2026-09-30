@@ -11,7 +11,8 @@ export type TaskType =
   | "analysis.duplicates.cleanup"
   | "analysis.storage"
   | "archive.extract"
-  | "media.hls";
+  | "media.hls"
+  | "media.transcode";
 export type TaskStatus =
   | "queued"
   | "running"
@@ -29,6 +30,7 @@ export interface MediaProgress {
   startedAt?: number;
   updatedAt: number;
   advancedAt?: number;
+  playableSeconds?: number;
 }
 
 export interface TaskItem {
@@ -50,6 +52,8 @@ export interface TaskItem {
   retryOf?: string;
   undoUntil?: number;
   media?: MediaProgress;
+  sourcePath?: string;
+  outputPath?: string;
 }
 
 export interface TaskListCounts {
