@@ -67,3 +67,15 @@ func TestPlaybackWindowUsesFastInputSeekAndDistinctCache(t *testing.T) {
 		t.Fatal(joined)
 	}
 }
+
+func TestSoftwareThreadsBoundDecodeFiltersAndEncodeWithoutChangingCopy(t *testing.T) {
+	args := []string{"ffmpeg", "-i", "source", "-c:v", "libx264", "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1", "output"}
+	got := strings.Join(softwareThreadArgs(args, 4), " ")
+	if !strings.Contains(got, "-threads 4 -i source") || !strings.Contains(got, "-filter_threads 4") || !strings.Contains(got, "-filter_complex_threads 4") || !strings.Contains(got, "libx264 -threads 4") {
+		t.Fatal(got)
+	}
+	copyArgs := []string{"ffmpeg", "-i", "source", "-c:v", "copy", "output"}
+	if !reflect.DeepEqual(softwareThreadArgs(copyArgs, 4), copyArgs) {
+		t.Fatal("stream copy must stay unchanged")
+	}
+}

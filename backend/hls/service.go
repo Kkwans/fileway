@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,11 +55,12 @@ const (
 )
 
 type Config struct {
-	CacheDir   string
-	MaxBytes   int64
-	Workers    int
-	FFmpegPath string
-	Profile    string
+	CacheDir      string
+	MaxBytes      int64
+	Workers       int
+	FFmpegPath    string
+	Profile       string
+	EncodeThreads int
 }
 
 type Input struct {
@@ -245,6 +247,7 @@ type Service struct {
 	maxBytes        int64
 	ffmpegPath      string
 	profile         string
+	encodeThreads   int
 	workers         chan struct{}
 	playbackWorkers chan struct{}
 
@@ -285,13 +288,20 @@ func New(config Config) (*Service, error) {
 	if config.Profile == "" {
 		config.Profile = DefaultProfile
 	}
+	if config.EncodeThreads == 0 {
+		config.EncodeThreads = min(4, runtime.NumCPU())
+	}
+	if config.EncodeThreads < 1 || config.EncodeThreads > 4 {
+		return nil, fmt.Errorf("video encode threads must be between 1 and 4")
+	}
 	if err := os.MkdirAll(config.CacheDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create HLS cache directory: %w", err)
 	}
 	service := &Service{
 		cacheDir: config.CacheDir, maxBytes: config.MaxBytes,
 		ffmpegPath: config.FFmpegPath, profile: config.Profile,
-		workers: make(chan struct{}, config.Workers), entries: make(map[string]*entry),
+		encodeThreads: config.EncodeThreads,
+		workers:       make(chan struct{}, config.Workers), entries: make(map[string]*entry),
 		playbackWorkers: make(chan struct{}, 1),
 	}
 	if err := service.loadCompleted(); err != nil {

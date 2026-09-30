@@ -65,6 +65,7 @@ func (service *Service) publishProgress(job Job, p Progress) error {
 // Start stdout consumption before waiting on FFmpeg. StdoutPipe must be
 // drained before Wait closes the pipe, including for very fast remux jobs.
 func (service *Service) startProgress(command *exec.Cmd, job Job) (<-chan error, error) {
+	command.Args = softwareThreadArgs(command.Args, service.encodeThreads)
 	command.Args = playbackWindowArgs(command.Args, job)
 	if !containsProgressArg(command.Args) {
 		command.Args = append([]string{command.Args[0], "-progress", "pipe:1", "-stats_period", "1"}, command.Args[1:]...)
@@ -85,6 +86,35 @@ func (service *Service) startProgress(command *exec.Cmd, job Job) (<-chan error,
 		done <- err
 	}()
 	return done, nil
+}
+
+// Bound both decoding and encoding concurrency. Stream-copy jobs retain their
+// fast path; worker channels still bound the number of simultaneous jobs.
+func softwareThreadArgs(args []string, threads int) []string {
+	if threads <= 0 {
+		threads = 1
+	}
+	encode := false
+	for i := 1; i+1 < len(args); i++ {
+		if args[i] == "-c:v" && (args[i+1] == "libx264" || args[i+1] == "libvpx-vp9") {
+			encode = true
+		}
+	}
+	if !encode {
+		return args
+	}
+	result := make([]string, 0, len(args)+2)
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-i" {
+			result = append(result, "-threads", strconv.Itoa(threads))
+		}
+		result = append(result, args[i])
+		if (args[i] == "-threads" || args[i] == "-filter_threads" || args[i] == "-filter_complex_threads") && i+1 < len(args) {
+			result = append(result, strconv.Itoa(threads))
+			i++
+		}
+	}
+	return result
 }
 
 func playbackWindowArgs(args []string, job Job) []string {
