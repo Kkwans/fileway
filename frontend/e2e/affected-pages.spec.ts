@@ -103,10 +103,10 @@ function directoryResource(pathname: string) {
   };
 }
 
-function videoResource() {
+function videoResource(path = "/fixture-video.mkv") {
   return {
-    path: "/fixture-video.mkv",
-    name: "fixture-video.mkv",
+    path,
+    name: path.split("/").at(-1),
     size: 64 * 1024 * 1024,
     extension: ".mkv",
     modified: new Date(now - 86_400_000).toISOString(),
@@ -268,9 +268,11 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
       if (path.startsWith("/api/resources")) {
         return json(
           route,
-          path.includes("fixture-video.mkv")
-            ? videoResource()
-            : directoryResource(path)
+          path.includes("fixture-text-video.mkv")
+            ? videoResource("/fixture-text-video.mkv")
+            : path.includes("fixture-video.mkv")
+              ? videoResource()
+              : directoryResource(path)
         );
       }
       if (path === "/api/media/playback") {
@@ -283,6 +285,18 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
         });
       }
       if (path === "/api/media/info") {
+        if (url.searchParams.get("path") === "/fixture-text-video.mkv") {
+          return json(route, {
+            videoCodec: "h264",
+            audioCodec: "aac",
+            duration: 120,
+            resolution: { width: 1920, height: 1080 },
+            subtitleTracks: [
+              { index: 5, codec: "subrip", language: "eng", title: "英文文本" },
+              { index: 6, codec: "ass", language: "chi", title: "中文文本" },
+            ],
+          });
+        }
         return json(route, {
           videoCodec: "hevc",
           audioCodec: "aac",
@@ -634,6 +648,63 @@ test.describe("affected page browser gate", () => {
     expect(requests.at(-1)).not.toHaveProperty("subtitleStreamIndex");
     await openSubtitles();
     await expect(panel.locator('[data-name="sub-size"]')).toBeVisible();
+  });
+
+  test("loads embedded text subtitles without restarting video and restores the selected track", async ({
+    page,
+  }) => {
+    const unknownRequests: string[] = [];
+    const subtitleRequests: number[] = [];
+    const playbackRequests: Array<Record<string, unknown>> = [];
+    await installFixtureApi(page, unknownRequests);
+    await page.route(
+      /\/api\/subtitle\/fixture-text-video\.mkv(?:\?|$)/,
+      async (route) => {
+        subtitleRequests.push(
+          Number(new URL(route.request().url()).searchParams.get("streamIndex"))
+        );
+        await route.fulfill({
+          status: 200,
+          contentType: "text/vtt",
+          body: "WEBVTT\n\n00:00.000 --> 00:02.000\n中文字幕测试\n",
+        });
+      }
+    );
+    await page.route(/\/api\/media\/hls(?:\?|$)/, async (route) => {
+      playbackRequests.push(JSON.parse(route.request().postData() || "{}"));
+      await json(route, { state: "failed", error: "fixture 不启动转码" });
+    });
+    await login(page);
+    await page.goto("/files/fixture-text-video.mkv");
+    await expect(page.locator(".art-player-stage")).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.locator(".art-control-setting").click();
+    const panel = page.locator(".art-setting-panel.art-current");
+    await panel.locator('[data-name="playback-subtitle"]').click();
+    await expect(panel.locator('[data-name^="sub-track-"]')).toHaveCount(2);
+    await expect(panel.locator('[data-name="sub-track-1"]')).toContainText(
+      "中文文本 (ASS)"
+    );
+    const before = playbackRequests.length;
+    await panel.locator('[data-name="sub-track-1"]').click();
+    await expect.poll(() => subtitleRequests).toContain(6);
+    expect(playbackRequests).toHaveLength(before);
+    await page.waitForTimeout(350);
+    const row = panel.locator('[data-name="playback-subtitle"]');
+    if (!(await row.isVisible()))
+      await page.locator(".art-control-setting").click();
+    await row.click();
+    await expect(panel.locator('[data-name="sub-size"]')).toBeVisible();
+    await expect(panel.locator('[data-name="sub-pgs-info"]')).toHaveCount(0);
+
+    const loads = subtitleRequests.length;
+    await page.reload();
+    await expect.poll(() => subtitleRequests.length).toBeGreaterThan(loads);
+    expect(
+      playbackRequests.every(
+        (request) => request.subtitleStreamIndex === undefined
+      )
+    ).toBe(true);
   });
 
   test("lists four embedded audio tracks and selects the Chinese dub", async ({

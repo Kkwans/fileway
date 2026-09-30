@@ -218,6 +218,14 @@ const extraSubtitles = ref<{ url: string; name: string; path?: string }[]>([]);
 
 const SUBTITLE_EXTS = ["srt", "ass", "ssa", "vtt"];
 const SUBTITLE_EXT = /\.(srt|ass|ssa|vtt)$/i;
+const EMBEDDED_TEXT_SUBTITLE_CODECS = new Set([
+  "subrip",
+  "ass",
+  "ssa",
+  "webvtt",
+  "mov_text",
+  "text",
+]);
 /** History must be at least this long before resume UI is offered (account-configurable). */
 function accountResumeMinSec(): number {
   const raw = Number(authStore.user?.playerPreferences?.resumeMinSec);
@@ -233,10 +241,20 @@ const videoDirPath = computed(() => {
 
 const allSubtitleItems = computed(() => {
   const embedded = embeddedSubtitleTracks.value
-    .filter((track) => track.codec === "hdmv_pgs_subtitle")
+    .filter(
+      (track) =>
+        track.codec === "hdmv_pgs_subtitle" ||
+        EMBEDDED_TEXT_SUBTITLE_CODECS.has(track.codec)
+    )
     .map((track) => ({
-      url: embeddedSubtitleValue(track.index),
-      name: `内挂 · ${track.title || track.language || `字幕 ${track.index}`} (PGS)`,
+      url:
+        track.codec === "hdmv_pgs_subtitle"
+          ? embeddedSubtitleValue(track.index)
+          : createURL(`api/subtitle${props.path}`, {
+              inline: "true",
+              streamIndex: String(track.index),
+            }),
+      name: `内挂 · ${track.title || track.language || `字幕 ${track.index}`} (${track.codec === "hdmv_pgs_subtitle" ? "PGS" : track.codec === "subrip" ? "SRT" : track.codec.toUpperCase()})`,
       path: undefined as string | undefined,
     }));
   const base = (props.subtitles || []).map((s) => ({
@@ -986,7 +1004,7 @@ function switchSubtitle(item: { html: string; value: string; name?: string }) {
       style: subtitleStyleFromPrefs(),
     })
     .catch(() => {
-      /* ignore */
+      notice("字幕加载失败，请重试或选择其他字幕");
     });
   subtitlePrefs.value.enabled = true;
   subtitlePrefs.value.url = item.value;
@@ -2327,12 +2345,16 @@ onMounted(async () => {
     loadStatusText.value = `.${ext} 启动兼容转码…`;
   }
 
-  // External subtitles: honor saved track; otherwise attach the first track.
+  // Text subtitles load independently of the video, including saved embedded tracks.
   let subInit: Record<string, unknown> = {};
+  const fallbackSubtitle = props.subtitles?.[0];
   const pick =
     (subtitlePrefs.value.url &&
-      props.subtitles?.find((s) => s.url === subtitlePrefs.value.url)) ||
-    props.subtitles?.[0];
+      allSubtitleItems.value.find((s) => s.url === subtitlePrefs.value.url)) ||
+    (fallbackSubtitle && {
+      url: fallbackSubtitle.url,
+      name: fallbackSubtitle.name || fallbackSubtitle.lang || "字幕",
+    });
   if (pick && embeddedSubtitleIndex.value === null) {
     if (!subtitlePrefs.value.url && subtitlePrefs.value.enabled) {
       subtitlePrefs.value.url = pick.url;
@@ -2343,7 +2365,7 @@ onMounted(async () => {
         url: pick.url,
         type: subtitleTypeFromUrl(pick.url),
         escape: true,
-        name: pick.name || pick.lang || "字幕",
+        name: pick.name || "字幕",
         style: subtitleStyleFromPrefs(),
       };
     }
