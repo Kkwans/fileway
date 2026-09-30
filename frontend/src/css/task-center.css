@@ -637,14 +637,18 @@
     justify-content: space-between;
   }
   .task-center-tabs {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    overflow: visible;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: x proximity;
   }
   .task-center-tabs button {
-    min-width: 0;
+    flex: 0 0 auto;
     min-height: 44px;
-    padding-inline: 8px;
+    padding-inline: 12px;
+    scroll-snap-align: start;
+    white-space: nowrap;
   }
   .task-center-panel {
     padding: 15px;

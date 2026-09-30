@@ -248,6 +248,40 @@ async function captureGeometry(page: Page) {
 }
 
 test.describe("NAS File Browser browser gate", () => {
+  test("keeps mobile task tabs on one scrollable row", async ({ page }) => {
+    await installFixtureApi(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await login(page);
+    await page.goto("/tasks?tab=file");
+
+    const tabs = page.getByRole("tablist", { name: "任务类型" });
+    const geometry = await tabs.evaluate((element) => ({
+      display: getComputedStyle(element).display,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      rows: [...element.querySelectorAll("button")].map((button) => ({
+        top: Math.round(button.getBoundingClientRect().top),
+        height: button.getBoundingClientRect().height,
+      })),
+    }));
+    expect(geometry.display).toBe("flex");
+    expect(geometry.scrollWidth).toBeGreaterThan(geometry.clientWidth);
+    expect(new Set(geometry.rows.map((row) => row.top)).size).toBe(1);
+    expect(geometry.rows.every((row) => row.height >= 44)).toBe(true);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth)
+    ).toBeLessThanOrEqual(390);
+
+    const historyTab = page.getByRole("tab", { name: "操作历史" });
+    await historyTab.scrollIntoViewIfNeeded();
+    await historyTab.click();
+    await expect(historyTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("heading", { name: "操作历史" })).toBeVisible();
+    await historyTab.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("tab", { name: "后台任务" })).toBeFocused();
+  });
+
   test("captures the task-center viewport and theme matrix", async ({
     page,
   }, testInfo: TestInfo) => {
