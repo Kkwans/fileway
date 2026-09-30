@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Kkwans/nas-file-browser/backend/events"
+	"github.com/Kkwans/nas-file-browser/backend/hls"
 )
 
 var (
@@ -64,6 +65,7 @@ type Task struct {
 	ProcessedBytes int64           `json:"processedBytes"`
 	Error          string          `json:"error,omitempty"`
 	RetryOf        string          `json:"retryOf,omitempty"`
+	Media          *hls.Progress   `json:"media,omitempty"`
 	Args           json.RawMessage `json:"-"`
 	Result         json.RawMessage `json:"-"`
 }
@@ -75,6 +77,10 @@ func (task *Task) Clone() *Task {
 	clone := *task
 	clone.Args = append(json.RawMessage(nil), task.Args...)
 	clone.Result = append(json.RawMessage(nil), task.Result...)
+	if task.Media != nil {
+		media := *task.Media
+		clone.Media = &media
+	}
 	return &clone
 }
 
@@ -92,7 +98,7 @@ func (task *Task) CanRetry() bool {
 	if task.Status == StatusFailed || task.Status == StatusInterrupted {
 		return true
 	}
-	return task.Status == StatusCanceled && (task.Type == TypeFileCopy || task.Type == TypeFileMove || task.Type == TypeDuplicateCleanup)
+	return task.Status == StatusCanceled && (task.Type == TypeFileCopy || task.Type == TypeFileMove || task.Type == TypeDuplicateCleanup || task.Type == TypeMediaHLS)
 }
 
 func (task *Task) CanArchive() bool {

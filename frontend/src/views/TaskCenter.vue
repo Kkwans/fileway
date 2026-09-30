@@ -141,8 +141,60 @@
                 <p>
                   {{ taskTypeLabel(task.type) }}
                 </p>
+                <div v-if="task.media" class="task-center-media-progress">
+                  <div class="task-center-progress-summary">
+                    <strong>{{ mediaPhaseLabel(task) }}</strong>
+                    <span v-if="task.media.durationSeconds > 0">
+                      {{ taskProgressPercent(taskProgress(task)) }}% ·
+                      {{ formatMediaTime(task.media.processedSeconds) }} /
+                      {{ formatMediaTime(task.media.durationSeconds) }}
+                    </span>
+                  </div>
+                  <div
+                    v-if="task.media.durationSeconds > 0"
+                    class="task-center-progress-track"
+                    role="progressbar"
+                    :aria-label="`${task.title}转码进度`"
+                    aria-valuemin="0"
+                    :aria-valuemax="task.media.durationSeconds"
+                    :aria-valuenow="taskProgress(task).value"
+                  >
+                    <span
+                      :style="{
+                        width: `${taskProgressPercent(taskProgress(task))}%`,
+                      }"
+                    ></span>
+                  </div>
+                  <div
+                    v-if="isTaskActive(task)"
+                    class="task-center-media-metrics"
+                  >
+                    <span
+                      >转码速度
+                      <strong>{{ mediaSpeedLabel(task) }}</strong></span
+                    >
+                    <span v-if="task.media.fps > 0"
+                      >{{ task.media.fps.toFixed(1) }} fps</span
+                    >
+                    <span
+                      >剩余
+                      <strong>{{
+                        formatMediaTime(mediaEstimate(task).remaining)
+                      }}</strong></span
+                    >
+                    <span
+                      >预计总耗时
+                      <strong>{{
+                        formatMediaTime(mediaEstimate(task).total)
+                      }}</strong></span
+                    >
+                  </div>
+                  <p v-if="task.error" class="task-center-error">
+                    {{ task.error }}
+                  </p>
+                </div>
                 <div
-                  v-if="
+                  v-else-if="
                     isTaskActive(task) && taskProgress(task).mode === 'bytes'
                   "
                   class="task-center-progress"
@@ -576,6 +628,8 @@ import { useTransfersStore } from "@/stores/transfers";
 import { useUploadStore } from "@/stores/upload";
 import {
   formatTaskBytes,
+  formatMediaTime,
+  mediaTaskEstimate,
   getTaskProgress,
   type TaskProgress,
 } from "@/utils/taskProgress";
@@ -990,7 +1044,9 @@ function isTaskActive(task: TaskItem) {
 function canRetry(task: TaskItem) {
   return (
     !task.archivedAt &&
-    (task.status === "failed" || task.status === "interrupted")
+    (task.status === "failed" ||
+      task.status === "interrupted" ||
+      (task.status === "canceled" && task.type === "media.hls"))
   );
 }
 
@@ -1144,6 +1200,31 @@ function transferEta(item: DisplayTransfer) {
 
 function taskProgress(task: TaskItem): TaskProgress {
   return getTaskProgress(task);
+}
+
+function mediaEstimate(task: TaskItem) {
+  return mediaTaskEstimate(task.media!, task.status, now.value);
+}
+
+function mediaSpeedLabel(task: TaskItem) {
+  const estimate = mediaEstimate(task);
+  if (estimate.stale || estimate.stalled) return "暂无有效数据";
+  return task.media!.speed > 0
+    ? `${task.media!.speed.toFixed(2)}×`
+    : "等待数据";
+}
+
+function mediaPhaseLabel(task: TaskItem) {
+  if (!isTaskActive(task)) return statusLabel(task.status);
+  const estimate = mediaEstimate(task);
+  if (estimate.stale) return "进度反馈中断，请检查任务";
+  if (estimate.stalled) return "超过 30 秒未产生新视频，可能停滞";
+  return {
+    queued: "等待转码资源",
+    preparing: "准备视频",
+    encoding: "正在转码",
+    finalizing: "整理成品",
+  }[task.media!.phase];
 }
 
 function taskProgressPercent(progress: TaskProgress) {

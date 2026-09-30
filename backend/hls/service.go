@@ -1,7 +1,6 @@
 package hls
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -106,6 +105,7 @@ type Job struct {
 	SubtitleStream  *int
 	AudioStream     *int
 	HDR             bool
+	report          func(Progress) error
 }
 
 // IsWebMProfile reports whether a compatibility artifact is a complete WebM
@@ -197,8 +197,9 @@ type Status struct {
 	ProcessedSeconds float64 `json:"processedSeconds,omitempty"`
 	// DurationSeconds is the source duration paired with ProcessedSeconds.
 	// It may be zero when codec probing was unavailable.
-	DurationSeconds float64 `json:"durationSeconds,omitempty"`
-	UserID          uint    `json:"userId"`
+	DurationSeconds float64   `json:"durationSeconds,omitempty"`
+	UserID          uint      `json:"userId"`
+	Progress        *Progress `json:"progress,omitempty"`
 }
 
 type entry struct {
@@ -463,6 +464,9 @@ func (service *Service) Get(id string, userID uint) (Status, error) {
 }
 
 func (service *Service) Run(ctx context.Context, job Job) error {
+	if err := service.reportPhase(job, "queued"); err != nil {
+		return err
+	}
 	select {
 	case service.workers <- struct{}{}:
 		defer func() { <-service.workers }()
@@ -482,6 +486,9 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	current.ProcessedSeconds = 0
 	current.UpdatedAt = time.Now().UnixMilli()
 	service.mu.Unlock()
+	if err := service.reportPhase(job, "preparing"); err != nil {
+		return err
+	}
 
 	directory := service.entryDir(job.ID)
 	if err := os.RemoveAll(directory); err != nil {
@@ -514,7 +521,8 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	command := exec.CommandContext(ctx, service.ffmpegPath, args...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
+	progressDone, err := service.startProgress(command, job)
+	if err != nil {
 		message := fmt.Sprintf("FFmpeg HLS 转码启动失败: %v", err)
 		service.finish(job.ID, StateFailed, message, 0)
 		_ = os.RemoveAll(directory)
@@ -522,7 +530,14 @@ func (service *Service) Run(ctx context.Context, job Job) error {
 	}
 
 	wait := make(chan error, 1)
-	go func() { wait <- command.Wait() }()
+	go func() {
+		progressErr := <-progressDone
+		err := command.Wait()
+		if progressErr != nil {
+			err = progressErr
+		}
+		wait <- err
+	}()
 	ticker := time.NewTicker(120 * time.Millisecond)
 	defer ticker.Stop()
 	streamable := false
@@ -593,31 +608,7 @@ func (service *Service) runWebM(ctx context.Context, job Job, directory string) 
 	command := exec.CommandContext(ctx, service.ffmpegPath, args...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		message := fmt.Sprintf("FFmpeg WebM 进度通道创建失败: %v", err)
-		service.finish(job.ID, StateFailed, message, 0)
-		_ = os.RemoveAll(directory)
-		return errors.New(message)
-	}
-	if err := command.Start(); err != nil {
-		message := fmt.Sprintf("FFmpeg WebM 转码启动失败: %v", err)
-		service.finish(job.ID, StateFailed, message, 0)
-		_ = os.RemoveAll(directory)
-		return errors.New(message)
-	}
-	progressDone := make(chan struct{})
-	go func() {
-		defer close(progressDone)
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			if seconds, ok := parseFFmpegProgressLine(scanner.Text()); ok {
-				service.setProgress(job.ID, seconds)
-			}
-		}
-	}()
-	runErr := command.Wait()
-	<-progressDone
+	runErr := service.runProgress(command, job)
 	if errors.Is(ctx.Err(), context.Canceled) {
 		service.finish(job.ID, StateCanceled, "任务已取消", 0)
 		_ = os.RemoveAll(directory)
@@ -667,7 +658,7 @@ func (service *Service) runWebMCopy(ctx context.Context, job Job, directory stri
 	command := exec.CommandContext(ctx, service.ffmpegPath, webMCopyArgs(job.SourcePath, temporary)...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
+	if err := service.runProgress(command, job); err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			service.finish(job.ID, StateCanceled, "任务已取消", 0)
 			_ = os.RemoveAll(directory)
@@ -715,7 +706,7 @@ func (service *Service) runMP4Copy(ctx context.Context, job Job, directory strin
 	command := exec.CommandContext(ctx, service.ffmpegPath, mp4CopyArgs(job.SourcePath, temporary)...)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
+	if err := service.runProgress(command, job); err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			service.finish(job.ID, StateCanceled, "任务已取消", 0)
 			_ = os.RemoveAll(directory)

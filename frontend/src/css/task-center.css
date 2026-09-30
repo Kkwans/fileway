@@ -331,6 +331,33 @@
   margin-top: 0.625rem;
 }
 
+.task-center-media-progress {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+  max-width: 42rem;
+}
+
+.task-center-media-progress .task-center-progress-summary {
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+}
+
+.task-center-media-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-center-media-metrics strong {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
 .task-center-progress-summary,
 .task-center-progress-metrics {
   display: flex;

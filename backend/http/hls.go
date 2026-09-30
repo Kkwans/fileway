@@ -42,24 +42,25 @@ type mediaHLSTaskArgs struct {
 }
 
 type mediaHLSResponse struct {
-	ID                  string    `json:"id"`
-	TaskID              string    `json:"taskId,omitempty"`
-	Path                string    `json:"path"`
-	Identity            string    `json:"identity"`
-	Profile             string    `json:"profile"`
-	SubtitleStreamIndex *int      `json:"subtitleStreamIndex,omitempty"`
-	AudioStreamIndex    *int      `json:"audioStreamIndex,omitempty"`
-	HDRToneMapped       bool      `json:"hdrToneMapped,omitempty"`
-	State               hls.State `json:"state"`
-	Error               string    `json:"error,omitempty"`
-	UpdatedAt           int64     `json:"updatedAt"`
-	LastAccessAt        int64     `json:"lastAccessAt,omitempty"`
-	SizeBytes           int64     `json:"sizeBytes,omitempty"`
-	ProcessedSeconds    float64   `json:"processedSeconds,omitempty"`
-	DurationSeconds     float64   `json:"durationSeconds,omitempty"`
-	Format              string    `json:"format"`
-	PlaylistURL         string    `json:"playlistUrl,omitempty"`
-	SourceURL           string    `json:"sourceUrl,omitempty"`
+	ID                  string        `json:"id"`
+	TaskID              string        `json:"taskId,omitempty"`
+	Path                string        `json:"path"`
+	Identity            string        `json:"identity"`
+	Profile             string        `json:"profile"`
+	SubtitleStreamIndex *int          `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex    *int          `json:"audioStreamIndex,omitempty"`
+	HDRToneMapped       bool          `json:"hdrToneMapped,omitempty"`
+	State               hls.State     `json:"state"`
+	Error               string        `json:"error,omitempty"`
+	UpdatedAt           int64         `json:"updatedAt"`
+	LastAccessAt        int64         `json:"lastAccessAt,omitempty"`
+	SizeBytes           int64         `json:"sizeBytes,omitempty"`
+	ProcessedSeconds    float64       `json:"processedSeconds,omitempty"`
+	DurationSeconds     float64       `json:"durationSeconds,omitempty"`
+	Progress            *hls.Progress `json:"progress,omitempty"`
+	Format              string        `json:"format"`
+	PlaylistURL         string        `json:"playlistUrl,omitempty"`
+	SourceURL           string        `json:"sourceUrl,omitempty"`
 }
 
 const mediaHLSCodecProbeTimeout = 5 * time.Second
@@ -357,8 +358,10 @@ func enqueueMediaHLSTask(runtime *tasks.Runtime, d *data, owner *users.User, ser
 	if err != nil {
 		return nil, err
 	}
-	runner := func(ctx context.Context, _ tasks.Reporter) (json.RawMessage, error) {
-		if err := service.Run(ctx, job); err != nil {
+	runner := func(ctx context.Context, report tasks.Reporter) (json.RawMessage, error) {
+		if err := service.RunWithProgress(ctx, job, func(progress hls.Progress) error {
+			return report(tasks.Progress{Media: &progress})
+		}); err != nil {
 			return nil, err
 		}
 		return json.Marshal(struct {
@@ -386,6 +389,7 @@ func mediaHLSStatusResponse(baseURL string, status hls.Status) mediaHLSResponse 
 		LastAccessAt: status.LastAccessAt, SizeBytes: status.SizeBytes,
 		ProcessedSeconds: status.ProcessedSeconds,
 		DurationSeconds:  status.DurationSeconds,
+		Progress:         status.Progress,
 		Format:           "hls",
 	}
 	if hls.IsWebMProfile(status.Profile) {

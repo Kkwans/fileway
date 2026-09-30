@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/Kkwans/nas-file-browser/backend/hls"
 )
 
 type Progress struct {
@@ -14,6 +16,7 @@ type Progress struct {
 	ProcessedItems int
 	TotalBytes     int64
 	ProcessedBytes int64
+	Media          *hls.Progress
 	// Checkpoint is an optional durable file-task checkpoint. It is persisted
 	// immediately, while ordinary progress is throttled by Runtime.
 	Checkpoint json.RawMessage
@@ -201,11 +204,25 @@ func (runtime *Runtime) run(ctx context.Context, task *Task, runner Runner) {
 		task.ProcessedItems = progress.ProcessedItems
 		task.TotalBytes = progress.TotalBytes
 		task.ProcessedBytes = progress.ProcessedBytes
+		mediaPhaseChanged := progress.Media != nil && (task.Media == nil || task.Media.Phase != progress.Media.Phase)
+		if progress.Media != nil {
+			media := *progress.Media
+			task.Media = &media
+			if media.Phase == "queued" {
+				task.Status = StatusQueued
+				task.StartedAt = 0
+			} else {
+				task.Status = StatusRunning
+				if task.StartedAt == 0 {
+					task.StartedAt = media.StartedAt
+				}
+			}
+		}
 		if len(progress.Checkpoint) > 0 {
 			task.Result = append(json.RawMessage(nil), progress.Checkpoint...)
 		}
 		now := time.Now()
-		force := len(progress.Checkpoint) > 0
+		force := len(progress.Checkpoint) > 0 || mediaPhaseChanged
 		if !force && !lastPersistAt.IsZero() && now.Sub(lastPersistAt) < time.Second && progress.ProcessedBytes-lastPersistBytes < 8*1024*1024 {
 			return nil
 		}

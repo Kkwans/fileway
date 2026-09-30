@@ -20,6 +20,17 @@ export type TaskStatus =
   | "canceled"
   | "interrupted";
 
+export interface MediaProgress {
+  phase: "queued" | "preparing" | "encoding" | "finalizing";
+  durationSeconds: number;
+  processedSeconds: number;
+  speed: number;
+  fps: number;
+  startedAt?: number;
+  updatedAt: number;
+  advancedAt?: number;
+}
+
 export interface TaskItem {
   id: string;
   userId: number;
@@ -38,6 +49,7 @@ export interface TaskItem {
   error?: string;
   retryOf?: string;
   undoUntil?: number;
+  media?: MediaProgress;
 }
 
 export interface TaskListCounts {

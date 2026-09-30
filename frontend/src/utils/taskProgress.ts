@@ -1,10 +1,13 @@
-export type TaskProgressMode = "bytes" | "items" | "indeterminate";
+import type { MediaProgress, TaskStatus } from "@/api/tasks";
+
+export type TaskProgressMode = "media" | "bytes" | "items" | "indeterminate";
 
 export interface TaskProgressInput {
   processedBytes: number;
   totalBytes: number;
   processedItems: number;
   totalItems: number;
+  media?: MediaProgress;
 }
 
 export interface TaskProgress {
@@ -16,6 +19,17 @@ export interface TaskProgress {
 /** Prefer byte progress, then item progress, and otherwise be explicit that
  * the server has not reported a measurable total yet. */
 export function getTaskProgress(input: TaskProgressInput): TaskProgress {
+  if (input.media && input.media.durationSeconds > 0) {
+    return {
+      mode: "media",
+      value: clamp(
+        input.media.processedSeconds,
+        0,
+        input.media.durationSeconds
+      ),
+      max: input.media.durationSeconds,
+    };
+  }
   if (input.totalBytes > 0) {
     return {
       mode: "bytes",
@@ -33,6 +47,46 @@ export function getTaskProgress(input: TaskProgressInput): TaskProgress {
   }
 
   return { mode: "indeterminate" };
+}
+
+export function mediaTaskEstimate(
+  media: MediaProgress,
+  status: TaskStatus,
+  now: number
+) {
+  const elapsed = Math.max(0, (now - (media.startedAt || now)) / 1000);
+  const stale =
+    status === "running" &&
+    media.phase !== "queued" &&
+    now - media.updatedAt > 15000;
+  const stalled =
+    status === "running" &&
+    media.phase === "encoding" &&
+    now - (media.advancedAt || media.startedAt || media.updatedAt) > 30000;
+  const canEstimate =
+    status === "running" &&
+    media.phase === "encoding" &&
+    !stale &&
+    !stalled &&
+    media.speed > 0 &&
+    media.durationSeconds > 0;
+  const remaining = canEstimate
+    ? Math.max(0, media.durationSeconds - media.processedSeconds) / media.speed
+    : undefined;
+  return {
+    stale,
+    stalled,
+    remaining,
+    total: remaining === undefined ? undefined : elapsed + remaining,
+  };
+}
+
+export function formatMediaTime(seconds?: number) {
+  if (seconds === undefined || !Number.isFinite(seconds)) return "估算中";
+  const s = Math.max(0, Math.ceil(seconds));
+  return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }
 
 function clamp(value: number, min: number, max: number) {
