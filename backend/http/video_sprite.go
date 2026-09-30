@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Kkwans/nas-file-browser/backend/files"
@@ -145,27 +146,51 @@ func generateVideoSprite(ctx context.Context, source string, meta videoSpriteRes
 	}
 	rows := (meta.Number + meta.Column - 1) / meta.Column
 	sheet := image.NewRGBA(image.Rect(0, 0, meta.Column*meta.Width, rows*meta.Height))
+	workCtx, cancel := context.WithCancel(ctx)
+	type result struct {
+		index int
+		frame image.Image
+		err   error
+	}
+	jobs := make(chan int, meta.Number)
 	for i := 0; i < meta.Number; i++ {
-		args := spriteFrameArgs(source, float64(i)*meta.Interval, meta.Width, meta.Height)
-		if meta.HDR {
-			for i, value := range args {
-				if value == "-vf" {
-					args[i+1] += ",format=yuv420p10le,zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p"
+		jobs <- i
+	}
+	close(jobs)
+	results := make(chan result, 2)
+	var workers sync.WaitGroup
+	// The service admits one sheet; two readers overlap its independent seeks.
+	for worker := 0; worker < min(2, meta.Number); worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range jobs {
+				if workCtx.Err() != nil {
+					return
+				}
+				frame, err := generateSpriteFrame(workCtx, ffmpegPath, source, float64(i)*meta.Interval, meta)
+				select {
+				case results <- result{i, frame, err}:
+				case <-workCtx.Done():
+					return
+				}
+				if err != nil {
+					return
 				}
 			}
+		}()
+	}
+	defer func() { cancel(); workers.Wait() }()
+	go func() { workers.Wait(); close(results) }()
+	for item := range results {
+		if item.err != nil {
+			return nil, fmt.Errorf("缩略图 %d 生成失败: %w", item.index+1, item.err)
 		}
-		command := exec.CommandContext(ctx, ffmpegPath, args...)
-		var stdout, stderr bytes.Buffer
-		command.Stdout, command.Stderr = &stdout, &stderr
-		if err := command.Run(); err != nil {
-			return nil, fmt.Errorf("缩略图 %d 生成失败: %s", i+1, stderr.String())
-		}
-		frame, err := jpeg.Decode(&stdout)
-		if err != nil {
-			return nil, fmt.Errorf("缩略图 %d 无效: %w", i+1, err)
-		}
-		x, y := i%meta.Column*meta.Width, i/meta.Column*meta.Height
-		draw.Draw(sheet, image.Rect(x, y, x+meta.Width, y+meta.Height), frame, frame.Bounds().Min, draw.Src)
+		x, y := item.index%meta.Column*meta.Width, item.index/meta.Column*meta.Height
+		draw.Draw(sheet, image.Rect(x, y, x+meta.Width, y+meta.Height), item.frame, item.frame.Bounds().Min, draw.Src)
+	}
+	if workCtx.Err() != nil {
+		return nil, workCtx.Err()
 	}
 	var output bytes.Buffer
 	if err := jpeg.Encode(&output, sheet, &jpeg.Options{Quality: 80}); err != nil {
@@ -174,8 +199,46 @@ func generateVideoSprite(ctx context.Context, source string, meta videoSpriteRes
 	return output.Bytes(), nil
 }
 
+func generateSpriteFrame(ctx context.Context, ffmpegPath, source string, timestamp float64, meta videoSpriteResponse) (image.Image, error) {
+	args := spriteFrameArgs(source, timestamp, meta.Width, meta.Height)
+	if meta.HDR {
+		for i, value := range args {
+			if value == "-vf" {
+				args[i+1] += ",format=yuv420p10le,zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p"
+			}
+		}
+	}
+	var lastErr error
+	// Avoid analyzing all audio/subtitle tracks again for each still. Sources
+	// with unusual headers get one bounded retry with a larger probe budget.
+	for attempt := 0; attempt < 2; attempt++ {
+		command := exec.CommandContext(ctx, ffmpegPath, args...)
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Run(); err != nil {
+			lastErr = fmt.Errorf("%w: %s", err, stderr.String())
+		} else {
+			frame, err := jpeg.Decode(&stdout)
+			if err == nil {
+				return frame, nil
+			}
+			lastErr = err
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		for i, arg := range args {
+			if arg == "-probesize" || arg == "-analyzeduration" {
+				args[i+1] = "1000000"
+			}
+		}
+	}
+	return nil, lastErr
+}
+
 func spriteFrameArgs(source string, timestamp float64, width, height int) []string {
 	return []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-threads", "2",
+		"-probesize", "32768", "-analyzeduration", "1",
 		"-skip_frame", "nokey", "-noaccurate_seek", "-ss", strconv.FormatFloat(timestamp, 'f', 6, 64), "-i", source, "-map", "0:v:0", "-an", "-sn",
 		"-vf", fmt.Sprintf("scale=%d:%d:flags=fast_bilinear", width, height), "-filter_threads", "1",
 		"-frames:v", "1", "-threads", "1", "-q:v", "5", "-f", "image2", "-vcodec", "mjpeg", "pipe:1"}
