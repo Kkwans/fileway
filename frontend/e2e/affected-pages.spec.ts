@@ -562,9 +562,14 @@ test.describe("affected page browser gate", () => {
       path: testInfo.outputPath("media-info-hdr-tracks.png"),
     });
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".sidebar-frame")).toHaveCSS(
+      "visibility",
+      "hidden"
+    );
     expect((await geometry(page)).scrollWidth).toBeLessThanOrEqual(391);
     await page.screenshot({
       path: testInfo.outputPath("media-info-hdr-tracks-mobile.png"),
+      animations: "disabled",
     });
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.getByRole("button", { name: "关闭媒体信息" }).click();
@@ -738,6 +743,7 @@ test.describe("affected page browser gate", () => {
               `screenshots/${theme}-${viewport.name}-${target.name}.png`
             ),
             fullPage: true,
+            animations: "disabled",
           });
         }
       }
@@ -803,6 +809,7 @@ test.describe("affected page browser gate", () => {
             `optimized/${theme}-${viewport.name}-login.png`
           ),
           fullPage: true,
+          animations: "disabled",
         });
       }
     }
@@ -850,6 +857,7 @@ test.describe("affected page browser gate", () => {
               `optimized/${theme}-${viewport.name}-${target.name}.png`
             ),
             fullPage: true,
+            animations: "disabled",
           });
         }
       }
