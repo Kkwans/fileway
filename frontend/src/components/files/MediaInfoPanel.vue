@@ -46,9 +46,21 @@
           <span>视频编码</span>
           <strong>{{ info.videoCodec.toUpperCase() }}</strong>
         </div>
+        <div v-if="info?.hdr">
+          <span>动态范围</span>
+          <strong>HDR10 · 兼容播放映射为 SDR</strong>
+        </div>
         <div v-if="info?.audioCodec">
           <span>音频编码</span>
           <strong>{{ info.audioCodec.toUpperCase() }}</strong>
+        </div>
+        <div v-if="info?.audioTracks?.length">
+          <span>内挂音轨</span>
+          <strong>{{ info.audioTracks.length }} 条</strong>
+        </div>
+        <div v-if="info?.subtitleTracks?.length">
+          <span>内挂字幕</span>
+          <strong>{{ info.subtitleTracks.length }} 条</strong>
         </div>
         <div v-if="info?.bitRate">
           <span>码率</span>
@@ -59,6 +71,36 @@
           <strong>{{ (info.sampleRate / 1000).toFixed(1) }} kHz</strong>
         </div>
       </div>
+
+      <section v-if="info?.audioTracks?.length" class="media-info-section">
+        <h2>内挂音轨</h2>
+        <dl>
+          <template v-for="track in info.audioTracks" :key="track.index">
+            <dt>轨道 {{ track.index }}</dt>
+            <dd>{{ mediaTrackLabel(track) }}</dd>
+          </template>
+        </dl>
+      </section>
+
+      <section v-if="info?.subtitleTracks?.length" class="media-info-section">
+        <h2>内挂字幕</h2>
+        <dl>
+          <template v-for="track in info.subtitleTracks" :key="track.index">
+            <dt>轨道 {{ track.index }}</dt>
+            <dd>{{ mediaTrackLabel(track) }}</dd>
+          </template>
+        </dl>
+        <p
+          v-if="
+            info.subtitleTracks.some(
+              (track) => track.codec === 'hdmv_pgs_subtitle'
+            )
+          "
+          class="media-info-track-note"
+        >
+          PGS 图形字幕可在播放器字幕菜单中选择，需使用兼容转码。
+        </p>
+      </section>
 
       <section v-if="metadata.length" class="media-info-section">
         <h2>作品信息</h2>
@@ -106,7 +148,7 @@
 
 <script setup lang="ts">
 import { media as mediaApi } from "@/api";
-import type { MediaInformation } from "@/api/media";
+import type { MediaInformation, MediaTrack } from "@/api/media";
 import type { Resource } from "@/types/file";
 import { filesize } from "@/utils";
 import { formatMediaTime } from "@/utils/videoGestures";
@@ -156,6 +198,20 @@ const metadata = computed(() =>
     Boolean(item.value)
   )
 );
+
+function mediaTrackLabel(track: MediaTrack) {
+  const codec =
+    track.codec === "hdmv_pgs_subtitle"
+      ? "PGS 图形字幕"
+      : track.codec.toUpperCase();
+  return [
+    track.title || track.language || "未命名",
+    codec,
+    track.default ? "默认" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 watch(
   () => [props.open, props.resource.path] as const,
@@ -328,6 +384,13 @@ function requestLocation() {
   margin: 0;
   overflow-wrap: anywhere;
   font-size: 13px;
+}
+
+.media-info-track-note {
+  margin: 12px 0 0;
+  color: rgb(255 255 255 / 58%);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .media-location-section p {

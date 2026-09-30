@@ -286,6 +286,7 @@ async function installFixtureApi(page: Page, unknownRequests: string[]) {
         return json(route, {
           videoCodec: "hevc",
           audioCodec: "aac",
+          hdr: true,
           duration: 120,
           resolution: { width: 3840, height: 1600 },
           audioTracks: [
@@ -524,7 +525,9 @@ test.describe("affected page browser gate", () => {
     expect(unknownRequests).toEqual([]);
   });
 
-  test("covers storage analysis and media state", async ({ page }) => {
+  test("covers storage analysis and media state", async ({
+    page,
+  }, testInfo) => {
     test.setTimeout(60_000);
     const unknownRequests: string[] = [];
     await installFixtureApi(page, unknownRequests);
@@ -548,6 +551,23 @@ test.describe("affected page browser gate", () => {
     ).toBeVisible();
     await expect(page.locator(".art-player-stage")).toBeVisible();
     await expect(page.getByText("4K", { exact: true }).first()).toBeVisible();
+    await page.getByRole("button", { name: "文件信息" }).click();
+    const infoPanel = page.getByRole("complementary", { name: "媒体信息" });
+    await expect(infoPanel).toContainText("HDR10 · 兼容播放映射为 SDR");
+    await expect(infoPanel).toContainText("4 条");
+    await expect(infoPanel).toContainText("6 条");
+    await expect(infoPanel).toContainText("长影国配 DTS");
+    await expect(infoPanel).toContainText("简中特效");
+    await page.screenshot({
+      path: testInfo.outputPath("media-info-hdr-tracks.png"),
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect((await geometry(page)).scrollWidth).toBeLessThanOrEqual(391);
+    await page.screenshot({
+      path: testInfo.outputPath("media-info-hdr-tracks-mobile.png"),
+    });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.getByRole("button", { name: "关闭媒体信息" }).click();
     const favoriteAction = page.getByRole("button", {
       name: "收藏",
       exact: true,
