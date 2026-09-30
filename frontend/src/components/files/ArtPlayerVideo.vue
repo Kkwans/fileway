@@ -607,6 +607,22 @@ function videoHasFrame(video?: HTMLVideoElement | null) {
   return !!video && ((video.videoWidth || 0) > 0 || video.currentTime > 0.05);
 }
 
+function playerFeedbackRail(player: HTMLElement) {
+  let rail = player.querySelector<HTMLDivElement>(".nfb-player-feedback");
+  if (!rail) {
+    rail = document.createElement("div");
+    rail.className = "nfb-player-feedback";
+    player.appendChild(rail);
+  }
+  const operationNotice = player.querySelector<HTMLElement>(".art-notice");
+  if (operationNotice && operationNotice.parentElement !== rail) {
+    operationNotice.setAttribute("role", "status");
+    operationNotice.setAttribute("aria-live", "polite");
+    rail.appendChild(operationNotice);
+  }
+  return rail;
+}
+
 /** Official ArtPlayer auto-playback chrome — reuse DOM/classes/icons from artplayer.org. */
 function injectResumeToast(
   position: number,
@@ -684,7 +700,7 @@ function injectResumeToast(
         dismiss();
       }
     });
-    player.appendChild(el);
+    playerFeedbackRail(player).prepend(el);
   };
   tryMount(0);
 }
@@ -2413,6 +2429,7 @@ onMounted(async () => {
   });
   // ArtPlayer renders controls before media is ready; make them usable during
   // a cold compatibility transcode instead of waiting for the ready event.
+  playerFeedbackRail(art.value.template.$player);
   bindBarSelectorPopups();
   hardenSelectorLists();
   void loadVideoSprite();
@@ -2877,16 +2894,47 @@ onBeforeUnmount(() => {
 .art-player-stage :deep(.art-bar-selector-open .art-video) {
   pointer-events: none !important;
 }
+.art-player-stage :deep(.nfb-player-feedback) {
+  position: absolute;
+  left: var(--art-padding, 10px);
+  right: var(--art-padding, 10px);
+  bottom: calc(
+    var(--art-control-height, 46px) + var(--art-bottom-gap, 5px) + 10px
+  );
+  z-index: 180;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+}
+.art-player-stage :deep(.nfb-player-feedback .art-notice) {
+  position: static;
+  inset: auto;
+  width: auto;
+  height: auto;
+  max-width: 48%;
+  margin-left: auto;
+  padding: 0;
+  text-align: right;
+}
+.art-player-stage :deep(.nfb-player-feedback .art-notice-inner) {
+  padding: 10px 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
 .art-player-stage :deep(.art-layer-auto-playback) {
   z-index: 180;
   display: flex;
   gap: 10px;
   align-items: center;
-  position: absolute;
-  left: var(--art-padding, 10px);
-  bottom: calc(
-    var(--art-control-height, 46px) + var(--art-bottom-gap, 5px) + 10px
-  );
+  position: static;
+  min-width: 0;
+  max-width: 52%;
+  flex-wrap: wrap;
+  pointer-events: auto;
   padding: 10px;
   line-height: 1;
   color: var(--art-font-color, #fff);
@@ -2915,7 +2963,8 @@ onBeforeUnmount(() => {
 .art-player-stage :deep(.art-layer-auto-playback .art-auto-playback-last) {
   color: var(--art-font-color, #fff);
   font-size: 13px;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.5;
 }
 .art-player-stage :deep(.art-layer-auto-playback .art-auto-playback-jump) {
   color: var(--art-theme, #2979ff);
