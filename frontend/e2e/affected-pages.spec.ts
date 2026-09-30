@@ -6,6 +6,7 @@ import {
   type TestInfo,
 } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 type Theme = "light" | "dark";
 type Viewport = { name: string; width: number; height: number };
@@ -431,6 +432,96 @@ async function geometry(page: Page) {
 }
 
 test.describe("affected page browser gate", () => {
+  test("compatibility timeline seeks to ungenerated media and keeps the full source duration", async ({
+    page,
+  }, testInfo) => {
+    const unknownRequests: string[] = [];
+    const requests: Array<Record<string, unknown>> = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await installFixtureApi(page, unknownRequests);
+    await page.route(/\/api\/media\/info(?:\?|$)/, (route) =>
+      json(route, {
+        videoCodec: "hevc",
+        audioCodec: "aac",
+        duration: 9000,
+        resolution: { width: 3840, height: 1600 },
+      })
+    );
+    await page.route(/\/api\/media\/hls(?:\?|$)/, async (route) => {
+      const data = JSON.parse(route.request().postData() || "{}");
+      requests.push(data);
+      await json(route, {
+        id: `window-${requests.length}`,
+        state: "completed",
+        sourceDurationSeconds: 9000,
+        startSeconds: data.startSeconds || 0,
+        windowSeconds: data.windowSeconds,
+        sourceUrl: "/api/test-window.webm",
+      });
+    });
+    await page.route(/\/api\/media\/hls\/window-.*\/cancel/, (route) =>
+      json(route, { state: "completed" })
+    );
+    // Small browser-decodable fixture, independent of production or NAS files.
+    await page.route(/\/api\/test-window\.webm/, (route) =>
+      route.fulfill({
+        contentType: "video/webm",
+          path: path.resolve(import.meta.dirname, "fixtures/timeline.webm"),
+      })
+    );
+    await login(page);
+    await page.goto("/files/fixture-video.mkv");
+    const timeline = page.getByRole("slider", { name: "视频完整时间线" });
+    await expect(timeline).toHaveAttribute("max", "8999.9");
+    await expect
+      .poll(() =>
+        page
+          .locator("video")
+          .evaluate((video: HTMLVideoElement) => video.readyState)
+      )
+      .toBeGreaterThanOrEqual(2);
+    await page.locator(".art-player-stage").hover();
+    await expect(page.locator(".compat-timeline__summary")).toContainText(
+      "02:30:00"
+    );
+    await timeline.evaluate((element: HTMLInputElement) => {
+      element.value = "6000";
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await expect
+      .poll(() => requests.some((item) => item.startSeconds === 6000))
+      .toBe(true);
+    expect(requests.at(-1)).toMatchObject({
+      startSeconds: 6000,
+      windowSeconds: 16,
+    });
+    await expect
+      .poll(() => page.locator(".compat-timeline__summary").textContent())
+      .toContain("01:40:");
+    await page.locator("video").click();
+    await page.keyboard.press("ArrowRight");
+    await expect
+      .poll(() => page.locator(".compat-timeline__summary").textContent())
+      .toContain("02:30:00");
+    await page.screenshot({
+      path: testInfo.outputPath("full-timeline-desktop.png"),
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator(".art-player-stage").hover();
+    const bounds = await timeline.boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth
+      )
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("full-timeline-mobile.png"),
+    });
+    expect(errors).toEqual([]);
+  });
   test("covers file navigation, trash status and sidebar controls", async ({
     page,
   }) => {

@@ -84,6 +84,9 @@ type Input struct {
 	// DurationSeconds is the probed source duration used to render truthful
 	// compatibility progress while a WebM artifact is being generated.
 	DurationSeconds float64
+	StartSeconds    float64
+	WindowSeconds   float64
+	SessionID       string
 }
 
 type SubtitleStream struct {
@@ -97,17 +100,21 @@ type AudioStream struct {
 }
 
 type Job struct {
-	ID              string
-	UserID          uint
-	Path            string
-	Identity        string
-	SourcePath      string
-	Profile         string
-	DurationSeconds float64
-	SubtitleStream  *int
-	AudioStream     *int
-	HDR             bool
-	report          func(Progress) error
+	ID                    string
+	UserID                uint
+	Path                  string
+	Identity              string
+	SourcePath            string
+	Profile               string
+	DurationSeconds       float64
+	SourceDurationSeconds float64
+	StartSeconds          float64
+	WindowSeconds         float64
+	SessionID             string
+	SubtitleStream        *int
+	AudioStream           *int
+	HDR                   bool
+	report                func(Progress) error
 }
 
 // IsWebMProfile reports whether a compatibility artifact is a complete WebM
@@ -217,9 +224,12 @@ type Status struct {
 	ProcessedSeconds float64 `json:"processedSeconds,omitempty"`
 	// DurationSeconds is the source duration paired with ProcessedSeconds.
 	// It may be zero when codec probing was unavailable.
-	DurationSeconds float64   `json:"durationSeconds,omitempty"`
-	UserID          uint      `json:"userId"`
-	Progress        *Progress `json:"progress,omitempty"`
+	DurationSeconds       float64   `json:"durationSeconds,omitempty"`
+	UserID                uint      `json:"userId"`
+	Progress              *Progress `json:"progress,omitempty"`
+	SourceDurationSeconds float64   `json:"sourceDurationSeconds,omitempty"`
+	StartSeconds          float64   `json:"startSeconds,omitempty"`
+	WindowSeconds         float64   `json:"windowSeconds,omitempty"`
 }
 
 type entry struct {
@@ -422,6 +432,9 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 		return Status{}, false, fmt.Errorf("HLS task starter is required")
 	}
 	cacheIdentity := input.Identity
+	if input.WindowSeconds > 0 {
+		cacheIdentity += fmt.Sprintf("\x00window-v1:%.3f:%.3f:%s", input.StartSeconds, input.WindowSeconds, input.SessionID)
+	}
 	if input.SubtitleStream != nil {
 		cacheIdentity += "\x00subtitle=" + strconv.Itoa(*input.SubtitleStream) + "\x00pgs-overlay-shortest-v1"
 	}
@@ -435,10 +448,17 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 		ID:     cacheKey(input.UserID, input.Path, cacheIdentity, profile),
 		UserID: input.UserID, Path: input.Path, Identity: input.Identity,
 		SourcePath: input.SourcePath, Profile: profile,
-		DurationSeconds: input.DurationSeconds,
-		SubtitleStream:  input.SubtitleStream,
-		AudioStream:     input.AudioStream,
-		HDR:             input.HDR,
+		DurationSeconds:       input.DurationSeconds,
+		SourceDurationSeconds: input.DurationSeconds,
+		StartSeconds:          input.StartSeconds,
+		WindowSeconds:         input.WindowSeconds,
+		SessionID:             input.SessionID,
+		SubtitleStream:        input.SubtitleStream,
+		AudioStream:           input.AudioStream,
+		HDR:                   input.HDR,
+	}
+	if input.WindowSeconds > 0 {
+		job.DurationSeconds = min(input.WindowSeconds, input.DurationSeconds-input.StartSeconds)
 	}
 
 	service.mu.Lock()
@@ -452,10 +472,13 @@ func (service *Service) reserve(input Input, profile string, start StartFunc) (S
 	current := &entry{Status: Status{
 		ID: job.ID, UserID: job.UserID, Path: job.Path, Identity: job.Identity,
 		Profile: job.Profile, State: StateQueued, UpdatedAt: now,
-		DurationSeconds: job.DurationSeconds,
-		SubtitleStream:  job.SubtitleStream,
-		AudioStream:     job.AudioStream,
-		HDR:             job.HDR,
+		DurationSeconds:       job.DurationSeconds,
+		SourceDurationSeconds: job.SourceDurationSeconds,
+		StartSeconds:          job.StartSeconds,
+		WindowSeconds:         job.WindowSeconds,
+		SubtitleStream:        job.SubtitleStream,
+		AudioStream:           job.AudioStream,
+		HDR:                   job.HDR,
 	}, sourcePath: job.SourcePath}
 	service.entries[job.ID] = current
 	taskID, err := start(job)

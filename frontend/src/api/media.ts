@@ -83,6 +83,9 @@ export type HLSPlaybackState =
   | "canceled";
 
 export interface HLSPlaybackStatus {
+  sourceDurationSeconds?: number;
+  startSeconds?: number;
+  windowSeconds?: number;
   id: string;
   taskId?: string;
   path: string;
@@ -242,7 +245,8 @@ export async function startHLSPlayback(
   format: "hls" | "mp4" | "webm" = "hls",
   quality: "source" | "4k" | "2k" | "1080p" | "720p" | "480p" = "source",
   subtitleStreamIndex?: number,
-  audioStreamIndex?: number
+  audioStreamIndex?: number,
+  window?: { startSeconds: number; windowSeconds: number; sessionId: string }
 ): Promise<HLSPlaybackStatus> {
   const response = await fetchURL("/api/media/hls", {
     method: "POST",
@@ -253,6 +257,7 @@ export async function startHLSPlayback(
       quality,
       ...(subtitleStreamIndex === undefined ? {} : { subtitleStreamIndex }),
       ...(audioStreamIndex === undefined ? {} : { audioStreamIndex }),
+      ...window,
     }),
   });
   return response.json() as Promise<HLSPlaybackStatus>;

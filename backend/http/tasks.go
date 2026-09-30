@@ -111,6 +111,9 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		if err != nil {
 			return nil, status, err
 		}
+		if err := applyPlaybackWindow(&input, args.StartSeconds, args.WindowSeconds, args.SessionID); err != nil {
+			return nil, http.StatusConflict, err
+		}
 		if args.SubtitleStreamIndex != nil {
 			if !validPGSSubtitleStream(input.SubtitleStreams, *args.SubtitleStreamIndex) {
 				return nil, http.StatusConflict, fmt.Errorf("原内挂字幕轨已不可用")

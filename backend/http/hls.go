@@ -24,43 +24,52 @@ import (
 )
 
 type mediaHLSStartRequest struct {
-	Path                string `json:"path"`
-	Format              string `json:"format,omitempty"`
-	Quality             string `json:"quality,omitempty"`
-	SubtitleStreamIndex *int   `json:"subtitleStreamIndex,omitempty"`
-	AudioStreamIndex    *int   `json:"audioStreamIndex,omitempty"`
+	Path                string  `json:"path"`
+	Format              string  `json:"format,omitempty"`
+	Quality             string  `json:"quality,omitempty"`
+	SubtitleStreamIndex *int    `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex    *int    `json:"audioStreamIndex,omitempty"`
+	StartSeconds        float64 `json:"startSeconds,omitempty"`
+	WindowSeconds       float64 `json:"windowSeconds,omitempty"`
+	SessionID           string  `json:"sessionId,omitempty"`
 }
 
 type mediaHLSTaskArgs struct {
-	Path                string `json:"path"`
-	CacheID             string `json:"cacheId"`
-	Identity            string `json:"identity"`
-	Format              string `json:"format,omitempty"`
-	Profile             string `json:"profile,omitempty"`
-	SubtitleStreamIndex *int   `json:"subtitleStreamIndex,omitempty"`
-	AudioStreamIndex    *int   `json:"audioStreamIndex,omitempty"`
+	Path                string  `json:"path"`
+	CacheID             string  `json:"cacheId"`
+	Identity            string  `json:"identity"`
+	Format              string  `json:"format,omitempty"`
+	Profile             string  `json:"profile,omitempty"`
+	SubtitleStreamIndex *int    `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex    *int    `json:"audioStreamIndex,omitempty"`
+	StartSeconds        float64 `json:"startSeconds,omitempty"`
+	WindowSeconds       float64 `json:"windowSeconds,omitempty"`
+	SessionID           string  `json:"sessionId,omitempty"`
 }
 
 type mediaHLSResponse struct {
-	ID                  string        `json:"id"`
-	TaskID              string        `json:"taskId,omitempty"`
-	Path                string        `json:"path"`
-	Identity            string        `json:"identity"`
-	Profile             string        `json:"profile"`
-	SubtitleStreamIndex *int          `json:"subtitleStreamIndex,omitempty"`
-	AudioStreamIndex    *int          `json:"audioStreamIndex,omitempty"`
-	HDRToneMapped       bool          `json:"hdrToneMapped,omitempty"`
-	State               hls.State     `json:"state"`
-	Error               string        `json:"error,omitempty"`
-	UpdatedAt           int64         `json:"updatedAt"`
-	LastAccessAt        int64         `json:"lastAccessAt,omitempty"`
-	SizeBytes           int64         `json:"sizeBytes,omitempty"`
-	ProcessedSeconds    float64       `json:"processedSeconds,omitempty"`
-	DurationSeconds     float64       `json:"durationSeconds,omitempty"`
-	Progress            *hls.Progress `json:"progress,omitempty"`
-	Format              string        `json:"format"`
-	PlaylistURL         string        `json:"playlistUrl,omitempty"`
-	SourceURL           string        `json:"sourceUrl,omitempty"`
+	ID                    string        `json:"id"`
+	TaskID                string        `json:"taskId,omitempty"`
+	Path                  string        `json:"path"`
+	Identity              string        `json:"identity"`
+	Profile               string        `json:"profile"`
+	SubtitleStreamIndex   *int          `json:"subtitleStreamIndex,omitempty"`
+	AudioStreamIndex      *int          `json:"audioStreamIndex,omitempty"`
+	HDRToneMapped         bool          `json:"hdrToneMapped,omitempty"`
+	State                 hls.State     `json:"state"`
+	Error                 string        `json:"error,omitempty"`
+	UpdatedAt             int64         `json:"updatedAt"`
+	LastAccessAt          int64         `json:"lastAccessAt,omitempty"`
+	SizeBytes             int64         `json:"sizeBytes,omitempty"`
+	ProcessedSeconds      float64       `json:"processedSeconds,omitempty"`
+	DurationSeconds       float64       `json:"durationSeconds,omitempty"`
+	Progress              *hls.Progress `json:"progress,omitempty"`
+	SourceDurationSeconds float64       `json:"sourceDurationSeconds,omitempty"`
+	StartSeconds          float64       `json:"startSeconds,omitempty"`
+	WindowSeconds         float64       `json:"windowSeconds,omitempty"`
+	Format                string        `json:"format"`
+	PlaylistURL           string        `json:"playlistUrl,omitempty"`
+	SourceURL             string        `json:"sourceUrl,omitempty"`
 }
 
 const mediaHLSCodecProbeTimeout = 5 * time.Second
@@ -98,6 +107,9 @@ func mediaHLSStartHandler(service *hls.Service, runtime *tasks.Runtime) handleFu
 		input, status, err := mediaHLSInputWithContext(r.Context(), d, d.user, request.Path, true)
 		if err != nil {
 			return status, err
+		}
+		if err := applyPlaybackWindow(&input, request.StartSeconds, request.WindowSeconds, request.SessionID); err != nil {
+			return http.StatusBadRequest, err
 		}
 		if request.SubtitleStreamIndex != nil {
 			if request.Format == "mp4" || !validPGSSubtitleStream(input.SubtitleStreams, *request.SubtitleStreamIndex) {
@@ -218,6 +230,9 @@ func mediaHLSCancelHandler(service *hls.Service, runtime *tasks.Runtime) handleF
 		status, err := service.Get(mux.Vars(r)["id"], d.user.ID)
 		if err != nil {
 			return mediaHLSErrorStatus(err), err
+		}
+		if status.State == hls.StateCompleted || status.State == hls.StateCanceled || status.State == hls.StateFailed {
+			return renderJSON(w, r, mediaHLSStatusResponse(d.server.BaseURL, status))
 		}
 		if status.TaskID == "" || (status.State != hls.StateQueued && status.State != hls.StatePreparing && status.State != hls.StateStreamable) {
 			return http.StatusConflict, hls.ErrState
@@ -376,11 +391,15 @@ func enqueueMediaHLSTask(runtime *tasks.Runtime, d *data, owner *users.User, ser
 	} else if hls.IsCopyProfile(job.Profile) {
 		format = "copy"
 	}
-	args, err := json.Marshal(mediaHLSTaskArgs{Path: job.Path, CacheID: job.ID, Identity: job.Identity, Format: format, Profile: job.Profile, SubtitleStreamIndex: job.SubtitleStream, AudioStreamIndex: job.AudioStream})
+	args, err := json.Marshal(mediaHLSTaskArgs{Path: job.Path, CacheID: job.ID, Identity: job.Identity, Format: format, Profile: job.Profile, SubtitleStreamIndex: job.SubtitleStream, AudioStreamIndex: job.AudioStream, StartSeconds: job.StartSeconds, WindowSeconds: job.WindowSeconds, SessionID: job.SessionID})
 	if err != nil {
 		return nil, err
 	}
-	task, err := d.store.Tasks.New(owner.ID, owner.Username, tasks.TypeMediaHLS, "兼容播放 "+path.Base(job.Path), args, retryOf)
+	title := "兼容播放 " + path.Base(job.Path)
+	if job.WindowSeconds > 0 {
+		title = fmt.Sprintf("播放片段 %.0f–%.0f 秒 · %s", job.StartSeconds, job.StartSeconds+job.DurationSeconds, path.Base(job.Path))
+	}
+	task, err := d.store.Tasks.New(owner.ID, owner.Username, tasks.TypeMediaHLS, title, args, retryOf)
 	if err != nil {
 		return nil, err
 	}
@@ -413,10 +432,13 @@ func mediaHLSStatusResponse(baseURL string, status hls.Status) mediaHLSResponse 
 		HDRToneMapped:       status.HDR,
 		Error:               status.Error, UpdatedAt: status.UpdatedAt,
 		LastAccessAt: status.LastAccessAt, SizeBytes: status.SizeBytes,
-		ProcessedSeconds: status.ProcessedSeconds,
-		DurationSeconds:  status.DurationSeconds,
-		Progress:         status.Progress,
-		Format:           "hls",
+		ProcessedSeconds:      status.ProcessedSeconds,
+		DurationSeconds:       status.DurationSeconds,
+		Progress:              status.Progress,
+		SourceDurationSeconds: status.SourceDurationSeconds,
+		StartSeconds:          status.StartSeconds,
+		WindowSeconds:         status.WindowSeconds,
+		Format:                "hls",
 	}
 	if hls.IsWebMProfile(status.Profile) {
 		response.Format = "webm"

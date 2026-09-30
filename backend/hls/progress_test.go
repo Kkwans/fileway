@@ -45,3 +45,25 @@ func TestRunReportsQueueAndPreparation(t *testing.T) {
 		t.Fatal(phases)
 	}
 }
+
+func TestPlaybackWindowUsesFastInputSeekAndDistinctCache(t *testing.T) {
+	service := newFakeService(t, 1, DefaultMaxBytes, 0)
+	input := Input{UserID: 1, Path: "/film.mkv", SourcePath: "/source.mkv", Identity: "source", DurationSeconds: 600, StartSeconds: 300, WindowSeconds: 120, SessionID: "one"}
+	var job Job
+	first, _, err := service.Reserve(input, func(candidate Job) (string, error) { job = candidate; return "one", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.DurationSeconds != 120 || first.SourceDurationSeconds != 600 || first.StartSeconds != 300 {
+		t.Fatalf("%+v %+v", job, first)
+	}
+	input.SessionID = "two"
+	second, _, err := service.Reserve(input, func(Job) (string, error) { return "two", nil })
+	if err != nil || first.ID == second.ID {
+		t.Fatalf("cache not isolated: %+v %v", second, err)
+	}
+	joined := strings.Join(playbackWindowArgs([]string{"ffmpeg", "-i", "source", "-f", "webm", "output"}, job), " ")
+	if !strings.Contains(joined, "-ss 300.000 -i source") || !strings.HasSuffix(joined, "-t 120.000 output") {
+		t.Fatal(joined)
+	}
+}

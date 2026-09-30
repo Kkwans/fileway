@@ -7,9 +7,25 @@
       'art-player-stage--portrait': isPortrait,
       'art-player-stage--mobile': isMobile,
       'art-player-stage--rate-open': rateDialogVisible,
+      'art-player-stage--timeline':
+        actualMode === 'compat' && sourceDuration > 0,
     }"
   >
     <div ref="container" class="art-player-box"></div>
+    <Teleport
+      v-if="playerRoot && actualMode === 'compat' && sourceDuration > 0"
+      :to="playerRoot"
+    >
+      <CompatibilityTimeline
+        :duration="sourceDuration"
+        :position="timelinePosition"
+        :available-start="compatOffset"
+        :available-end="timelineAvailableEnd"
+        :busy="busy"
+        :sprite="timelineSprite"
+        @seek="seekTo"
+      />
+    </Teleport>
 
     <div v-if="loadingVisible" class="art-loading" role="status">
       <div class="art-ring" aria-hidden="true"></div>
@@ -176,6 +192,7 @@ import {
   videoResolutionLabel,
 } from "@/utils/videoResolution";
 import PathPicker from "@/components/prompts/PathPicker.vue";
+import CompatibilityTimeline from "./CompatibilityTimeline.vue";
 
 type Policy = "native" | "compat" | "ask";
 type ActualMode = "native" | "compat";
@@ -211,6 +228,14 @@ const rateDialogVisible = ref(false);
 const rateInput = ref<HTMLInputElement | null>(null);
 const sourceWidth = ref(0);
 const sourceHeight = ref(0);
+const sourceDuration = ref(0);
+const compatOffset = ref(0);
+const timelinePosition = ref(0);
+const timelineAvailableEnd = ref(0);
+const timelineSprite = ref<mediaApi.VideoSprite>();
+const playbackSession = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let activeCompatCacheID = "";
+let pendingSeek: number | null = null;
 const sourceVideoCodec = ref("");
 const sourceAudioCodec = ref("");
 const embeddedSubtitleTracks = ref<MediaTrack[]>([]);
@@ -697,16 +722,13 @@ function injectResumeToast(
       const video = art.value?.video as HTMLVideoElement | undefined;
       if (act === "resume") {
         if (video) {
-          video.currentTime = Math.min(
-            position,
-            (video.duration || position) - 0.5
-          );
+          seekTo(position);
           void video.play?.().catch(() => {});
         }
         dismiss();
       } else if (act === "restart") {
         if (video) {
-          video.currentTime = 0;
+          seekTo(0);
           void video.play?.().catch(() => {});
         }
         void mediaApi.clearPlayback(props.path).catch(() => {});
@@ -972,6 +994,32 @@ function applySubtitleChrome() {
   } catch {
     /* ignore */
   }
+  shiftSubtitleTimeline();
+}
+
+function shiftSubtitleTimeline() {
+  const subtitle = art.value?.subtitle as unknown as
+    | {
+        cues?: Array<
+          VTTCue & { originalStartTime?: number; originalEndTime?: number }
+        >;
+        update?: () => void;
+      }
+    | undefined;
+  if (!subtitle?.cues) return;
+  const offset = actualMode.value === "compat" ? compatOffset.value : 0;
+  for (const cue of subtitle.cues) {
+    cue.originalStartTime ??= cue.startTime;
+    cue.originalEndTime ??= cue.endTime;
+    const start = cue.originalStartTime - offset + subtitlePrefs.value.offset;
+    const end = cue.originalEndTime - offset + subtitlePrefs.value.offset;
+    // Past cues must not become zero-length cues visible at the new origin.
+    cue.startTime =
+      end <= 0 ? (sourceDuration.value || 86400) + 1 : Math.max(0, start);
+    cue.endTime =
+      end <= 0 ? cue.startTime + 0.001 : Math.max(cue.startTime + 0.001, end);
+  }
+  subtitle.update?.();
 }
 
 function switchSubtitle(item: { html: string; value: string; name?: string }) {
@@ -1082,9 +1130,12 @@ function switchAudioTrack(item: { value: string; html: string }) {
 }
 
 function persistPlaybackPosition(force = false) {
+  if (switchingEngine && !force) return;
   const video = art.value?.video as HTMLVideoElement | undefined;
   if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
-  const pos = video.currentTime;
+  const pos =
+    video.currentTime +
+    (actualMode.value === "compat" ? compatOffset.value : 0);
   if (!Number.isFinite(pos) || pos < 1) return;
   const now = Date.now();
   if (
@@ -1096,16 +1147,96 @@ function persistPlaybackPosition(force = false) {
   }
   lastSavedPosition = pos;
   lastSaveAt = now;
-  void mediaApi.savePlayback(props.path, pos, video.duration).catch(() => {});
+  void mediaApi
+    .savePlayback(
+      props.path,
+      pos,
+      actualMode.value === "compat"
+        ? sourceDuration.value || video.duration
+        : video.duration
+    )
+    .catch(() => {});
 }
 
 function captureResume() {
   const video = art.value?.video as HTMLVideoElement | undefined;
   return {
-    position: video?.currentTime || 0,
+    position:
+      (video?.currentTime || 0) +
+      (actualMode.value === "compat" ? compatOffset.value : 0),
     playing: !!video && !video.paused && !video.ended,
     rate: currentRate.value,
   };
+}
+
+function updateTimeline() {
+  const video = art.value?.video;
+  if (!video || switchingEngine) return;
+  const offset = actualMode.value === "compat" ? compatOffset.value : 0;
+  timelinePosition.value = Math.min(
+    sourceDuration.value || Infinity,
+    offset + video.currentTime
+  );
+  const end = video.seekable.length
+    ? video.seekable.end(video.seekable.length - 1)
+    : 0;
+  timelineAvailableEnd.value = Math.min(
+    sourceDuration.value || Infinity,
+    offset + end
+  );
+}
+
+function seekTo(seconds: number) {
+  const video = art.value?.video;
+  if (!video || !Number.isFinite(seconds)) return;
+  const target = Math.max(
+    0,
+    Math.min(seconds, (sourceDuration.value || video.duration) - 0.1)
+  );
+  if (switchingEngine) {
+    pendingSeek = target;
+    if (activeCompatCacheID)
+      void mediaApi.cancelHLSPlayback(activeCompatCacheID).catch(() => {});
+    return;
+  }
+  const offset = actualMode.value === "compat" ? compatOffset.value : 0;
+  const local = target - offset;
+  const available = Array.from({ length: video.seekable.length }, (_, i) => [
+    video.seekable.start(i),
+    video.seekable.end(i),
+  ]).some(([start, end]) => local >= start && local < end - 0.1);
+  timelinePosition.value = target;
+  if (actualMode.value !== "compat" || available) {
+    video.currentTime = Math.max(0, local);
+    notice(
+      `${formatClock(target)} / ${formatClock(sourceDuration.value || video.duration)}`
+    );
+  } else {
+    notice(`正在跳转到 ${formatClock(target)}…`);
+    void switchEngine("compat", transcodeQuality.value, true, target);
+  }
+}
+
+function handleTimelineKey(event: KeyboardEvent) {
+  if (
+    actualMode.value !== "compat" ||
+    !sourceDuration.value ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey
+  )
+    return;
+  const target = event.target as HTMLElement | null;
+  if (
+    target?.closest(
+      "input, textarea, select, [contenteditable=true], [role=dialog]"
+    )
+  )
+    return;
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  seekTo(timelinePosition.value + (event.key === "ArrowRight" ? 5 : -5));
 }
 
 function applyResume(resume: {
@@ -1123,6 +1254,9 @@ function applyResume(resume: {
     try {
       const video = player.video;
       if (video && resume.position > 0.5 && Number.isFinite(video.duration)) {
+        const localPosition =
+          resume.position -
+          (actualMode.value === "compat" ? compatOffset.value : 0);
         let max = Math.max(0, video.duration - 0.5);
         try {
           if (video.seekable && video.seekable.length > 0) {
@@ -1134,10 +1268,18 @@ function applyResume(resume: {
         } catch {
           /* ignore */
         }
-        if (resume.position > max + 0.5 && max > 0.5) {
+        if (
+          actualMode.value === "compat" &&
+          sourceDuration.value > 0 &&
+          (localPosition < 0 || localPosition > max + 0.5)
+        ) {
+          seekTo(resume.position);
+          return;
+        }
+        if (localPosition > max + 0.5 && max > 0.5) {
           notice("进度超出可播范围，已从较近位置继续");
         }
-        video.currentTime = Math.min(resume.position, max);
+        video.currentTime = Math.min(Math.max(0, localPosition), max);
       }
       try {
         player.playbackRate = currentRate.value;
@@ -1308,7 +1450,8 @@ function installPlayerChrome() {
 async function switchEngine(
   mode: ActualMode,
   quality?: Quality,
-  fromAuto = false
+  fromAuto = false,
+  targetPosition?: number
 ) {
   if (switchingEngine) return;
   if (mode === "native" && embeddedSubtitleIndex.value !== null) {
@@ -1326,6 +1469,10 @@ async function switchEngine(
   switchingEngine = true;
   const token = ++switchToken;
   const resume = captureResume();
+  if (targetPosition !== undefined) {
+    resume.position = targetPosition;
+    resume.playing = true;
+  }
   persistPlaybackPosition(true);
 
   const targetQuality =
@@ -1379,13 +1526,32 @@ async function switchEngine(
       loadStatusText.value = "正在请求转码任务…";
       const format = supportsH264CompatibilityPlayback() ? "hls" : "webm";
       const backendQuality = q === "2160p" ? "4k" : q === "1440p" ? "2k" : q;
+      art.value?.video.pause();
+      detachHls();
+      if (activeCompatCacheID) {
+        await mediaApi.cancelHLSPlayback(activeCompatCacheID).catch(() => {});
+        activeCompatCacheID = "";
+      }
+      const playbackWindow =
+        sourceDuration.value > 0
+          ? {
+              startSeconds: Math.max(
+                0,
+                Math.min(resume.position, sourceDuration.value - 0.1)
+              ),
+              windowSeconds: format === "webm" ? 16 : 120,
+              sessionId: playbackSession,
+            }
+          : undefined;
       let status = await mediaApi.startHLSPlayback(
         props.path,
         format,
         backendQuality,
         embeddedSubtitleIndex.value ?? undefined,
-        embeddedAudioIndex.value ?? undefined
+        embeddedAudioIndex.value ?? undefined,
+        playbackWindow
       );
+      activeCompatCacheID = playbackWindow ? status.id : "";
       while (
         token === switchToken &&
         status.id &&
@@ -1427,6 +1593,11 @@ async function switchEngine(
       const hlsUrl = url.startsWith("http")
         ? url
         : createURL(url.replace(/^\/+/, ""), {});
+      compatOffset.value = status.startSeconds || 0;
+      timelinePosition.value = resume.position;
+      timelineAvailableEnd.value = compatOffset.value;
+      if (status.sourceDurationSeconds)
+        sourceDuration.value = status.sourceDurationSeconds;
       if (status.playlistUrl) await attachHls(hlsUrl);
       else if (art.value) art.value.url = hlsUrl;
       if (token !== switchToken) return;
@@ -1448,6 +1619,11 @@ async function switchEngine(
       }
       refreshMediaUiState("hls-attached");
     } else {
+      if (activeCompatCacheID) {
+        void mediaApi.cancelHLSPlayback(activeCompatCacheID).catch(() => {});
+        activeCompatCacheID = "";
+      }
+      compatOffset.value = 0;
       detachHls();
       clearNativeProgressHooks();
       if (!art.value) return;
@@ -1458,11 +1634,17 @@ async function switchEngine(
   } catch (e) {
     if (token !== switchToken) return;
     loadProgress.value = null;
-    notice(e instanceof Error ? e.message : "切换播放方式失败");
+    if (pendingSeek === null)
+      notice(e instanceof Error ? e.message : "切换播放方式失败");
   } finally {
     if (token === switchToken) {
       switchingEngine = false;
       busy.value = false;
+      if (pendingSeek !== null) {
+        const next = pendingSeek;
+        pendingSeek = null;
+        window.setTimeout(() => seekTo(next), 0);
+      }
       syncPlayerLabels();
       loaderForceTimer = window.setTimeout(() => {
         if (token !== switchToken) return;
@@ -1551,6 +1733,7 @@ async function loadMediaInfo() {
     const info = await mediaApi.getMediaInformation(props.path, false);
     sourceVideoCodec.value = info.videoCodec || "";
     sourceAudioCodec.value = info.audioCodec || "";
+    sourceDuration.value = info.duration || 0;
     if (info.resolution) {
       sourceWidth.value = info.resolution.width || 0;
       sourceHeight.value = info.resolution.height || 0;
@@ -1589,6 +1772,7 @@ async function loadVideoSprite() {
       !sprite.number
     )
       return;
+    timelineSprite.value = sprite;
     art.value.thumbnails = {
       url: sprite.url,
       number: sprite.number,
@@ -2463,6 +2647,17 @@ onMounted(async () => {
   // ArtPlayer renders controls before media is ready; make them usable during
   // a cold compatibility transcode instead of waiting for the ready event.
   playerFeedbackRail(art.value.template.$player);
+  // ArtPlayer's toggle handlers do not await play(). A user pause or source
+  // switch can abort that promise normally; retain actual decoder failures.
+  const videoElement = art.value.video;
+  const nativePlay = videoElement.play.bind(videoElement);
+  videoElement.play = () =>
+    nativePlay().catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      throw error;
+    });
+  playerRoot.value = art.value.template.$player;
+  document.addEventListener("keydown", handleTimelineKey, true);
   bindBarSelectorPopups();
   hardenSelectorLists();
   void loadVideoSprite();
@@ -2616,7 +2811,19 @@ onMounted(async () => {
   });
 
   art.value.on("video:timeupdate", () => {
+    updateTimeline();
     persistPlaybackPosition(false);
+  });
+  art.value.on("video:progress", updateTimeline);
+  art.value.on("video:ended", () => {
+    if (
+      actualMode.value === "compat" &&
+      activeCompatCacheID &&
+      sourceDuration.value > 0 &&
+      timelinePosition.value < sourceDuration.value - 0.5
+    ) {
+      seekTo(timelinePosition.value);
+    }
   });
   art.value.on("pause", () => {
     persistPlaybackPosition(true);
@@ -2626,6 +2833,7 @@ onMounted(async () => {
     if (Number.isFinite(n)) {
       subtitlePrefs.value.offset = Math.round(n * 10) / 10;
       persistSubtitlePrefs();
+      shiftSubtitleTimeline();
       syncSettingEcho(
         "subtitle-offset",
         `${subtitlePrefs.value.offset > 0 ? "+" : ""}${subtitlePrefs.value.offset}s`
@@ -2679,6 +2887,8 @@ watch(isPortrait, () => {
 });
 
 onBeforeUnmount(() => {
+  if (activeCompatCacheID)
+    void mediaApi.cancelHLSPlayback(activeCompatCacheID).catch(() => {});
   ++switchToken;
   persistPlaybackPosition(true);
   stopLoadWaitTimer();
@@ -2695,6 +2905,7 @@ onBeforeUnmount(() => {
   clearNativeProgressHooks();
   detachHls();
   art.value?.destroy(false);
+  document.removeEventListener("keydown", handleTimelineKey, true);
   art.value = null;
 });
 </script>
@@ -2711,6 +2922,25 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   min-height: 320px;
+}
+.art-player-stage--timeline :deep(.art-control-progress),
+.art-player-stage--timeline :deep(.art-control-time) {
+  display: none !important;
+}
+.art-player-stage--timeline :deep(.nfb-player-feedback) {
+  margin-bottom: 44px;
+}
+.art-player-stage--timeline :deep(.compat-timeline) {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.art-player-stage--timeline :deep(.art-control-show .compat-timeline),
+.art-player-stage--timeline :deep(.art-hover .compat-timeline),
+.art-player-stage--timeline.art-player-stage--busy :deep(.compat-timeline),
+.art-player-stage--timeline :deep(.compat-timeline:focus-within) {
+  opacity: 1;
+  pointer-events: auto;
 }
 .art-player-box :deep(.art-loading),
 .art-player-box :deep(.art-video-loading) {

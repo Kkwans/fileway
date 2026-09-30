@@ -64,6 +64,7 @@ func (service *Service) publishProgress(job Job, p Progress) error {
 // Start stdout consumption before waiting on FFmpeg. StdoutPipe must be
 // drained before Wait closes the pipe, including for very fast remux jobs.
 func (service *Service) startProgress(command *exec.Cmd, job Job) (<-chan error, error) {
+	command.Args = playbackWindowArgs(command.Args, job)
 	if !containsProgressArg(command.Args) {
 		command.Args = append([]string{command.Args[0], "-progress", "pipe:1", "-stats_period", "1"}, command.Args[1:]...)
 	}
@@ -83,6 +84,22 @@ func (service *Service) startProgress(command *exec.Cmd, job Job) (<-chan error,
 		done <- err
 	}()
 	return done, nil
+}
+
+func playbackWindowArgs(args []string, job Job) []string {
+	if job.WindowSeconds <= 0 {
+		return args
+	}
+	result := make([]string, 0, len(args)+4)
+	for _, arg := range args {
+		if arg == "-i" {
+			result = append(result, "-ss", strconv.FormatFloat(job.StartSeconds, 'f', 3, 64))
+		}
+		result = append(result, arg)
+	}
+	output := result[len(result)-1]
+	result = result[:len(result)-1]
+	return append(result, "-t", strconv.FormatFloat(job.DurationSeconds, 'f', 3, 64), output)
 }
 
 func (service *Service) runProgress(command *exec.Cmd, job Job) error {
