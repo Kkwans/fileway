@@ -245,7 +245,7 @@ export function getVideoSprite(path: string): Promise<VideoSprite> {
 export async function startTranscodes(
   paths: string[],
   quality: string,
-  destination: string
+  destination?: string
 ) {
   const response = await fetchURL("/api/media/transcodes", {
     method: "POST",

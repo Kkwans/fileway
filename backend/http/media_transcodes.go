@@ -27,6 +27,56 @@ type mediaTranscodeArgs struct {
 	OutputPath string `json:"outputPath"`
 }
 
+// An omitted destination saves each video beside its source, including videos
+// found recursively. Validate the complete output plan before enqueueing work.
+func planTranscodeOutputs(d *data, videos []string, quality, destination string) ([]mediaTranscodeArgs, error) {
+	if destination != "" {
+		var err error
+		destination, err = normalizeTransferPath(destination)
+		if err != nil {
+			return nil, err
+		}
+	}
+	validated := make(map[string]bool)
+	reserved := make(map[string]bool)
+	outputs := make([]mediaTranscodeArgs, 0, len(videos))
+	for _, source := range videos {
+		directory := destination
+		if directory == "" {
+			directory = path.Dir(source)
+		}
+		if !validated[directory] {
+			dir, err := files.NewFileInfo(&files.FileOptions{Fs: d.user.Fs, Path: directory, SkipSubtitles: true, Modify: d.user.Perm.Modify, Checker: d})
+			if err != nil {
+				return nil, err
+			}
+			if !dir.IsDir {
+				return nil, fmt.Errorf("输出目录无效")
+			}
+			validated[directory] = true
+		}
+		name := path.Base(source)
+		stem := name[:len(name)-len(path.Ext(name))] + "." + quality
+		output := path.Join(directory, stem+".mp4")
+		for suffix := 2; ; suffix++ {
+			_, err := d.user.Fs.Stat(output)
+			if os.IsNotExist(err) && !reserved[output] {
+				break
+			}
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+			output = path.Join(directory, fmt.Sprintf("%s (%d).mp4", stem, suffix))
+		}
+		if !d.Check(output) {
+			return nil, os.ErrPermission
+		}
+		reserved[output] = true
+		outputs = append(outputs, mediaTranscodeArgs{Path: source, Quality: quality, OutputPath: output})
+	}
+	return outputs, nil
+}
+
 func collectTranscodeVideos(ctx context.Context, d *data, paths []string) ([]string, error) {
 	seen := make(map[string]bool)
 	videos := make([]string, 0)
@@ -97,17 +147,6 @@ func mediaTranscodesHandler(service *hls.Service, runtime *tasks.Runtime) handle
 		if !mediaHLSQualityAllowed(request.Quality) || request.Quality == "native" {
 			return http.StatusBadRequest, fmt.Errorf("转码画质无效")
 		}
-		destination, err := normalizeTransferPath(request.Destination)
-		if err != nil {
-			return http.StatusBadRequest, err
-		}
-		dir, err := files.NewFileInfo(&files.FileOptions{Fs: d.user.Fs, Path: destination, Expand: true, SkipSubtitles: true, Modify: d.user.Perm.Modify, Checker: d})
-		if err != nil {
-			return errToStatus(err), err
-		}
-		if !dir.IsDir {
-			return http.StatusBadRequest, fmt.Errorf("输出目录无效")
-		}
 		videos, err := collectTranscodeVideos(r.Context(), d, request.Paths)
 		if err != nil {
 			return errToStatus(err), err
@@ -115,30 +154,16 @@ func mediaTranscodesHandler(service *hls.Service, runtime *tasks.Runtime) handle
 		if len(videos) == 0 {
 			return http.StatusBadRequest, fmt.Errorf("所选内容中没有可转码的视频")
 		}
+		outputs, err := planTranscodeOutputs(d, videos, request.Quality, request.Destination)
+		if err != nil {
+			return errToStatus(err), err
+		}
 		items := make([]*tasks.Task, 0, len(videos))
 		failures := make([]map[string]string, 0)
-		reserved := make(map[string]bool)
-		for _, source := range videos {
-			name := path.Base(source)
-			name = name[:len(name)-len(path.Ext(name))] + "." + request.Quality + ".mp4"
-			output := path.Join(destination, name)
-			for suffix := 2; ; suffix++ {
-				_, statErr := d.user.Fs.Stat(output)
-				if os.IsNotExist(statErr) && !reserved[output] {
-					break
-				}
-				if statErr != nil && !os.IsNotExist(statErr) {
-					return errToStatus(statErr), statErr
-				}
-				output = path.Join(destination, fmt.Sprintf("%s (%d).mp4", name[:len(name)-4], suffix))
-			}
-			reserved[output] = true
-			if !d.Check(output) {
-				return http.StatusForbidden, fmt.Errorf("无法在所选目录创建转码文件")
-			}
-			task, err := enqueueMediaTranscode(runtime, d, d.user, service, mediaTranscodeArgs{Path: source, Quality: request.Quality, OutputPath: output}, "")
+		for _, args := range outputs {
+			task, err := enqueueMediaTranscode(runtime, d, d.user, service, args, "")
 			if err != nil {
-				failures = append(failures, map[string]string{"path": source, "error": err.Error()})
+				failures = append(failures, map[string]string{"path": args.Path, "error": err.Error()})
 			} else {
 				items = append(items, task)
 			}

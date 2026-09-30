@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/Kkwans/nas-file-browser/backend/settings"
@@ -57,5 +58,49 @@ func TestTranscodeDirectoryScanDeduplicatesAndSkipsNonVideo(t *testing.T) {
 	}
 	if len(videos) != 2 {
 		t.Fatal(videos)
+	}
+}
+
+func TestTranscodeOutputPlanDefaultsToEachSourceDirectory(t *testing.T) {
+	h := newTrashHTTPHarness(t, users.User{Username: "owner", Perm: users.Permissions{Download: true, Create: true}})
+	owner := firstTrashHTTPUser(h)
+	owner.Fs = h.fs[owner.ID]
+	for _, directory := range []string{"/movies/nested", "/other", "/output"} {
+		if err := owner.Fs.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &data{user: owner, server: h.server, store: h.storage, settings: &settings.Settings{}}
+	videos := []string{"/movies/film.mkv", "/movies/nested/film.mkv", "/other/film.mkv"}
+	for _, tc := range []struct {
+		name, destination string
+		want              []string
+	}{
+		{"source", "", []string{"/movies/film.source.mp4", "/movies/nested/film.source.mp4", "/other/film.source.mp4"}},
+		{"custom", "/output", []string{"/output/film.source.mp4", "/output/film.source (2).mp4", "/output/film.source (3).mp4"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := planTranscodeOutputs(d, videos, "source", tc.destination)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, len(args))
+			for i, item := range args {
+				got[i] = item.OutputPath
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v; want %v", got, tc.want)
+			}
+		})
+	}
+	if err := afero.WriteFile(owner.Fs, "/movies/film.source.mp4", []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args, err := planTranscodeOutputs(d, videos, "source", "")
+	if err != nil || args[0].OutputPath != "/movies/film.source (2).mp4" {
+		t.Fatalf("existing output: %v %v", args, err)
+	}
+	if args, err := planTranscodeOutputs(d, append(videos, "/missing/film.mkv"), "source", ""); err == nil || args != nil {
+		t.Fatalf("must reject entire invalid plan: %v %v", args, err)
 	}
 }

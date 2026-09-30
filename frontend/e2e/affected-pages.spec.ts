@@ -497,6 +497,17 @@ test.describe("affected page browser gate", () => {
     await page.getByRole("button", { name: "更多", exact: true }).click();
     await page.getByRole("button", { name: "后台转码", exact: true }).click();
     await expect(page.getByLabel("画质 / 分辨率")).toHaveValue("source");
+    await expect(
+      page.getByRole("radio", { name: /源文件所在目录/ })
+    ).toBeChecked();
+    await expect(
+      page.getByRole("button", { name: /选择转码输出目录/ })
+    ).toHaveCount(0);
+    await page.getByRole("radio", { name: /指定目录/ }).check();
+    await expect(
+      page.getByRole("button", { name: /选择转码输出目录/ })
+    ).toBeVisible();
+    await page.getByRole("radio", { name: /源文件所在目录/ }).check();
     for (const theme of themes) {
       await setTheme(page, theme);
       for (const viewport of viewports) {
@@ -519,8 +530,8 @@ test.describe("affected page browser gate", () => {
     expect(submissions[0]).toMatchObject({
       paths: ["/"],
       quality: "source",
-      destination: "/",
     });
+    expect(submissions[0]).not.toHaveProperty("destination");
     await expect(page.getByRole("link", { name: "边转边播" })).toBeVisible();
     await expect(page.locator(".task-center-media-metrics")).toContainText(
       "0.50×"
