@@ -149,7 +149,7 @@
                     >{{ statusLabel(task.status) }}</span
                   >
                 </div>
-                <p v-if="!task.type.startsWith('media.')">
+                <p v-if="task.type !== 'media.transcode'">
                   {{ taskTypeLabel(task.type) }}
                 </p>
                 <p
@@ -197,7 +197,9 @@
                       {{ formatMediaTime(taskProgress(task).value) }}</span
                     >
                     <span
-                      >视频时长
+                      >{{
+                        task.type === "media.hls" ? "本次处理时长" : "视频时长"
+                      }}
                       {{ formatMediaTime(task.media.durationSeconds) }}</span
                     >
                   </div>

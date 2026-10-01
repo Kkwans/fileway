@@ -241,6 +241,17 @@ let backgroundDetached = false;
 let backgroundQualityApplied = false;
 const playbackSession = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 let activeCompatCacheID = "";
+let compatWindowSeconds = 0;
+let resumePromptShown = false;
+type PrefetchedWindow = {
+  start: number;
+  signature: string;
+  adopted: boolean;
+  status?: mediaApi.HLSPlaybackStatus;
+  request: Promise<mediaApi.HLSPlaybackStatus | undefined>;
+};
+let prefetchedWindow: PrefetchedWindow | null = null;
+let attemptedPrefetchStart = -1;
 let pendingSeek: number | null = null;
 const sourceVideoCodec = ref("");
 const sourceVideoBitDepth = ref(0);
@@ -1192,6 +1203,88 @@ function updateTimeline() {
     sourceDuration.value || Infinity,
     offset + end
   );
+  maybePrefetchWindow(video);
+}
+
+function compatibilityRequestOptions(quality: Quality) {
+  const q = quality === "native" ? preferredCompatQuality() : quality;
+  const format = supportsH264CompatibilityPlayback()
+    ? ("hls" as const)
+    : ("webm" as const);
+  const backendQuality =
+    q === "2160p" ? ("4k" as const) : q === "1440p" ? ("2k" as const) : q;
+  return {
+    format,
+    quality: backendQuality,
+    signature: JSON.stringify([
+      format,
+      backendQuality,
+      embeddedSubtitleIndex.value,
+      embeddedAudioIndex.value,
+    ]),
+  };
+}
+
+function discardPrefetchedWindow(window: PrefetchedWindow | null) {
+  if (window?.status?.id)
+    void mediaApi.cancelHLSPlayback(window.status.id).catch(() => {});
+  // A request still in flight checks ownership on resolution and cancels itself.
+}
+
+function maybePrefetchWindow(video: HTMLVideoElement) {
+  if (
+    backgroundDetached ||
+    switchingEngine ||
+    actualMode.value !== "compat" ||
+    !activeCompatCacheID ||
+    video.paused ||
+    prefetchedWindow ||
+    compatWindowSeconds <= 0
+  )
+    return;
+  const nextStart = compatOffset.value + compatWindowSeconds;
+  const options = compatibilityRequestOptions(transcodeQuality.value);
+  const ahead = options.format === "webm" ? 8 : 30;
+  if (
+    nextStart >= sourceDuration.value - 0.1 ||
+    attemptedPrefetchStart === nextStart ||
+    video.currentTime < Math.max(0, compatWindowSeconds - ahead)
+  )
+    return;
+  attemptedPrefetchStart = nextStart;
+  const candidate: PrefetchedWindow = {
+    start: nextStart,
+    signature: options.signature,
+    adopted: false,
+    request: Promise.resolve(undefined),
+  };
+  prefetchedWindow = candidate;
+  candidate.request = mediaApi
+    .startHLSPlayback(
+      props.path,
+      options.format,
+      options.quality,
+      embeddedSubtitleIndex.value ?? undefined,
+      embeddedAudioIndex.value ?? undefined,
+      {
+        startSeconds: nextStart,
+        windowSeconds: options.format === "webm" ? 16 : 120,
+        sessionId: `${playbackSession}-prefetch-${nextStart.toFixed(3)}`,
+      }
+    )
+    .then((status) => {
+      candidate.status = status;
+      if (
+        backgroundDetached ||
+        (!candidate.adopted && prefetchedWindow !== candidate)
+      )
+        discardPrefetchedWindow(candidate);
+      return status;
+    })
+    .catch(() => {
+      if (prefetchedWindow === candidate) prefetchedWindow = null;
+      return undefined;
+    });
 }
 
 function seekTo(seconds: number) {
@@ -1487,6 +1580,17 @@ async function switchEngine(
     mode === "compat"
       ? (quality ?? preferredCompatQuality())
       : transcodeQuality.value;
+  const candidate = prefetchedWindow;
+  prefetchedWindow = null;
+  attemptedPrefetchStart = -1;
+  const reusePrefetch =
+    mode === "compat" &&
+    candidate &&
+    Math.abs(candidate.start - resume.position) < 0.5 &&
+    candidate.signature ===
+      compatibilityRequestOptions(targetQuality).signature;
+  if (reusePrefetch) candidate.adopted = true;
+  else discardPrefetchedWindow(candidate);
 
   // Optimistic UI — user sees the switch immediately
   actualMode.value = mode;
@@ -1551,14 +1655,21 @@ async function switchEngine(
               sessionId: playbackSession,
             }
           : undefined;
-      let status = await mediaApi.startHLSPlayback(
-        props.path,
-        format,
-        backendQuality,
-        embeddedSubtitleIndex.value ?? undefined,
-        embeddedAudioIndex.value ?? undefined,
-        playbackWindow
-      );
+      let status =
+        (reusePrefetch ? await candidate.request : undefined) ||
+        (await mediaApi.startHLSPlayback(
+          props.path,
+          format,
+          backendQuality,
+          embeddedSubtitleIndex.value ?? undefined,
+          embeddedAudioIndex.value ?? undefined,
+          playbackWindow
+        ));
+      if (token !== switchToken) {
+        if (playbackWindow)
+          void mediaApi.cancelHLSPlayback(status.id).catch(() => {});
+        return;
+      }
       activeCompatCacheID = playbackWindow ? status.id : "";
       while (
         token === switchToken &&
@@ -1602,6 +1713,7 @@ async function switchEngine(
         ? url
         : createURL(url.replace(/^\/+/, ""), {});
       compatOffset.value = status.startSeconds || 0;
+      compatWindowSeconds = status.durationSeconds || status.windowSeconds || 0;
       timelinePosition.value = resume.position;
       timelineAvailableEnd.value = compatOffset.value;
       if (status.sourceDurationSeconds)
@@ -1611,13 +1723,16 @@ async function switchEngine(
       if (token !== switchToken) return;
       if (status.id && !mediaUiReady.value)
         startCompatProgressPolling(status.id);
-      notice(
-        fromAuto
-          ? embeddedSubtitleIndex.value !== null
-            ? "已切换兼容转码以显示内挂字幕"
-            : "原生无法播放，已切换兼容转码"
-          : `已切换兼容 · ${qualityLabel(transcodeQuality.value)}`
-      );
+      if (!reusePrefetch)
+        notice(
+          fromAuto
+            ? targetPosition !== undefined
+              ? `已跳转到 ${formatClock(targetPosition)}`
+              : embeddedSubtitleIndex.value !== null
+                ? "已切换兼容转码以显示内挂字幕"
+                : "原生无法播放，已切换兼容转码"
+            : `已切换兼容 · ${qualityLabel(transcodeQuality.value)}`
+        );
       applyResume({ ...resume, rate: currentRate.value });
       const hv = art.value?.video as HTMLVideoElement | undefined;
       try {
@@ -1632,6 +1747,7 @@ async function switchEngine(
         activeCompatCacheID = "";
       }
       compatOffset.value = 0;
+      compatWindowSeconds = 0;
       detachHls();
       clearNativeProgressHooks();
       if (!art.value) return;
@@ -2855,9 +2971,15 @@ onMounted(async () => {
     }
 
     // Resume toast for every account mode (seek only when mode = resume).
-    if (!askVisible.value && lastSavedPosition > accountResumeMinSec()) {
+    if (
+      !askVisible.value &&
+      !resumePromptShown &&
+      lastSavedPosition > accountResumeMinSec()
+    ) {
+      resumePromptShown = true;
       showResumeUi(lastSavedPosition);
-    } else if (!askVisible.value) {
+    } else if (!askVisible.value && !resumePromptShown) {
+      resumePromptShown = true;
       void mediaApi
         .getPlayback(props.path)
         .then((saved) => {
@@ -2971,6 +3093,8 @@ watch(isPortrait, () => {
 
 onBeforeUnmount(() => {
   backgroundDetached = true;
+  discardPrefetchedWindow(prefetchedWindow);
+  prefetchedWindow = null;
   if (backgroundPollTimer) window.clearTimeout(backgroundPollTimer);
   if (activeCompatCacheID)
     void mediaApi.cancelHLSPlayback(activeCompatCacheID).catch(() => {});

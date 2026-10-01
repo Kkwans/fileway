@@ -7,6 +7,7 @@ import {
 } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 
 type Theme = "light" | "dark";
 type Viewport = { name: string; width: number; height: number };
@@ -598,6 +599,99 @@ test.describe("affected page browser gate", () => {
           expect(geometry.metrics[0].top).toBe(geometry.metrics[3].top);
       }
     }
+    expect(errors).toEqual([]);
+  });
+
+  test("prefetches and reuses the next playback window without canceling it", async ({
+    page,
+  }) => {
+    const unknownRequests: string[] = [];
+    const requests: Array<Record<string, unknown>> = [];
+    const canceled: string[] = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await installFixtureApi(page, unknownRequests);
+    await page.route(/\/api\/media\/info(?:\?|$)/, (route) =>
+      json(route, {
+        videoCodec: "hevc",
+        audioCodec: "aac",
+        duration: 48,
+        resolution: { width: 1920, height: 1080 },
+      })
+    );
+    await page.route(/\/api\/media\/hls(?:\?|$)/, async (route) => {
+      const data = JSON.parse(route.request().postData() || "{}");
+      requests.push(data);
+      await json(route, {
+        id: `pre-${requests.length}`,
+        state: "completed",
+        durationSeconds: 16,
+        sourceDurationSeconds: 48,
+        startSeconds: data.startSeconds || 0,
+        windowSeconds: 16,
+        sourceUrl: `/api/test-prefetch/${data.startSeconds || 0}.webm`,
+      });
+    });
+    await page.route(/\/api\/media\/hls\/pre-.*\/cancel/, (route) => {
+      canceled.push(new URL(route.request().url()).pathname);
+      return json(route, { state: "completed" });
+    });
+    const clip = readFileSync(
+      path.resolve(import.meta.dirname, "fixtures/timeline-16.webm")
+    );
+    await page.route(/\/api\/test-prefetch\//, (route) => {
+      const range = route
+        .request()
+        .headers()
+        .range?.match(/^bytes=(\d+)-(\d*)$/);
+      const start = range ? Number(range[1]) : 0;
+      const end = range?.[2]
+        ? Math.min(Number(range[2]), clip.length - 1)
+        : clip.length - 1;
+      return route.fulfill({
+        status: range ? 206 : 200,
+        contentType: "video/webm",
+        headers: {
+          "Accept-Ranges": "bytes",
+          ...(range
+            ? { "Content-Range": `bytes ${start}-${end}/${clip.length}` }
+            : {}),
+        },
+        body: clip.subarray(start, end + 1),
+      });
+    });
+    await login(page);
+    await page.goto("/files/fixture-video.mkv");
+    const video = page.locator("video");
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.readyState)
+      )
+      .toBeGreaterThanOrEqual(2);
+    await video.evaluate(async (element: HTMLVideoElement) => {
+      element.currentTime = 9;
+      await element.play();
+    });
+    await expect
+      .poll(() => requests.some((item) => item.startSeconds === 16))
+      .toBe(true);
+    expect(
+      requests.find((item) => item.startSeconds === 16)?.sessionId
+    ).toContain("-prefetch-");
+    await video.evaluate(async (element: HTMLVideoElement) => {
+      element.currentTime = element.duration - 0.05;
+      await element.play();
+    });
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) => element.currentSrc)
+      )
+      .toContain("test-prefetch/16.webm");
+    expect(requests.filter((item) => item.startSeconds === 16)).toHaveLength(1);
+    expect(canceled.some((url) => url.includes("pre-2"))).toBe(false);
+    await expect(
+      page.getByRole("slider", { name: "视频完整时间线" })
+    ).toHaveAttribute("max", "47.9");
     expect(errors).toEqual([]);
   });
 
