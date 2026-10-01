@@ -35,7 +35,16 @@ object NativeTransport {
                     ?: throw TransportException("无法读取传输响应")
                 val envelope = JSONObject(bytes.toString(Charsets.UTF_8))
                 if (!envelope.optBoolean("ok")) throw TransportException(envelope.optString("error", "连接失败"))
-                continuation.resume(envelope.opt("result").takeUnless { it == JSONObject.NULL })
+                val result = envelope.opt("result").takeUnless { it == JSONObject.NULL }
+                if (!continuation.isActive && result is String) {
+                    val cleanup = when (request.optString("op")) {
+                        "open" -> JSONObject().put("op", "close_session").put("session", result)
+                        "lease", "asset" -> JSONObject().put("op", "revoke").put("url", result)
+                        else -> null
+                    }
+                    cleanup?.let { nativeCall(it.toString().toByteArray(Charsets.UTF_8)) }
+                }
+                continuation.resume(result)
             } catch (error: Exception) {
                 continuation.resumeWithException(error)
             }
