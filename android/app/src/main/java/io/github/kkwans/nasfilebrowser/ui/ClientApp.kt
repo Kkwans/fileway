@@ -51,6 +51,7 @@ import java.util.Locale
                     Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(message, color = MaterialTheme.colorScheme.onErrorContainer); if (state.connected) TextButton(onClick = model::retry) { Text("重试") } }
                 }
             }
+            state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (state.busy) {
                 Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(12.dp)); Text(state.stage, modifier = Modifier.weight(1f)); TextButton(onClick = model::cancel) { Text("取消") } }
             }

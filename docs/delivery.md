@@ -107,3 +107,12 @@
 - Ordinary object/array APIs preserve opaque endpoint strings; 401/403/404 and NAS login 403 receive specific messages. After API renewal and before lease creation, account identity is checked again. Windows login is explicitly unsupported.
 - Final Windows debug/lint/test-package build passed; four protocol regression tests were compiled. They use controlled native-call fixtures and do not prove real login/decoding. Instrumented execution awaits the committed CI run.
 - This adapter will now be wired into multi-profile UI/session switching. Browser/search/recent/full playback interaction, real-device gates and signed release remain incomplete. No backend API, database or service changed; previous client commit is the rollback point.
+- Commit 94b45b3 was pushed; API35/API37.0 matrix run 36927973365 passed the adapter's protocol tests as well as prior native/storage/permission checks.
+
+## Profile UI and session integration checkpoint
+
+- Saved server picker, new/edit/save/remove forms, explicit NAS/Windows kind and direct/Tailscale mode. Windows metadata is usable as a saved profile, while login/browse/play are explicitly unsupported. Login form values survive retries; credential bytes never enter saved instance state.
+- Fixed SessionContext binds profile/source revision, authenticated account, native handle and generation. Login/restore validates an authenticated directory response, persists the verified account token through Keystore, and restores that account's opaque directory. Removed/inaccessible previous directories recover to root with a visible notice.
+- Switching stops playback/revokes leases/closes the old context. Late responses use captured context and generation checks before publishing state. Parent navigation from a restored directory is supported. Immediate playback snapshot/history saving is still the next required subslice; this is not final switching acceptance.
+- Final Windows debug/lint/test-package build passed; `git diff --check` passed. A native HTTP fixture test was compiled for profile/account switching, directory restoration and an old blocked response arriving during source switching. Its instrumented run and actual rendered profile UI are pending committed CI.
+- No NAS backend or service changed. Previous pushed client commit is the rollback point. All true hardware/MKV/HDR/external-overlay/release gates remain open.

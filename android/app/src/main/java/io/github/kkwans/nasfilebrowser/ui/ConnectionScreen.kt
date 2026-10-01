@@ -9,6 +9,9 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -39,9 +42,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
+import io.github.kkwans.nasfilebrowser.data.*
 
 @Composable internal fun ConnectionScreen(model: ClientModel, state: ClientState) {
     val network by model.networkState.collectAsStateWithLifecycle()
+    val profiles by model.profiles.collectAsStateWithLifecycle()
     val focus = LocalFocusManager.current
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -63,18 +68,24 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    var url by rememberSaveable { mutableStateOf("") }
-    var username by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.name.orEmpty()) }
+    var backend by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.backend ?: BackendKind.NAS) }
+    var url by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.address.orEmpty()) }
+    var username by rememberSaveable(state.editorVersion) { mutableStateOf("") }
     // Passwords never enter saved instance state or acceptance artifacts.
-    var password by remember { mutableStateOf("") }
+    var password by remember(state.editorVersion) { mutableStateOf("") }
     var visiblePassword by remember { mutableStateOf(false) }
-    var mode by rememberSaveable { mutableStateOf("direct") }
-    val canConnect = !state.busy && url.isNotBlank() && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected)
+    var mode by rememberSaveable(state.editorVersion) { mutableStateOf(if (state.profile?.network == ConnectionMode.TAILNET) "tailnet" else "direct") }
+    var remove by remember { mutableStateOf<ServerProfile?>(null) }
+    val profileName = name.trim().ifBlank { Uri.parse(url).host.orEmpty() }
+    val canSave = !state.busy && url.isNotBlank() && profileName.isNotBlank()
+    val canConnect = canSave && backend == BackendKind.NAS && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected)
+    val unchanged = state.profile?.let { it.address == url.trim() && it.backend == backend && (it.network == ConnectionMode.TAILNET) == (mode == "tailnet") } == true
     val connect = {
         if (canConnect) {
             focus.clearFocus()
-            val server = url.trim(); val user = username; val secret = password; val networkMode = mode
-            val action = { model.connect(server, user, secret, networkMode) }
+            val server = url.trim(); val user = username; val secret = password; val networkMode = mode; val serverType = backend
+            val action = { model.connectDraft(profileName, server, serverType, user, secret, networkMode) }
             if (Build.VERSION.SDK_INT >= 37 && networkMode == "direct" && !hasLocalAccess() && !accessDenied) {
                 afterPermission = action
                 permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
@@ -89,6 +100,30 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
                 .verticalScroll(rememberScrollState()).padding(horizontal = if (wide) 32.dp else 24.dp, vertical = 24.dp)
             val form: @Composable () -> Unit = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (profiles.isNotEmpty()) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("服务器档案", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            TextButton(onClick = { model.selectProfile(null) }, enabled = !state.busy) { Text("新建") }
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(profiles, key = { it.id }) { profile ->
+                                Surface(Modifier.width(248.dp), shape = RoundedCornerShape(14.dp), color = if (state.profile?.id == profile.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
+                                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Column(Modifier.fillMaxWidth().clickable(enabled = !state.busy) { model.selectProfile(profile) }.padding(vertical = 8.dp)) {
+                                            Text(profile.name, style = MaterialTheme.typography.titleMedium)
+                                            Text(if (profile.backend == BackendKind.WINDOWS) "Windows · 暂不支持连接" else "NAS · ${if (profile.network == ConnectionMode.TAILNET) "Tailscale" else "直连"}", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        TextButton(onClick = { remove = profile }, enabled = !state.busy) { Text("移除档案") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ConnectionField(name, { name = it }, "档案名称", R.drawable.ic_storage, enabled = !state.busy, placeholder = "例如：家里的 NAS")
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FilterChip(selected = backend == BackendKind.NAS, onClick = { backend = BackendKind.NAS }, enabled = !state.busy, label = { Text("NAS") })
+                        FilterChip(selected = backend == BackendKind.WINDOWS, onClick = { backend = BackendKind.WINDOWS }, enabled = !state.busy, label = { Text("Windows") })
+                    }
                     Text("连接方式", style = MaterialTheme.typography.titleMedium)
                     Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         ConnectionMode("本地网络", "IP 或域名", R.drawable.ic_storage, mode == "direct", Modifier.weight(1f), !state.busy) { mode = "direct" }
@@ -116,6 +151,18 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
                         supporting = "支持 IP、端口、域名和路径前缀")
                     Spacer(Modifier.height(4.dp))
                     Text("服务账号", style = MaterialTheme.typography.titleMedium)
+                    if (backend == BackendKind.WINDOWS) Text("可以保存这个档案。Windows 服务适配尚未完成，浏览与播放暂不支持。", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (backend == BackendKind.NAS && state.accounts.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("已保存的账号", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            state.accounts.forEach { account -> TextButton(onClick = {
+                                focus.clearFocus()
+                                val action = { model.restore(account) }
+                                if (Build.VERSION.SDK_INT >= 37 && mode == "direct" && !hasLocalAccess() && !accessDenied) { afterPermission = action; permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK) } else action()
+                            }, enabled = !state.busy && unchanged && (mode == "direct" || network.connected)) { Text("继续使用 ${account.username}") } }
+                        }
+                    }
+                    if (backend == BackendKind.NAS) {
                     ConnectionField(username, { username = it }, "账号", R.drawable.ic_person, enabled = !state.busy)
                     ConnectionField(password, { password = it }, "密码", R.drawable.ic_lock, enabled = !state.busy,
                         keyboardType = KeyboardType.Password, imeAction = ImeAction.Done, onDone = connect,
@@ -126,23 +173,25 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
                                     if (visiblePassword) "隐藏密码" else "显示密码")
                             }
                         })
+                    }
                     state.error?.let { message ->
                         Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
                             Text(message, Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(14.dp),
+                    if (backend == BackendKind.NAS) Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
                         Text("连接服务器", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                         Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(20.dp))
                     }
+                    OutlinedButton(onClick = { focus.clearFocus(); model.saveDraft(profileName, url.trim(), backend, mode) }, enabled = canSave, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp)) { Text("保存服务器档案") }
                     if (state.busy) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         Text(state.stage.ifBlank { "正在加载" }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = model::cancel) { Text("取消") }
                     }
-                    Text("使用文件服务器的账号登录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (backend == BackendKind.NAS) Text("使用文件服务器的账号登录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (wide) Row(page, horizontalArrangement = Arrangement.spacedBy(64.dp), verticalAlignment = Alignment.Top) {
@@ -154,6 +203,7 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
             }
         }
     }
+    remove?.let { profile -> AlertDialog(onDismissRequest = { remove = null }, title = { Text("移除 ${profile.name}？") }, text = { Text("将移除本机档案和保存的登录信息。服务器文件不会被删除。") }, confirmButton = { TextButton(onClick = { remove = null; model.removeProfile(profile) }) { Text("移除") } }, dismissButton = { TextButton(onClick = { remove = null }) { Text("取消") } }) }
 }
 
 @Composable private fun ConnectionIntroduction() {

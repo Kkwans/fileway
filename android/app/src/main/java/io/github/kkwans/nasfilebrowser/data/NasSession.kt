@@ -8,6 +8,7 @@ import org.json.JSONObject
 import org.json.JSONArray
 
 data class AccountIdentity(val id: Long, val username: String, val hostname: String)
+class ServiceException(val status: Int, message: String) : Exception(message)
 
 /** One immutable server/account context. Never reuse a handle for another login. */
 class NasSession private constructor(val profile: ServerProfile, val id: String, val identity: AccountIdentity,
@@ -23,10 +24,10 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         val result = native(command) as JSONObject
         when (result.getInt("status")) {
             200 -> { token(); return result.getString("body") }
-            401 -> error("登录已过期，请重新登录")
-            403 -> error("当前账号没有访问权限")
-            404 -> error("文件、目录或服务功能不存在")
-            else -> error("服务器暂时无法完成请求，请重试")
+            401 -> throw ServiceException(401, "登录已过期，请重新登录")
+            403 -> throw ServiceException(403, "当前账号没有访问权限")
+            404 -> throw ServiceException(404, "文件、目录或服务功能不存在")
+            else -> throw ServiceException(result.getInt("status"), "服务器暂时无法完成请求，请重试")
         }
     }
     suspend fun request(method: String, endpoint: String, body: JSONObject? = null) = JSONObject(response(method, endpoint, body))
