@@ -52,3 +52,4 @@
 - Run 36905368619 completed with workflow failure only in screenshot export: UTP removed the app-specific external directory after testing.
 - Actual device report: one test, zero failures/skips; installedAppLoadsNativeLibrariesAndRendersConnection passed (6.800s) on API35 x86_64 emulator. This proves libVLC app startup, JNI/Go protocol and visible connection form, not playback/HDR.
 - Fix: shell-owned screenshot directory under the ephemeral emulator Download area, surviving UTP cleanup; upload native test XML as well as HTML. The corrected export is pending its next run.
+- Run 36906756735 confirmed the next assertion failure: UiAutomation did not evaluate the compound `test ... && echo` expression. Use a direct `stat` command and require a positive screenshot size; retain the screenshot requirement.

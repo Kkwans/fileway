@@ -31,6 +31,8 @@ class NativeSmokeTest {
         val folder = "/sdcard/Download/nfb-client-acceptance"
         device.executeShellCommand("mkdir -p $folder")
         device.executeShellCommand("screencap -p $folder/connection.png")
-        assertEquals("CAPTURED", device.executeShellCommand("test -s $folder/connection.png && echo CAPTURED").trim())
+        // UiAutomation executes a command directly, not a shell expression.
+        val size = device.executeShellCommand("stat -c %s $folder/connection.png").trim().toLongOrNull()
+        assertTrue("Screenshot must contain PNG data", size != null && size > 0)
     }
 }
