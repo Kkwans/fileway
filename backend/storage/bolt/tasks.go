@@ -7,6 +7,7 @@ import (
 	"github.com/asdine/storm/v3"
 	"github.com/asdine/storm/v3/q"
 
+	"github.com/Kkwans/nas-file-browser/backend/hls"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
 )
 
@@ -28,6 +29,9 @@ type taskRecord struct {
 	ProcessedBytes int64
 	Error          string
 	RetryOf        string
+	Media          *hls.Progress
+	SourcePath     string
+	OutputPath     string
 	Args           string
 	Result         string
 }
@@ -115,6 +119,7 @@ func (backend taskBackend) Update(task *tasks.Task) error {
 		"TotalBytes": task.TotalBytes, "ProcessedBytes": task.ProcessedBytes,
 		"Error":  task.Error,
 		"Result": string(task.Result),
+		"Media":  task.Media, "SourcePath": task.SourcePath, "OutputPath": task.OutputPath,
 	} {
 		if err := backend.db.UpdateField(&taskRecord{ID: task.ID}, field, value); err != nil {
 			return err
@@ -133,6 +138,7 @@ func newTaskRecord(task *tasks.Task) *taskRecord {
 		ProcessedItems: task.ProcessedItems, TotalBytes: task.TotalBytes,
 		ProcessedBytes: task.ProcessedBytes, Error: task.Error,
 		RetryOf: task.RetryOf, Args: string(task.Args), Result: string(task.Result),
+		Media: task.Media, SourcePath: task.SourcePath, OutputPath: task.OutputPath,
 	}
 }
 
@@ -146,5 +152,6 @@ func (record *taskRecord) task() *tasks.Task {
 		ProcessedItems: record.ProcessedItems, TotalBytes: record.TotalBytes,
 		ProcessedBytes: record.ProcessedBytes, Error: record.Error,
 		RetryOf: record.RetryOf, Args: json.RawMessage(record.Args), Result: json.RawMessage(record.Result),
+		Media: record.Media, SourcePath: record.SourcePath, OutputPath: record.OutputPath,
 	}
 }

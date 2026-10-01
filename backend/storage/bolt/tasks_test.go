@@ -3,10 +3,12 @@ package bolt
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/asdine/storm/v3"
 
+	"github.com/Kkwans/nas-file-browser/backend/hls"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
 )
 
@@ -61,6 +63,60 @@ func TestTaskBackendPersistsReplayAndClearsProgressFields(t *testing.T) {
 	}
 	if loaded.StartedAt != 0 || loaded.FinishedAt != 0 || loaded.ArchivedAt != 0 || loaded.TotalItems != 0 || loaded.Error != "" || len(loaded.Result) != 0 {
 		t.Fatalf("zero fields were not persisted: %#v", loaded)
+	}
+}
+
+func TestTaskBackendPersistsMediaAcrossReopenAndClearsIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "media.db")
+	db, err := storm.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := taskBackend{db: db}
+	task := &tasks.Task{ID: "media", UserID: 7, Type: tasks.TypeMediaTranscode, Status: tasks.StatusRunning, CreatedAt: 10,
+		SourcePath: "/电影/测试 ? #.mkv", OutputPath: "/电影/测试 ? #.source.mp4",
+		Media: &hls.Progress{Phase: "encoding", DurationSeconds: 300, ProcessedSeconds: 40, PlayableSeconds: 36, Speed: 3.2, FPS: 76.8, StartedAt: 1000, UpdatedAt: 2000, AdvancedAt: 2000, Method: "hardware"}}
+	if err := backend.Save(task); err != nil {
+		t.Fatal(err)
+	}
+	task.Media.ProcessedSeconds = 80
+	if err := backend.Update(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = storm.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	backend = taskBackend{db: db}
+	loaded, err := backend.GetByID(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Media, task.Media) || loaded.SourcePath != task.SourcePath || loaded.OutputPath != task.OutputPath {
+		t.Fatalf("media metadata lost: %#v", loaded)
+	}
+	for _, read := range []func() ([]*tasks.Task, error){backend.GetAll, func() ([]*tasks.Task, error) { return backend.ListRecent(7, tasks.TypeMediaTranscode, 10, nil) }} {
+		items, err := read()
+		if err != nil || len(items) != 1 || !reflect.DeepEqual(items[0].Media, task.Media) || items[0].OutputPath != task.OutputPath {
+			t.Fatalf("media list lost: %#v %v", items, err)
+		}
+	}
+	loaded.Media = nil
+	loaded.SourcePath, loaded.OutputPath = "", ""
+	if err := backend.Update(loaded); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := backend.GetByID(task.ID)
+	if err != nil || cleared.Media != nil || cleared.SourcePath != "" || cleared.OutputPath != "" {
+		t.Fatalf("media metadata not cleared: %#v %v", cleared, err)
 	}
 }
 
