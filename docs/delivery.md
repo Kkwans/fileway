@@ -44,3 +44,5 @@
 - Windows staging `assembleDebug`, `lintDebug`, `assembleDebugAndroidTest` passed on the current prototype. JVM unit task currently has no Android test sources; Go protocol tests are separate.
 - The emulator native-load/UI screenshot gate is pending CI. Real Android hardware/MKV/HDR/long-play and external embedded networking remain BLOCKED by unprovided device/enrollment resources.
 - APK is debug-only at this stage. No formal signed release or NAS deployment is claimed.
+- Prototype commit 43537d4 was pushed successfully; CI run 36905368619 passed native build/Android build/lint/test-package compilation and is running the emulator runtime gate.
+- Windows prototype APK contains twelve native libraries across arm64/x86_64, including libVLC/libvlcjni, all with 16KiB ELF LOAD alignment. SDK zipalign -c -P 16 4 passed. Build output stays private until an explicit committed CI artifact is ready.
