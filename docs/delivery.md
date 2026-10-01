@@ -99,3 +99,11 @@
 - Final Windows debug/lint/test-package build passed. Runtime authorization/denial/retry tests are compiled for SDK37, and primary-action reachability now covers a scrolling form with the permission panel.
 - CI matrix includes API35 and API37.0 google_apis_ps16k; the official image identifier and pinned runner's string API-level handling were verified. The 16KiB job checks actual guest page size before tests. Both matrix runs are pending the next commit; no Android17 runtime or physical-device acceptance is claimed yet.
 - Source: [Android local-network permission](https://developer.android.com/privacy-and-security/local-network-permission?hl=en). Production NAS and unrelated Windows services are unchanged; prior client commit is the rollback point.
+- Commit d358eb2 was pushed; run 36926073772 passed API35 and API37.0 google_apis_ps16k. The latter asserted actual guest page size 16384 and passed eight tests with zero failures/errors/skips, including permission denial/recovery/retry/grant. Hardware/HDR/external-overlay acceptance is separate and still unverified.
+
+## NAS session adapter checkpoint
+
+- Immutable profile/native-handle/account identity wrapper; authenticated JWT text parses the actual NAS `user.id`/`username` contract, including strict numeric-ID validation. Open/login failures close the handle; restoration validates the expected account before opening.
+- Ordinary object/array APIs preserve opaque endpoint strings; 401/403/404 and NAS login 403 receive specific messages. After API renewal and before lease creation, account identity is checked again. Windows login is explicitly unsupported.
+- Final Windows debug/lint/test-package build passed; four protocol regression tests were compiled. They use controlled native-call fixtures and do not prove real login/decoding. Instrumented execution awaits the committed CI run.
+- This adapter will now be wired into multi-profile UI/session switching. Browser/search/recent/full playback interaction, real-device gates and signed release remain incomplete. No backend API, database or service changed; previous client commit is the rollback point.
