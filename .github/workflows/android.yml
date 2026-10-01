@@ -17,8 +17,22 @@ jobs:
           java-version: '17'
       - name: Install Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+          export ANDROID_HOME="$RUNNER_TEMP/nfb-android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl --fail --location --retry 2 'https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip' -o "$RUNNER_TEMP/sdk-tools.zip"
+          echo 'e025545c62a8e64c7559119566a569fb1dec5f60  '"$RUNNER_TEMP/sdk-tools.zip" | sha1sum --check
+          unzip -q "$RUNNER_TEMP/sdk-tools.zip" -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          SDK_STATUS="${PIPESTATUS[1]}"
+          set -o pipefail
+          test "$SDK_STATUS" = 0
+          "$SDKMANAGER" 'platforms;android-37.0' 'build-tools;36.0.0'
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
       - name: Build and check
         run: ./gradlew -p android :app:assembleDebug :app:lintDebug :app:testDebugUnitTest --stacktrace
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
