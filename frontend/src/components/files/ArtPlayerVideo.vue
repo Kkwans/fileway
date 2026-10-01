@@ -179,7 +179,8 @@ import Artplayer from "artplayer";
 import Hls from "hls.js";
 import { files as api, media as mediaApi, users as usersApi } from "@/api";
 import { createURL } from "@/api/utils";
-import { encodeResourceRoute } from "@/utils/url";
+import { encodeResourceRoute, resolveBackendMediaURL } from "@/utils/url";
+import { baseURL } from "@/utils/constants";
 import { useAuthStore } from "@/stores/auth";
 import { useAccountPreferencesStore } from "@/stores/accountPreferences";
 import { resolveControlsTimeoutMs } from "@/utils/playerControls";
@@ -1709,9 +1710,11 @@ async function switchEngine(
         return;
       }
       loadStatusText.value = "";
-      const hlsUrl = url.startsWith("http")
-        ? url
-        : createURL(url.replace(/^\/+/, ""), {});
+      const hlsUrl = resolveBackendMediaURL(
+        url,
+        window.location.origin,
+        baseURL
+      );
       compatOffset.value = status.startSeconds || 0;
       compatWindowSeconds = status.durationSeconds || status.windowSeconds || 0;
       timelinePosition.value = resume.position;
@@ -1939,7 +1942,13 @@ async function attachBackgroundTranscode() {
     ) {
       actualMode.value = "compat";
       compatOffset.value = 0;
-      await attachHls(createURL(status.playlistUrl.replace(/^\/+/, ""), {}));
+      await attachHls(
+        resolveBackendMediaURL(
+          status.playlistUrl,
+          window.location.origin,
+          baseURL
+        )
+      );
       applyResume({
         position: lastSavedPosition,
         playing: true,
@@ -1959,7 +1968,11 @@ async function attachBackgroundTranscode() {
     ) {
       const resume = captureResume();
       detachHls();
-      art.value.url = createURL(status.sourceUrl.replace(/^\/+/, ""), {});
+      art.value.url = resolveBackendMediaURL(
+        status.sourceUrl,
+        window.location.origin,
+        baseURL
+      );
       applyResume(resume);
       backgroundPlayableEnd.value = sourceDuration.value;
       return;

@@ -5,9 +5,33 @@ import {
   canonicalResourcePath,
   decodePath,
   encodeResourceRoute,
+  resolveBackendMediaURL,
 } from "../url";
 
 describe("URL path helpers", () => {
+  it("preserves encoded backend media paths, queries and deployment prefixes", () => {
+    const link =
+      "/nfb/api/raw/%E7%94%B5%E5%BD%B1/100%25%20a%3Fb.mp4?inline=true";
+    const resolved = new URL(
+      resolveBackendMediaURL(link, "http://nas:8888", "/nfb")
+    );
+    expect(resolved.pathname).toBe(link.split("?")[0]);
+    expect(resolved.searchParams.get("inline")).toBe("true");
+    expect(resolved.href).not.toContain("/nfb/nfb/");
+    expect(
+      resolveBackendMediaURL(
+        "api/media/video.webm?x=1",
+        "http://nas:8888",
+        "/nfb"
+      )
+    ).toBe("http://nas:8888/nfb/api/media/video.webm?x=1");
+    expect(
+      resolveBackendMediaURL(
+        "https://media.example/clip.mp4?x=1",
+        "http://nas:8888"
+      )
+    ).toBe("https://media.example/clip.mp4?x=1");
+  });
   it("decodes encoded path segments exactly once for resource state", () => {
     expect(decodePath("/volume1/%40appstore/config/blacklist.csv")).toBe(
       "/volume1/@appstore/config/blacklist.csv"

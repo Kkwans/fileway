@@ -7,6 +7,17 @@ export function removeLastDir(url: string) {
   return arr.join("/");
 }
 
+/** Backend media links are URLs with encoded paths and optional queries,
+ * unlike the raw resource paths accepted by createURL. */
+export function resolveBackendMediaURL(
+  value: string,
+  origin: string,
+  baseURL = ""
+) {
+  const base = new URL(`${baseURL.replace(/\/$/, "")}/`, origin);
+  return new URL(value, base).toString();
+}
+
 // this function is taken from mozilla
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/encodeURIComponent#Examples
 export function encodeRFC5987ValueChars(str: string) {

@@ -629,7 +629,7 @@ test.describe("affected page browser gate", () => {
         sourceDurationSeconds: 48,
         startSeconds: data.startSeconds || 0,
         windowSeconds: 16,
-        sourceUrl: `/api/test-prefetch/${data.startSeconds || 0}.webm`,
+        sourceUrl: `/api/test-prefetch/${data.startSeconds || 0}.webm?inline=true`,
       });
     });
     await page.route(/\/api\/media\/hls\/pre-.*\/cancel/, (route) => {
@@ -687,6 +687,13 @@ test.describe("affected page browser gate", () => {
         video.evaluate((element: HTMLVideoElement) => element.currentSrc)
       )
       .toContain("test-prefetch/16.webm");
+    await expect
+      .poll(() =>
+        video.evaluate((element: HTMLVideoElement) =>
+          new URL(element.currentSrc).searchParams.get("inline")
+        )
+      )
+      .toBe("true");
     expect(requests.filter((item) => item.startSeconds === 16)).toHaveLength(1);
     expect(canceled.some((url) => url.includes("pre-2"))).toBe(false);
     await expect(
