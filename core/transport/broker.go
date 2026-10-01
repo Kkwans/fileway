@@ -197,6 +197,8 @@ func (b *Broker) Login(ctx context.Context, sessionID, username, password string
 }
 
 func (s *Session) renew(ctx context.Context, previous string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	s.renewMu.Lock()
 	defer s.renewMu.Unlock()
 	if s.currentToken() != previous {

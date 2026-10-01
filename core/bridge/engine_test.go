@@ -55,3 +55,19 @@ func TestInvalidCommandsAreBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestCancellationBeforeWorkerDoesNotSendSourceRequest(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true; w.WriteHeader(200) }))
+	defer server.Close()
+	e := &Engine{}
+	defer e.Call([]byte(`{"op":"shutdown"}`))
+	out := command(t, e, Command{Op: "open", BaseURL: server.URL})
+	var sid string
+	json.Unmarshal(out["result"], &sid)
+	command(t, e, Command{Op: "cancel", RequestID: "cancel-before-worker"})
+	out = command(t, e, Command{Op: "request", Session: sid, RequestID: "cancel-before-worker", Method: "GET", Endpoint: "/api/resources/"})
+	if string(out["ok"]) != "false" || called {
+		t.Fatal("cancelled request contacted source", out)
+	}
+}

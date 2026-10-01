@@ -35,9 +35,10 @@ type Envelope struct {
 }
 
 type Engine struct {
-	mu      sync.Mutex
-	broker  *transport.Broker
-	pending map[string]context.CancelFunc
+	mu        sync.Mutex
+	broker    *transport.Broker
+	pending   map[string]context.CancelFunc
+	cancelled map[string]time.Time
 }
 
 func (e *Engine) ready() (*transport.Broker, error) {
@@ -52,6 +53,14 @@ func (e *Engine) ready() (*transport.Broker, error) {
 	}
 	if e.pending == nil {
 		e.pending = make(map[string]context.CancelFunc)
+	}
+	if e.cancelled == nil {
+		e.cancelled = make(map[string]time.Time)
+	}
+	for id, until := range e.cancelled {
+		if time.Now().After(until) {
+			delete(e.cancelled, id)
+		}
 	}
 	return e.broker, nil
 }
@@ -84,6 +93,11 @@ func (e *Engine) execute(c Command) (any, error) {
 	if c.Op == "cancel" {
 		e.mu.Lock()
 		cancel := e.pending[c.RequestID]
+		// Cancellation can arrive before the worker enters JNI. Retain a short
+		// tombstone so that a cancelled queued request never reaches the server.
+		if c.RequestID != "" {
+			e.cancelled[c.RequestID] = time.Now().Add(time.Minute)
+		}
 		e.mu.Unlock()
 		if cancel != nil {
 			cancel()
@@ -94,6 +108,10 @@ func (e *Engine) execute(c Command) (any, error) {
 	defer cancel()
 	if c.RequestID != "" {
 		e.mu.Lock()
+		if until, found := e.cancelled[c.RequestID]; found && time.Now().Before(until) {
+			e.mu.Unlock()
+			return nil, context.Canceled
+		}
 		if _, found := e.pending[c.RequestID]; found {
 			e.mu.Unlock()
 			return nil, errors.New("request already running")
