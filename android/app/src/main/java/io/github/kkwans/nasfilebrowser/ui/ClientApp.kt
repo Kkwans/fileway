@@ -3,19 +3,15 @@ package io.github.kkwans.nasfilebrowser.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -34,42 +30,21 @@ import java.util.Locale
 
 @Composable fun ClientApp(model: ClientModel) {
     val state by model.state.collectAsStateWithLifecycle()
-    val network by model.networkState.collectAsStateWithLifecycle()
     BackHandler(state.connected) { if (!model.back()) model.disconnect() }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
+    if (!state.connected) { ConnectionScreen(model, state); return }
     Scaffold { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp).then(if (!state.connected) Modifier.verticalScroll(rememberScrollState()).imePadding() else Modifier), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Spacer(Modifier.height(12.dp))
-            if (!state.connected) {
-                Text("NAS File Browser", style = MaterialTheme.typography.headlineLarge)
-                Text("连接服务器，打开你的文件与影片。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                var url by rememberSaveable { mutableStateOf("") }
-                var username by rememberSaveable { mutableStateOf("") }
-                var password by remember { mutableStateOf("") }
-                var mode by rememberSaveable { mutableStateOf("direct") }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = mode == "direct", onClick = { mode = "direct" }, label = { Text("本地网络") })
-                    FilterChip(selected = mode == "tailnet", onClick = { mode = "tailnet" }, label = { Text("Tailscale") })
-                }
-                if (mode == "tailnet") {
-                    NetworkCard(model)
-                }
-                OutlinedTextField(url, { url = it }, label = { Text("服务器地址") }, placeholder = { Text("https://nas.example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                OutlinedTextField(username, { username = it }, label = { Text("账号") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                OutlinedTextField(password, { password = it }, label = { Text("密码") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                Button(onClick = { model.connect(url.trim(), username, password, mode) }, enabled = !state.busy && url.isNotBlank() && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected), modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(12.dp)) { Text("连接服务器") }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Text(state.serverLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                    TextButton(onClick = model::disconnect) { Text("切换服务器") }
-                }
-                Text(state.path.trimEnd('/').substringAfterLast('/').ifBlank { "文件" }, style = MaterialTheme.typography.headlineLarge)
-                Text(state.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row {
-                    TextButton(onClick = { model.back() }, enabled = state.path != "/") { Text("上一级") }
-                    TextButton(onClick = model::retry, enabled = !state.busy) { Text("刷新") }
-                }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(state.serverLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                TextButton(onClick = model::disconnect) { Text("切换服务器") }
+            }
+            Text(state.path.trimEnd('/').substringAfterLast('/').ifBlank { "文件" }, style = MaterialTheme.typography.headlineLarge)
+            Text(state.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row {
+                TextButton(onClick = { model.back() }, enabled = state.path != "/") { Text("上一级") }
+                TextButton(onClick = model::retry, enabled = !state.busy) { Text("刷新") }
             }
             state.error?.let { message ->
                 Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
@@ -90,7 +65,8 @@ import java.util.Locale
     }
 }
 
-@Composable private fun NetworkCard(model: ClientModel) {
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun NetworkCard(model: ClientModel) {
     val network by model.networkState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var actionMessage by remember(network.authUrl) { mutableStateOf<String?>(null) }
@@ -103,7 +79,7 @@ import java.util.Locale
             if (network.state == "NeedsMachineAuth") Text("请在 Tailscale 管理页面批准这台设备。")
             network.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             actionMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (!network.connected) TextButton(onClick = model::connectNetwork, enabled = network.state != "Starting") { Text(if (network.state == "Starting") "正在连接" else "连接 Tailscale") }
                 if (network.authUrl.isNotEmpty()) TextButton(onClick = {
                     val uri = Uri.parse(network.authUrl)

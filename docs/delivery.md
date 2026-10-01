@@ -65,3 +65,11 @@
 - Local Linux arm64 Go tests passed on the initial integration snapshot; x64 race and final native/device checks are pending committed CI.
 - Real embedded 100/subnet traffic, approval, direct/DERP measurement, external mobile networks, hardware MKV/HDR and long-play remain BLOCKED by missing device/enrollment resources. Implementation continues independently; this checkpoint does not complete the goal.
 - Deployment: no NAS or Windows service changed. Rollback: prior client commit/APK remains independent of backend state; preserve the encrypted node identity before any client-state migration.
+- Integration commit e33ceca was pushed; Linux Go race/vet run 36911239536 and full Android run 36911239875 passed. Actual API35 device report contains three passed tests, zero failures/errors/skips: native/UI smoke, Keystore record recreation/tamper rejection, and passive node configuration without enrollment.
+
+## Connection visual refinement checkpoint
+
+- Focused connection form with grouped network/server/account controls, a coherent slate/blue palette across Material surface roles, official pinned outline vectors, password visibility/IME handling, wrapping network actions and a two-column wide layout.
+- App launcher identity shares the server glyph and accent. Material icon sources/notices and full Apache-2.0 license are included in the repository and APK assets.
+- Windows isolated staging: final `assembleDebug`, `lintDebug`, `assembleDebugAndroidTest` passed. `git diff --check` passed. Computed normal body/secondary contrast exceeds 4.5:1 in both themes; screenshot and font/landscape visual gates remain pending the committed run.
+- The connection screen is one UI subslice. Final browser/recent/player/settings design and true-device visual/media acceptance remain outstanding. No release or backend deployment was performed; previous pushed client source is the rollback point.

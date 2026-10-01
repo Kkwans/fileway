@@ -33,6 +33,8 @@ Player: black video stage, unambiguous source title, restrained floating control
 
 Motion: 160–220ms focus/navigation transitions; respects system animation scale. No entrance spectacle. Light/dark, empty/error/loading/buffering and large-font layouts receive equal scrutiny.
 
+Connection implementation: compact media-library introduction, two accessible network choices, server-address group, service-account group and one primary connection action. At ≥840dp it uses a quiet introductory column beside the form; larger font scales retain the scrolling single-column form. Surface roles and their foreground colors are explicitly defined to keep the slate/blue palette throughout native components. Official Material outline vectors are pinned and attributed under `licenses/`.
+
 ## Visual gate
 
 Inspect actual rendered Android screenshots for each main page, both themes, compact/landscape/≥600dp and 100/130/200% font scale. Capture controls visible/hidden, long filenames, all errors and track sheets. Fix clipping, weak hierarchy, density and inconsistent spacing before release. Emulator images validate UI only; hardware decoding/HDR needs devices.
