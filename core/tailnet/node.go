@@ -142,11 +142,30 @@ func (n *Node) Client(ctx context.Context) (*http.Client, error) {
 	if state.State != "Running" {
 		return nil, errors.New("embedded network needs login or approval")
 	}
+	n.mu.Lock()
+	if n.closed {
+		n.mu.Unlock()
+		return nil, errors.New("embedded network is closed")
+	}
+	// Sys and these subsystem APIs are not stable. Their usage is isolated
+	// here, locked to tsnet 1.102.5, and must be audited on dependency upgrades.
+	sys := n.server.Sys()
+	if sys == nil || !sys.IsNetstack() {
+		n.mu.Unlock()
+		return nil, errors.New("embedded userspace transport unavailable")
+	}
+	dialer, ok := sys.Dialer.GetOK()
+	if !ok || dialer == nil {
+		n.mu.Unlock()
+		return nil, errors.New("embedded dialer unavailable")
+	}
+	strict := routeDialer{plan: dialer.UserDialPlan, owned: dialer.UseNetstackForIP, tcp: dialer.NetstackDialTCP}
+	n.mu.Unlock()
 	return &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
-			return n.server.Dial(ctx, network, address)
+			return strict.dial(ctx, network, address)
 		},
 		DisableCompression: true, ResponseHeaderTimeout: 15 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 60 * time.Second,
 	}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
