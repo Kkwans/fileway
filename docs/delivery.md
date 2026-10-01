@@ -116,3 +116,12 @@
 - Switching stops playback/revokes leases/closes the old context. Late responses use captured context and generation checks before publishing state. Parent navigation from a restored directory is supported. Immediate playback snapshot/history saving is still the next required subslice; this is not final switching acceptance.
 - Final Windows debug/lint/test-package build passed; `git diff --check` passed. A native HTTP fixture test was compiled for profile/account switching, directory restoration and an old blocked response arriving during source switching. Its instrumented run and actual rendered profile UI are pending committed CI.
 - No NAS backend or service changed. Previous pushed client commit is the rollback point. All true hardware/MKV/HDR/external-overlay/release gates remain open.
+- Commit cd23943 was pushed; run 36930820723 passed both runtime jobs. Actual API37 report: thirteen tests, zero failures/errors/skips; nativeHttpLoginSwitchAndRestorationKeepAccountsAndLateResponsesIsolated passed (3.500s).
+
+## Playback history storage checkpoint
+
+- Local schema v2 records account/resource/file-identity scoped source positions, duration and sync status. Migration preserves v1 profile/account/directory data and atomically backs up its metadata before creating the new table; no secret values are exported.
+- Existing NAS playback contracts were read from current backend source: seconds for position/duration, Unix milliseconds for updatedAt, identity v1:size:mtime-nanoseconds. Pending reconciliation respects file identity and remote clearing. Zero positions persist correctly.
+- Conditional sync completion cannot overwrite a newer local snapshot. Pre/post PUT identity checks and a replacement guard prevent applying old progress to changed files in this client. The backend's missing expected-identity mutation argument and non-UTF8 JSON limitation are recorded in `local-state.md`; no backend changes were introduced.
+- Windows debug/lint/test-package build passed. Generated schema2 SQLite validation passed conditional-update and cascade checks. Android migration, identity/reconciliation and late-sync tests are compiled and await committed CI.
+- Player event hooks, ten-second saving, exit/switch flush and recent UI are the next subslice, not completed by this data checkpoint. Production NAS is unchanged; prior client source and the private v1 metadata backup are rollback assets.
