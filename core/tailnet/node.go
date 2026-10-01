@@ -1,0 +1,191 @@
+package tailnet
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/http"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"tailscale.com/client/local"
+	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tsnet"
+)
+
+type Connection struct {
+	IP      string `json:"ip"`
+	Mode    string `json:"mode"`
+	TxBytes int64  `json:"txBytes"`
+	RxBytes int64  `json:"rxBytes"`
+}
+type Status struct {
+	State         string       `json:"state"`
+	AuthURL       string       `json:"authUrl,omitempty"`
+	IPs           []string     `json:"ips,omitempty"`
+	AcceptSubnets bool         `json:"acceptSubnets"`
+	Health        []string     `json:"health,omitempty"`
+	Connections   []Connection `json:"connections,omitempty"`
+}
+
+type Node struct {
+	mu        sync.Mutex
+	server    *tsnet.Server
+	local     *local.Client
+	attempted bool
+	closed    bool
+}
+
+func NewNode(dir, hostname string, key []byte) (*Node, error) {
+	if !filepath.IsAbs(dir) || hostname == "" {
+		return nil, errors.New("invalid embedded node configuration")
+	}
+	store, err := NewEncryptedStore(filepath.Join(dir, "node.state"), key)
+	if err != nil {
+		return nil, err
+	}
+	quiet := func(string, ...any) {}
+	return &Node{server: &tsnet.Server{Dir: dir, Hostname: hostname, Store: store, Logf: quiet, UserLogf: quiet}}, nil
+}
+
+func (n *Node) Start(ctx context.Context) (Status, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return Status{}, errors.New("embedded network is closed")
+	}
+	if ctx.Err() != nil {
+		return Status{}, ctx.Err()
+	}
+	n.attempted = true
+	if err := n.server.Start(); err != nil {
+		return Status{}, errors.New("cannot start embedded network")
+	}
+	lc, err := n.server.LocalClient()
+	if err != nil {
+		return Status{}, errors.New("cannot control embedded network")
+	}
+	n.local = lc
+	if _, err := lc.EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{RouteAll: true, WantRunning: true}, RouteAllSet: true, WantRunningSet: true}); err != nil {
+		return Status{}, errors.New("cannot enable approved subnet routes")
+	}
+	status, err := n.statusLocked(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	// Start is idempotent in tsnet. After an explicit logout, request a new
+	// interactive flow rather than relying on the first initialization again.
+	if status.State == "NeedsLogin" && status.AuthURL == "" {
+		if err := lc.StartLoginInteractive(ctx); err != nil {
+			return Status{}, errors.New("cannot open embedded login flow")
+		}
+		return n.statusLocked(ctx)
+	}
+	return status, nil
+}
+
+func (n *Node) Status(ctx context.Context) (Status, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return Status{State: "Closed"}, nil
+	}
+	if n.local == nil {
+		return Status{State: "Configured"}, nil
+	}
+	return n.statusLocked(ctx)
+}
+
+func (n *Node) statusLocked(ctx context.Context) (Status, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	s, err := n.local.Status(ctx)
+	if err != nil {
+		return Status{}, errors.New("cannot read embedded network status")
+	}
+	p, err := n.local.GetPrefs(ctx)
+	if err != nil {
+		return Status{}, errors.New("cannot read subnet preferences")
+	}
+	result := Status{State: s.BackendState, AuthURL: s.AuthURL, AcceptSubnets: p.RouteAll, Health: s.Health}
+	for _, ip := range s.TailscaleIPs {
+		result.IPs = append(result.IPs, ip.String())
+	}
+	for _, peer := range s.Peer {
+		if peer.Active && len(peer.TailscaleIPs) > 0 {
+			result.Connections = append(result.Connections, Connection{IP: peer.TailscaleIPs[0].String(), Mode: connectionMode(peer), TxBytes: peer.TxBytes, RxBytes: peer.RxBytes})
+		}
+	}
+	return result, nil
+}
+
+func connectionMode(peer *ipnstate.PeerStatus) string {
+	if peer.PeerRelay != "" {
+		return "peer-relay"
+	}
+	if peer.CurAddr != "" {
+		return "direct"
+	}
+	if peer.Relay != "" {
+		return "derp"
+	}
+	return "unknown"
+}
+
+func (n *Node) Client(ctx context.Context) (*http.Client, error) {
+	state, err := n.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if state.State != "Running" {
+		return nil, errors.New("embedded network needs login or approval")
+	}
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			return n.server.Dial(ctx, network, address)
+		},
+		DisableCompression: true, ResponseHeaderTimeout: 15 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 60 * time.Second,
+	}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
+}
+
+func (n *Node) Logout(ctx context.Context) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.local == nil {
+		return nil
+	}
+	if err := n.local.Logout(ctx); err != nil {
+		return errors.New("cannot log out embedded node")
+	}
+	return nil
+}
+
+func (n *Node) Stop(ctx context.Context) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.local == nil {
+		return nil
+	}
+	_, err := n.local.EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{WantRunning: false}, WantRunningSet: true})
+	if err != nil {
+		return errors.New("cannot stop embedded node")
+	}
+	return nil
+}
+
+func (n *Node) Close() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return nil
+	}
+	n.closed = true
+	if n.attempted {
+		return n.server.Close()
+	}
+	return nil
+}

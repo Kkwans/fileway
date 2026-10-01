@@ -18,5 +18,6 @@ class MainActivity : ComponentActivity() {
             ClientTheme { ClientApp(model) }
         }
     }
-    override fun onStop() { model.player.pause(); super.onStop() }
+    override fun onStart() { super.onStart(); model.foreground(true) }
+    override fun onStop() { model.foreground(false); model.player.pause(); super.onStop() }
 }

@@ -53,3 +53,15 @@
 - Actual device report: one test, zero failures/skips; installedAppLoadsNativeLibrariesAndRendersConnection passed (6.800s) on API35 x86_64 emulator. This proves libVLC app startup, JNI/Go protocol and visible connection form, not playback/HDR.
 - Fix: shell-owned screenshot directory under the ephemeral emulator Download area, surviving UTP cleanup; upload native test XML as well as HTML. The corrected export is pending its next run.
 - Run 36906756735 confirmed the next assertion failure: UiAutomation did not evaluate the compound `test ... && echo` expression. Use a direct `stat` command and require a positive screenshot size; retain the screenshot requirement.
+- Run 36909018820 at d03811c passed the complete workflow, including installed API35 native/UI smoke and screenshot export. The actual connection screenshot was inspected; this remains a prototype rather than final visual acceptance.
+
+## Embedded network integration checkpoint
+
+- Pinned tsnet 1.102.5 and its go.sum; required Go toolchain 1.26.6. Selected embedded sessions use tsnet.Dial for both service APIs and media; unauthenticated embedded selection fails without direct fallback.
+- Official interactive node login, pending approval, approved subnet routes, explicit disconnect/logout and foreground-only status polling. Logout invalidates existing embedded sessions and concurrent opens. Native initialization does not enroll a node.
+- Node state is AES-256-GCM encrypted with atomic writes. Android Keystore wraps the installation data key under noBackupFilesDir; corruption preserves the original state and reports failure. No shared auth key is supplied. SDK private runtime files must remain outside public artifacts and future diagnostic exports.
+- Windows x64 isolated staging: Go `test -p 2 ./...` and `vet -p 2 ./...` passed; NDK cross-build passed for both ABIs; `assembleDebug`, `lintDebug`, `assembleDebugAndroidTest` passed after the final lifecycle/concurrency changes. Android JVM unit task has no sources at this stage. Device tests were compiled and await Linux emulator CI.
+- All twelve packaged native libraries pass 16KiB ELF LOAD alignment; `zipalign -c -P 16 4` passed. Latest staging APK SHA256: D60D6286200D4ABB4A94F876D888BFBA03156A062E6AE2EB33648C24E022580E. This uncommitted staging artifact is not a release.
+- Local Linux arm64 Go tests passed on the initial integration snapshot; x64 race and final native/device checks are pending committed CI.
+- Real embedded 100/subnet traffic, approval, direct/DERP measurement, external mobile networks, hardware MKV/HDR and long-play remain BLOCKED by missing device/enrollment resources. Implementation continues independently; this checkpoint does not complete the goal.
+- Deployment: no NAS or Windows service changed. Rollback: prior client commit/APK remains independent of backend state; preserve the encrypted node identity before any client-state migration.

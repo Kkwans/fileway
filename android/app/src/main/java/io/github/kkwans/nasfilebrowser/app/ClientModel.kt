@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
+import io.github.kkwans.nasfilebrowser.core.EmbeddedNetwork
+import io.github.kkwans.nasfilebrowser.core.NetworkState
 import io.github.kkwans.nasfilebrowser.player.NativePlayer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -13,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.net.URLEncoder
 
@@ -27,6 +30,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(ClientState())
     val state = mutable.asStateFlow()
     val player = NativePlayer(application)
+    private val embeddedNetwork = EmbeddedNetwork(application)
+    private val networkMutable = MutableStateFlow(NetworkState())
+    val networkState = networkMutable.asStateFlow()
+    private var networkJob: Job? = null
+    private var networkPollJob: Job? = null
+    private var networkActivated = false
+    private var foreground = false
     private var session = ""
     private var lease = ""
     private var generation = 0
@@ -34,7 +44,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val navigation = ArrayDeque<Pair<String, String>>()
 
-    fun connect(url: String, username: String, password: String) {
+    fun connect(url: String, username: String, password: String, network: String = "direct") {
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
         val expected = generation
@@ -42,7 +52,11 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operation = viewModelScope.launch {
             var opened = ""
             try {
-                opened = NativeTransport.call(JSONObject().put("op", "open").put("baseUrl", url)) as String
+                if (network == "tailnet") {
+                    val status = embeddedNetwork.status(); networkMutable.value = status
+                    if (!status.connected) throw IllegalStateException("请先连接并登录 Tailscale")
+                }
+                opened = NativeTransport.call(JSONObject().put("op", "open").put("baseUrl", url).put("network", network)) as String
                 val response = NativeTransport.call(JSONObject().put("op", "login").put("session", opened).put("username", username).put("password", password)) as JSONObject
                 if (response.getInt("status") != 200) throw IllegalStateException(if (response.getInt("status") == 401) "账号或密码不正确" else "登录失败，请检查服务器和账号")
                 if (generation != expected) return@launch
@@ -124,5 +138,39 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (old.isNotEmpty()) cleanup.launch { NativeTransport.call(JSONObject().put("op", "close_session").put("session", old)) }
     }
     fun disconnect() { operation?.cancel(); generation++; closeSession(); navigation.clear(); mutable.value = ClientState() }
-    override fun onCleared() { operation?.cancel(); closeSession(); player.release(); super.onCleared() }
+    fun connectNetwork() {
+        networkActivated = true
+        networkJob?.cancel()
+        networkPollJob?.cancel()
+        networkJob = viewModelScope.launch {
+            try {
+                networkMutable.value = NetworkState(state = "Starting")
+                networkMutable.value = embeddedNetwork.start()
+                observeNetwork()
+            } catch (error: Exception) {
+                if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "内嵌网络连接失败，请重试")
+            }
+        }
+    }
+    private fun observeNetwork() {
+        networkPollJob?.cancel()
+        if (!foreground) return
+        networkPollJob = viewModelScope.launch {
+            try {
+                networkMutable.value = embeddedNetwork.status()
+                while (foreground) { delay(if (networkMutable.value.connected) 5000 else 1500); networkMutable.value = embeddedNetwork.status() }
+            }
+            catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法确认内嵌网络状态，请重试") }
+        }
+    }
+    fun foreground(active: Boolean) {
+        foreground = active
+        if (!active) { networkPollJob?.cancel(); return }
+        if (networkActivated && networkJob?.isActive != true) observeNetwork()
+    }
+    fun stopNetwork(logout: Boolean = false) {
+        networkJob?.cancel(); networkPollJob?.cancel(); disconnect()
+        networkJob = viewModelScope.launch { try { if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
+    }
+    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); player.release(); super.onCleared() }
 }

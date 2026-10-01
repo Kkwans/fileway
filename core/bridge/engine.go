@@ -4,28 +4,34 @@ package bridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"sync"
 	"time"
 
+	"github.com/Kkwans/nas-file-browser-client/core/tailnet"
 	"github.com/Kkwans/nas-file-browser-client/core/transport"
 )
 
 type Command struct {
-	Op        string          `json:"op"`
-	RequestID string          `json:"requestId"`
-	Session   string          `json:"session"`
-	BaseURL   string          `json:"baseUrl"`
-	Token     string          `json:"token"`
-	Username  string          `json:"username"`
-	Password  string          `json:"password"`
-	Method    string          `json:"method"`
-	Endpoint  string          `json:"endpoint"`
-	Body      json.RawMessage `json:"body"`
-	Path      string          `json:"path"`
-	WirePath  string          `json:"wirePath"`
-	URL       string          `json:"url"`
+	Op         string          `json:"op"`
+	RequestID  string          `json:"requestId"`
+	Session    string          `json:"session"`
+	BaseURL    string          `json:"baseUrl"`
+	Token      string          `json:"token"`
+	Username   string          `json:"username"`
+	Password   string          `json:"password"`
+	Method     string          `json:"method"`
+	Endpoint   string          `json:"endpoint"`
+	Body       json.RawMessage `json:"body"`
+	Path       string          `json:"path"`
+	WirePath   string          `json:"wirePath"`
+	URL        string          `json:"url"`
+	Network    string          `json:"network"`
+	StateDir   string          `json:"stateDir"`
+	Hostname   string          `json:"hostname"`
+	StorageKey string          `json:"storageKey"`
 }
 
 type Envelope struct {
@@ -35,10 +41,13 @@ type Envelope struct {
 }
 
 type Engine struct {
-	mu        sync.Mutex
-	broker    *transport.Broker
-	pending   map[string]context.CancelFunc
-	cancelled map[string]time.Time
+	mu           sync.Mutex
+	broker       *transport.Broker
+	pending      map[string]context.CancelFunc
+	cancelled    map[string]time.Time
+	node         *tailnet.Node
+	embedded     map[string]bool
+	networkEpoch uint64
 }
 
 func (e *Engine) ready() (*transport.Broker, error) {
@@ -56,6 +65,9 @@ func (e *Engine) ready() (*transport.Broker, error) {
 	}
 	if e.cancelled == nil {
 		e.cancelled = make(map[string]time.Time)
+	}
+	if e.embedded == nil {
+		e.embedded = make(map[string]bool)
 	}
 	for id, until := range e.cancelled {
 		if time.Now().After(until) {
@@ -124,7 +136,78 @@ func (e *Engine) execute(c Command) (any, error) {
 	case "init":
 		return map[string]int{"protocol": 1}, nil
 	case "open":
-		return b.Open(c.BaseURL, c.Token, nil)
+		if c.Network == "" || c.Network == "direct" {
+			return b.Open(c.BaseURL, c.Token, nil)
+		}
+		if c.Network != "tailnet" {
+			return nil, errors.New("unknown network mode")
+		}
+		e.mu.Lock()
+		n := e.node
+		epoch := e.networkEpoch
+		e.mu.Unlock()
+		if n == nil {
+			return nil, errors.New("embedded network is not configured")
+		}
+		client, err := n.Client(ctx)
+		if err != nil {
+			return nil, err
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.node != n || e.networkEpoch != epoch {
+			return nil, errors.New("embedded network changed")
+		}
+		id, err := b.Open(c.BaseURL, c.Token, client)
+		if err == nil {
+			e.embedded[id] = true
+		}
+		return id, err
+	case "network_configure":
+		key, err := base64.StdEncoding.DecodeString(c.StorageKey)
+		if err != nil {
+			return nil, errors.New("invalid wrapped node storage key")
+		}
+		defer clear(key)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.node != nil {
+			return nil, errors.New("embedded network already configured")
+		}
+		n, err := tailnet.NewNode(c.StateDir, c.Hostname, key)
+		if err != nil {
+			return nil, err
+		}
+		e.node = n
+		e.networkEpoch++
+		return map[string]string{"state": "Configured"}, nil
+	case "network_start", "network_status", "network_logout", "network_stop":
+		e.mu.Lock()
+		n := e.node
+		e.mu.Unlock()
+		if n == nil {
+			if c.Op == "network_status" {
+				return tailnet.Status{State: "Unconfigured"}, nil
+			}
+			return nil, errors.New("embedded network is not configured")
+		}
+		if c.Op == "network_start" {
+			return n.Start(ctx)
+		}
+		if c.Op == "network_status" {
+			return n.Status(ctx)
+		}
+		e.mu.Lock()
+		e.networkEpoch++
+		for id := range e.embedded {
+			b.CloseSession(id)
+			delete(e.embedded, id)
+		}
+		e.mu.Unlock()
+		if c.Op == "network_stop" {
+			return nil, n.Stop(ctx)
+		}
+		return nil, n.Logout(ctx)
 	case "login":
 		return b.Login(ctx, c.Session, c.Username, c.Password)
 	case "request":
@@ -143,6 +226,9 @@ func (e *Engine) execute(c Command) (any, error) {
 		b.Revoke(c.URL)
 		return nil, nil
 	case "close_session":
+		e.mu.Lock()
+		delete(e.embedded, c.Session)
+		e.mu.Unlock()
 		b.CloseSession(c.Session)
 		return nil, nil
 	case "shutdown":
@@ -153,7 +239,14 @@ func (e *Engine) execute(c Command) (any, error) {
 		for _, stop := range e.pending {
 			stop()
 		}
+		n := e.node
+		e.node = nil
+		e.networkEpoch++
+		e.embedded = make(map[string]bool)
 		e.mu.Unlock()
+		if n != nil {
+			_ = n.Close()
+		}
 		return nil, b.Close()
 	default:
 		return nil, errors.New("unknown native command")

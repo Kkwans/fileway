@@ -19,6 +19,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalContext
+import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
@@ -28,6 +34,7 @@ import java.util.Locale
 
 @Composable fun ClientApp(model: ClientModel) {
     val state by model.state.collectAsStateWithLifecycle()
+    val network by model.networkState.collectAsStateWithLifecycle()
     BackHandler(state.connected) { if (!model.back()) model.disconnect() }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     Scaffold { insets ->
@@ -39,11 +46,19 @@ import java.util.Locale
                 var url by rememberSaveable { mutableStateOf("") }
                 var username by rememberSaveable { mutableStateOf("") }
                 var password by remember { mutableStateOf("") }
+                var mode by rememberSaveable { mutableStateOf("direct") }
                 Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = mode == "direct", onClick = { mode = "direct" }, label = { Text("本地网络") })
+                    FilterChip(selected = mode == "tailnet", onClick = { mode = "tailnet" }, label = { Text("Tailscale") })
+                }
+                if (mode == "tailnet") {
+                    NetworkCard(model)
+                }
                 OutlinedTextField(url, { url = it }, label = { Text("服务器地址") }, placeholder = { Text("https://nas.example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 OutlinedTextField(username, { username = it }, label = { Text("账号") }, singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
                 OutlinedTextField(password, { password = it }, label = { Text("密码") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp))
-                Button(onClick = { model.connect(url.trim(), username, password) }, enabled = !state.busy && url.isNotBlank() && username.isNotBlank() && password.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(12.dp)) { Text("连接服务器") }
+                Button(onClick = { model.connect(url.trim(), username, password, mode) }, enabled = !state.busy && url.isNotBlank() && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected), modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp), shape = RoundedCornerShape(12.dp)) { Text("连接服务器") }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text(state.serverLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
@@ -73,6 +88,46 @@ import java.util.Locale
             }
         }
     }
+}
+
+@Composable private fun NetworkCard(model: ClientModel) {
+    val network by model.networkState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var actionMessage by remember(network.authUrl) { mutableStateOf<String?>(null) }
+    var confirmLogout by remember { mutableStateOf(false) }
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("应用内 Tailscale · ${network.label}", style = MaterialTheme.typography.titleMedium)
+            if (network.ips.isNotEmpty()) Text(network.ips.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+            if (network.connected && network.acceptSubnets) Text("已接收批准的子网路由", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (network.state == "NeedsMachineAuth") Text("请在 Tailscale 管理页面批准这台设备。")
+            network.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            actionMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!network.connected) TextButton(onClick = model::connectNetwork, enabled = network.state != "Starting") { Text(if (network.state == "Starting") "正在连接" else "连接 Tailscale") }
+                if (network.authUrl.isNotEmpty()) TextButton(onClick = {
+                    val uri = Uri.parse(network.authUrl)
+                    val host = uri.host.orEmpty()
+                    if (uri.scheme != "https" || (host != "tailscale.com" && !host.endsWith(".tailscale.com"))) {
+                        actionMessage = "登录地址无法验证，请重新连接。"
+                    } else try { context.startActivity(Intent(Intent.ACTION_VIEW, uri)); actionMessage = null }
+                    catch (_: Exception) { actionMessage = "无法打开浏览器，可复制登录链接后手动打开。" }
+                }) { Text("打开登录页") }
+                if (network.state in listOf("Starting", "NeedsLogin", "NeedsMachineAuth", "Running")) TextButton(onClick = { model.stopNetwork() }) { Text(if (network.connected) "断开" else "取消连接") }
+            }
+            if (network.authUrl.isNotEmpty()) TextButton(onClick = {
+                try {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("Tailscale 登录", network.authUrl)
+                    clip.description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
+                    clipboard.setPrimaryClip(clip)
+                    actionMessage = "登录链接已复制，请勿分享。"
+                } catch (_: Exception) { actionMessage = "无法复制链接，请检查系统权限后重试。" }
+            }) { Text("复制登录链接") }
+            if (network.state !in listOf("Unconfigured", "Configured", "Closed", "Starting")) TextButton(onClick = { confirmLogout = true }) { Text("退出 Tailscale 账号") }
+        }
+    }
+    if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("退出 Tailscale？") }, text = { Text("将停止当前播放并退出内嵌节点，下次连接需要重新登录。") }, confirmButton = { TextButton(onClick = { confirmLogout = false; model.stopNetwork(logout = true) }) { Text("退出账号") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } })
 }
 
 @Composable private fun FileRow(file: ResourceRef, open: () -> Unit) {
