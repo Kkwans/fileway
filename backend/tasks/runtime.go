@@ -246,6 +246,16 @@ func (runtime *Runtime) run(ctx context.Context, task *Task, runner Runner) {
 	default:
 		task.Status = StatusCompleted
 		task.Error = ""
+		if task.Media != nil {
+			// FFmpeg reports the final packet timestamp, excluding its frame
+			// duration. Successful EOF/publication completes the whole job even
+			// when that timestamp is slightly below the probed container length.
+			if task.Media.DurationSeconds > 0 {
+				task.Media.ProcessedSeconds = task.Media.DurationSeconds
+			}
+			task.Media.UpdatedAt = task.FinishedAt
+			task.ProcessedItems = task.TotalItems
+		}
 	}
 	// A persisted terminal state is an API promise that the task can be
 	// retried immediately. Release process-local slots before publishing it.

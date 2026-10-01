@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/Kkwans/nas-file-browser/backend/hls"
 	"time"
 )
 
@@ -162,6 +164,44 @@ func TestRuntimeExclusiveKeyRejectsOverlappingDestructiveTask(t *testing.T) {
 		t.Fatalf("terminal task still held exclusive key: %v", err)
 	}
 	waitForTaskStatus(t, backend, second.ID, StatusCompleted)
+}
+
+func TestRuntimeCompletedMediaFinishesProgressWhileFailuresKeepActualPosition(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		backend := newMemoryBackend()
+		storage := NewStorage(backend)
+		runtime, err := NewRuntime(storage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task, err := storage.New(1, "owner", TypeMediaTranscode, "video", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Start(task, func(_ context.Context, report Reporter) (json.RawMessage, error) {
+			if err := report(Progress{TotalItems: 1, Media: &hls.Progress{Phase: "finalizing", DurationSeconds: 12.47, ProcessedSeconds: 12.387}}); err != nil {
+				return nil, err
+			}
+			if fail {
+				return nil, errors.New("publish failed")
+			}
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		status := StatusCompleted
+		if fail {
+			status = StatusFailed
+		}
+		finished := waitForTaskStatus(t, backend, task.ID, status)
+		if fail {
+			if finished.Media.ProcessedSeconds != 12.387 || finished.ProcessedItems != 0 {
+				t.Fatalf("failed progress changed: %#v", finished)
+			}
+		} else if finished.Media.ProcessedSeconds != 12.47 || finished.ProcessedItems != 1 || finished.Media.UpdatedAt != finished.FinishedAt {
+			t.Fatalf("completed progress incomplete: %#v", finished)
+		}
+	}
 }
 
 func waitForTaskStatus(t *testing.T, backend *memoryBackend, id string, status Status) *Task {
