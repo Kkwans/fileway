@@ -14,7 +14,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class NativeSmokeTest {
@@ -27,8 +26,11 @@ class NativeSmokeTest {
         val device = UiDevice.getInstance(instrumentation)
         assertTrue(device.wait(Until.hasObject(By.text("连接服务器")), 10_000))
         assertTrue(device.hasObject(By.text("服务器地址")))
-        val folder = instrumentation.targetContext.getExternalFilesDir("acceptance")!!
-        folder.mkdirs()
-        assertTrue(device.takeScreenshot(File(folder, "connection.png")))
+        // UTP uninstalls the app after instrumentation and removes its external
+        // files. Shell-owned acceptance screenshots must survive that cleanup.
+        val folder = "/sdcard/Download/nfb-client-acceptance"
+        device.executeShellCommand("mkdir -p $folder")
+        device.executeShellCommand("screencap -p $folder/connection.png")
+        assertEquals("CAPTURED", device.executeShellCommand("test -s $folder/connection.png && echo CAPTURED").trim())
     }
 }

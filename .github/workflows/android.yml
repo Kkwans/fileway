@@ -59,7 +59,7 @@ jobs:
           script: |
             ./gradlew -p android :app:connectedDebugAndroidTest --stacktrace
             mkdir -p android/app/build/acceptance
-            adb pull /sdcard/Android/data/io.github.kkwans.nasfilebrowser/files/acceptance android/app/build/acceptance/
+            adb pull /sdcard/Download/nfb-client-acceptance android/app/build/acceptance/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -68,3 +68,4 @@ jobs:
             android/app/build/outputs/apk/debug/*.apk
             android/app/build/reports/
             android/app/build/acceptance/
+            android/app/build/outputs/androidTest-results/

@@ -46,3 +46,9 @@
 - APK is debug-only at this stage. No formal signed release or NAS deployment is claimed.
 - Prototype commit 43537d4 was pushed successfully; CI run 36905368619 passed native build/Android build/lint/test-package compilation and is running the emulator runtime gate.
 - Windows prototype APK contains twelve native libraries across arm64/x86_64, including libVLC/libvlcjni, all with 16KiB ELF LOAD alignment. SDK zipalign -c -P 16 4 passed. Build output stays private until an explicit committed CI artifact is ready.
+
+## Emulator evidence at 43537d4
+
+- Run 36905368619 completed with workflow failure only in screenshot export: UTP removed the app-specific external directory after testing.
+- Actual device report: one test, zero failures/skips; installedAppLoadsNativeLibrariesAndRendersConnection passed (6.800s) on API35 x86_64 emulator. This proves libVLC app startup, JNI/Go protocol and visible connection form, not playback/HDR.
+- Fix: shell-owned screenshot directory under the ephemeral emulator Download area, surviving UTP cleanup; upload native test XML as well as HTML. The corrected export is pending its next run.
