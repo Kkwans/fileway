@@ -1,1 +1,1 @@
-# Native bridge and player keep rules are added with their feature slices.
+-keep class io.github.kkwans.nasfilebrowser.core.NativeTransport { *; }

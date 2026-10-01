@@ -21,5 +21,11 @@
 
 - Immutable per-session service roots and credentials; opaque wire paths/base paths retained.
 - Loopback-only revocable leases, Range/HEAD/416 forwarding, cancellation/backpressure and token renewal; redirects do not forward credentials.
-- Local Go tests and vet passed; x64 race gate is pending CI on this checkpoint (NAS has no C compiler).
+- Local Go tests and vet passed; x64 CI run 36900300990 passed race/vet at 322701b (NAS has no C compiler).
 - JNI/libVLC/embedded network and real native media remain unfinished. NAS production configuration is unchanged.
+
+## JNI transport checkpoint
+
+- Versioned JSON control bridge with session open/login/API/lease/revoke/cancel; media chunks remain in Go HTTP transport.
+- Byte-array JNI preserves UTF-8/non-BMP paths, and native runtime is packaged for arm64-v8a/x86_64 with explicit SONAME and 16KiB linker alignment.
+- Bridge/transport local tests and vet passed; Android native build/lint/race are pending CI for this checkpoint. No device/HDR acceptance claimed.
