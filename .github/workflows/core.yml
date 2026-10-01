@@ -1,0 +1,23 @@
+name: Go transport
+on:
+  push:
+    branches: [main]
+    paths: ['core/**', '.github/workflows/core.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26.6'
+          cache: false
+      - run: go test -race ./...
+      - run: go vet ./...

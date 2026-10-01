@@ -9,3 +9,17 @@
 - Rollback: repository and client build outputs are independent; no backend deployment changed.
 - Bootstrap commit: e3d6f7a, pushed to main.
 - Initial Linux CI failed before compilation: runner did not provide sdkmanager on PATH. The build workflow now installs a checksum-verified command-line SDK in a task-local directory.
+
+## Verified foundation at 6caa835
+
+- Linux x64 CI run 36816333423: debug assemble and lint passed; APK generated. No unit sources existed at this point.
+- Device installation remains blocked: the available ADB host reports no attached devices.
+- Authorised service contract check: authenticated source media info returned full duration, four audio and six subtitle tracks; head, tail and middle byte ranges each returned HTTP 206 and matching 65536-byte bodies/full source length.
+- This proves HTTP contracts, not Android decoding or HDR.
+
+## Streaming transport subslice
+
+- Immutable per-session service roots and credentials; opaque wire paths/base paths retained.
+- Loopback-only revocable leases, Range/HEAD/416 forwarding, cancellation/backpressure and token renewal; redirects do not forward credentials.
+- Local Go tests and vet passed; x64 race gate is pending CI on this checkpoint (NAS has no C compiler).
+- JNI/libVLC/embedded network and real native media remain unfinished. NAS production configuration is unchanged.
