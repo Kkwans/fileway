@@ -36,7 +36,13 @@ func acceleratorArgs(args []string, job Job, accelerator string) ([]string, stri
 	device := []string{"-init_hw_device", "rkmpp=rk"}
 	if job.HDR {
 		device = append(device, "-init_hw_device", "opencl=ocl@rk", "-filter_hw_device", "ocl")
-		filter += ",hwmap=derive_device=opencl,tonemap_opencl=tonemap=hable:format=nv12,hwmap=derive_device=rkmpp:reverse=1"
+		filter += ",hwmap=derive_device=opencl,tonemap_opencl=tonemap=hable:format=nv12"
+		// Software VP9 can download the OpenCL result directly. Mapping it
+		// back to MPP requires a downstream DRM consumer (encoder/overlay);
+		// hwdownload alone cannot negotiate that reverse mapping.
+		if codec != "libvpx-vp9" || job.SubtitleStream != nil {
+			filter += ",hwmap=derive_device=rkmpp:reverse=1"
+		}
 	} else {
 		device = append(device, "-filter_hw_device", "rk")
 	}

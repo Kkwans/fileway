@@ -38,6 +38,15 @@ func TestRKMPPArgumentsPreserveTracksGeometryAndCopyPaths(t *testing.T) {
 	}
 }
 
+func TestHDRWebMWithoutPGSDownloadsOpenCLFramesDirectly(t *testing.T) {
+	job := Job{Profile: DefaultWebMProfile, VideoCodec: "hevc", VideoWidth: 3840, VideoHeight: 1600, HDR: true}
+	args, method := acceleratorArgs(append([]string{"ffmpeg"}, webMTrackArgs("source", "output", 1280, 720, nil, nil, true)...), job, "rkmpp")
+	joined := strings.Join(args, " ")
+	if method != "hybrid" || !strings.Contains(joined, "tonemap_opencl=tonemap=hable:format=nv12,hwdownload,format=nv12,format=yuv420p") || strings.Contains(joined, "derive_device=rkmpp:reverse=1") {
+		t.Fatal(joined, method)
+	}
+}
+
 // This gate is also run in the isolated RK3588 release container with a real
 // HDR/PGS source. It never reads or writes production task/database state.
 func TestRKMPPRealHDRExportAndSubtitle(t *testing.T) {
@@ -137,5 +146,25 @@ func TestRKMPPRealHDRExportAndSubtitle(t *testing.T) {
 			t.Fatalf("incorrect window duration: %s", probe)
 		}
 		t.Logf("window=%s source start=2 duration=8", output)
+	})
+	t.Run("browser-webm-without-subtitle", func(t *testing.T) {
+		input := Input{UserID: 1, Path: "/no-subtitle.mkv", Identity: "fixture", SourcePath: source, VideoCodec: "hevc", VideoWidth: 3840, VideoHeight: 1600, HDR: true, DurationSeconds: 12.47, WindowSeconds: 8, SessionID: "rk-no-subtitle"}
+		var job Job
+		status, _, err := service.ReserveWebM(input, func(candidate Job) (string, error) { job = candidate; return "no-subtitle", nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := service.Run(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+		output, state, err := service.Asset(status.ID, 1, "index.webm")
+		if err != nil || state != StateCompleted {
+			t.Fatalf("%s %s %v", output, state, err)
+		}
+		if decoded, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-i", output, "-f", "null", "-").CombinedOutput(); err != nil {
+			t.Fatalf("decode: %s %v", decoded, err)
+		}
 	})
 }
