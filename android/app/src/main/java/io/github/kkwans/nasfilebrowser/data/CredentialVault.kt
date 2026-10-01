@@ -34,7 +34,7 @@ class CredentialVault(context: Context) {
     }
     fun read(id: String): ByteArray? = synchronized(lock) {
         val entry = file(id)
-        if (!entry.baseFile.exists()) return@synchronized null
+        if (!entry.baseFile.exists() && !File(entry.baseFile.path + ".bak").exists()) return@synchronized null
         val data = entry.readFully()
         check(data.size >= 29 && data[0] == 1.toByte()) { "本机凭据无法读取，请重新登录" }
         Cipher.getInstance("AES/GCM/NoPadding").run {
@@ -51,7 +51,11 @@ class CredentialVault(context: Context) {
         val entry = file(id); val output = entry.startWrite()
         try { output.write(payload); entry.finishWrite(output) } catch (error: Exception) { entry.failWrite(output); throw error }
     }
-    fun remove(id: String) = synchronized(lock) { file(id).delete() }
+    fun remove(id: String) = synchronized(lock) {
+        val entry = file(id)
+        entry.delete()
+        check(listOf(entry.baseFile, File(entry.baseFile.path + ".bak"), File(entry.baseFile.path + ".new")).none { it.exists() }) { "凭据无法删除，请重试" }
+    }
     fun nodeDataKey(): ByteArray = synchronized(lock) {
         read("node-data-key") ?: ByteArray(32).also { SecureRandom().nextBytes(it); write("node-data-key", it) }
     }

@@ -74,3 +74,15 @@
 - Windows isolated staging: final `assembleDebug`, `lintDebug`, `assembleDebugAndroidTest` passed. `git diff --check` passed. Computed normal body/secondary contrast exceeds 4.5:1 in both themes; screenshot and font/landscape visual gates remain pending the committed run.
 - The connection screen is one UI subslice. Final browser/recent/player/settings design and true-device visual/media acceptance remain outstanding. No release or backend deployment was performed; previous pushed client source is the rollback point.
 - Refinement commit 586c8b0 was pushed; Linux run 36913235998 passed all three native/storage/UI tests and exported the actual screenshot. Inspection found a lock-icon conversion defect: two SVG paths inherited `fill="none"` from a group but were converted as painted rectangles. Remove those non-painted paths; all eight vectors now match the visible pinned source paths, and AAPT2 compilation passed. Remaining font/landscape/theme/player/browser visual gates stay open.
+
+## Profile storage foundation checkpoint
+
+- Room 2.8.5 / KSP 2.3.12 compile with the locked AGP/Kotlin combination. Schema v1 is exported and versioned. Profile, source-revision/account and opaque directory namespaces are isolated; credential bytes remain in Keystore storage.
+- Profile/address changes reject late login persistence and credential restoration from the old source. Parent Upsert preserves children. Windows metadata can be saved; NAS-only login persistence rejects an unsupported backend. Credential deletion is verified, and legacy AtomicFile backup reads recover before treating a record as absent.
+- Final Windows `assembleDebug`, `lintDebug`, `assembleDebugAndroidTest` passed. Generated schema was validated with SQLite: foreign-key rejection, scoped cascade deletion and indexed account lookup passed. Four Android storage tests are compiled; their actual Room/Keystore runtime checks await committed CI.
+- This is a data foundation, not completed multi-profile UI/session switching/history. No client-state v2 migration, backend change or deployment was performed; the last pushed client commit remains the rollback point.
+
+## Embedded routing issue under correction
+
+- Inspection of locked tsnet/tsdial source found that generic Server.Dial may use system dialing for destinations outside tailnet routes. Unauthenticated selection guards remain valid, but an authenticated unapproved destination needs a stricter policy.
+- Next subslice must classify the destination with the embedded dialer and dial only the embedded netstack, preserving the resolved IP and original HTTP/TLS host. Unapproved routes must fail, including when the system LAN could reach them. External routing acceptance remains open.

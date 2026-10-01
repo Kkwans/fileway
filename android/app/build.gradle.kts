@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
 }
 android {
     namespace = "io.github.kkwans.nasfilebrowser"
@@ -34,6 +35,7 @@ android {
         cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }
     }
 }
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.ui:ui")
@@ -44,6 +46,8 @@ dependencies {
     implementation("org.videolan.android:libvlc-all:3.7.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
+    implementation("androidx.room:room-runtime:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

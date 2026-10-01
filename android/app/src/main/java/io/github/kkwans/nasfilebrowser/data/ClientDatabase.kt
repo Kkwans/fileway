@@ -1,0 +1,66 @@
+package io.github.kkwans.nasfilebrowser.data
+
+import android.content.Context
+import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+import java.util.UUID
+
+enum class BackendKind { NAS, WINDOWS }
+enum class ConnectionMode { DIRECT, TAILNET }
+
+@Entity(tableName = "server_profiles")
+data class ServerProfile(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val address: String,
+    val backend: BackendKind = BackendKind.NAS,
+    val network: ConnectionMode = ConnectionMode.DIRECT,
+    val sourceRevision: Long = 0,
+    val updatedAt: Long = 0,
+)
+
+@Entity(tableName = "accounts", foreignKeys = [ForeignKey(
+    entity = ServerProfile::class, parentColumns = ["id"], childColumns = ["profileId"], onDelete = ForeignKey.CASCADE,
+)], indices = [Index(value = ["profileId"]), Index(value = ["profileId", "sourceRevision", "userId"], unique = true)])
+data class AccountRecord(
+    @PrimaryKey val key: String,
+    val profileId: String,
+    val sourceRevision: Long,
+    val userId: Long,
+    val username: String,
+    val credentialRef: String,
+    val updatedAt: Long,
+)
+
+@Entity(tableName = "directory_state", foreignKeys = [ForeignKey(
+    entity = AccountRecord::class, parentColumns = ["key"], childColumns = ["accountKey"], onDelete = ForeignKey.CASCADE,
+)])
+data class DirectoryState(@PrimaryKey val accountKey: String, val path: String, val wirePath: String)
+
+@Dao interface ProfileDao {
+    @Query("SELECT * FROM server_profiles ORDER BY updatedAt DESC, name") fun profiles(): Flow<List<ServerProfile>>
+    @Query("SELECT * FROM server_profiles WHERE id = :id") suspend fun profile(id: String): ServerProfile?
+    @Upsert suspend fun saveProfile(profile: ServerProfile)
+    @Query("SELECT * FROM accounts WHERE profileId = :profile AND sourceRevision = :revision ORDER BY updatedAt DESC")
+    suspend fun accounts(profile: String, revision: Long): List<AccountRecord>
+    @Query("SELECT * FROM accounts WHERE `key` = :key") suspend fun account(key: String): AccountRecord?
+    @Upsert suspend fun saveAccount(account: AccountRecord)
+    @Query("SELECT * FROM directory_state WHERE accountKey = :key") suspend fun directory(key: String): DirectoryState?
+    @Upsert suspend fun saveDirectory(directory: DirectoryState)
+    @Query("SELECT credentialRef FROM accounts WHERE profileId = :id") suspend fun credentialRefs(id: String): List<String>
+    @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
+}
+
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class], version = 1, exportSchema = true)
+abstract class ClientDatabase : RoomDatabase() {
+    abstract fun profiles(): ProfileDao
+    companion object {
+        @Volatile private var instance: ClientDatabase? = null
+        fun get(context: Context): ClientDatabase = instance ?: synchronized(this) {
+            instance ?: Room.databaseBuilder(context.applicationContext, ClientDatabase::class.java, "nfb-client.db")
+                .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
+                // Never silently delete state when a future migration is missing.
+                .build().also { instance = it }
+        }
+    }
+}
