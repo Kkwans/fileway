@@ -433,6 +433,37 @@ async function geometry(page: Page) {
 }
 
 test.describe("affected page browser gate", () => {
+  test("keeps accepted transcodes submitted when task refresh fails", async ({
+    page,
+  }) => {
+    await installFixtureApi(page, []);
+    let submissions = 0;
+    await page.route(/\/api\/media\/transcodes(?:\?|$)/, (route) => {
+      submissions++;
+      return json(
+        route,
+        { items: [{ id: "accepted-task" }], failures: [] },
+        202
+      );
+    });
+    await page.route(/\/api\/tasks(?:\?|$)/, (route) =>
+      json(route, { error: "任务列表暂时不可用" }, 500)
+    );
+    await login(page);
+    await page.goto("/files/");
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    await page.getByRole("button", { name: "后台转码", exact: true }).click();
+    await page
+      .getByRole("button", { name: "开始后台转码", exact: true })
+      .click();
+    await expect(page).toHaveURL(/\/tasks\?tab=background/);
+    await expect(
+      page.getByRole("button", { name: "开始后台转码", exact: true })
+    ).toHaveCount(0);
+    await expect(page.locator(".task-center-state--error")).toBeVisible();
+    expect(submissions).toBe(1);
+  });
+
   test("submits directory transcodes at source quality and displays live task metrics across viewports", async ({
     page,
   }, testInfo) => {

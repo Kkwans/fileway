@@ -141,7 +141,9 @@ async function submit() {
     );
     if (!result.items.length)
       throw new Error(result.failures[0]?.error || "没有可提交的视频");
-    await tasks.load({ category: "background" });
+    // The server has accepted these tasks. A panel refresh failure must not
+    // turn that success into an invitation to submit the same videos again.
+    await tasks.load({ category: "background" }).catch(() => {});
     if (result.failures.length) {
       pendingPaths.value = result.failures.map((item) => item.path);
       error.value = `已提交 ${result.items.length} 个视频，${result.failures.length} 项失败：${result.failures[0].error}。重试只提交失败项。`;
