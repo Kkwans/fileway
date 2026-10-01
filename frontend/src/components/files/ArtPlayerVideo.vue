@@ -36,6 +36,25 @@
       </div>
     </div>
 
+    <div v-if="playbackError" class="art-ask-overlay" role="alert">
+      <div class="art-ask-card">
+        <div class="art-ask-title">视频暂时无法播放</div>
+        <p class="art-ask-sub">{{ playbackError }}</p>
+        <div class="art-ask-actions">
+          <button
+            type="button"
+            class="art-ask-btn art-ask-btn--primary"
+            @click="
+              switchEngine(actualMode, undefined, false, timelinePosition)
+            "
+          >
+            重试播放
+          </button>
+          <a class="art-ask-btn" :href="downloadUrl" download>下载原文件</a>
+        </div>
+      </div>
+    </div>
+
     <div v-if="askVisible" class="art-ask-overlay">
       <div class="art-ask-card">
         <div class="art-ask-title">选择播放方式</div>
@@ -223,6 +242,7 @@ const accountPreferences = useAccountPreferencesStore();
 const container = ref<HTMLElement | null>(null);
 const art = shallowRef<Artplayer | null>(null);
 const busy = ref(false);
+const playbackError = ref("");
 const askVisible = ref(false);
 const actualMode = ref<ActualMode>("native");
 const currentRate = ref(1);
@@ -554,6 +574,7 @@ function refreshMediaUiState(reason = "") {
 }
 
 const loadingVisible = computed(() => {
+  if (playbackError.value) return false;
   if (askVisible.value) return false;
   if (mediaUiReady.value) return false;
   const video = art.value?.video as HTMLVideoElement | undefined;
@@ -1569,6 +1590,7 @@ async function switchEngine(
     notice("原生播放已恢复默认音轨");
   }
   switchingEngine = true;
+  playbackError.value = "";
   const token = ++switchToken;
   const resume = captureResume();
   if (targetPosition !== undefined) {
@@ -1760,9 +1782,13 @@ async function switchEngine(
     }
   } catch (e) {
     if (token !== switchToken) return;
-    loadProgress.value = null;
-    if (pendingSeek === null)
-      notice(e instanceof Error ? e.message : "切换播放方式失败");
+    clearLoadingState({ force: true });
+    stopLoadWaitTimer();
+    playbackError.value =
+      mode === "compat"
+        ? "兼容视频处理失败。可以重试，或下载原文件使用本地播放器。"
+        : "视频加载失败。请检查连接后重试。";
+    void e;
   } finally {
     if (token === switchToken) {
       switchingEngine = false;
@@ -1773,32 +1799,33 @@ async function switchEngine(
         window.setTimeout(() => seekTo(next), 0);
       }
       syncPlayerLabels();
-      loaderForceTimer = window.setTimeout(() => {
-        if (token !== switchToken) return;
-        const video = art.value?.video as HTMLVideoElement | undefined;
-        if (
-          mediaUiReady.value ||
-          (video && video.readyState >= 2 && videoHasFrame(video))
-        ) {
-          clearLoadingState();
-          return;
-        }
-        const st = loadStatusText.value || "";
-        if (
-          mode === "compat" &&
-          (/转码|排队|兼容/.test(st) ||
-            (loadProgress.value != null && loadProgress.value >= 90))
-        ) {
-          // Still attaching HLS / waiting first frame — keep loader.
-          return;
-        }
-        if (video && (video.readyState >= 2 || video.currentTime > 0)) {
-          clearLoadingState();
-        } else {
-          clearLoadingState({ force: true });
-          notice("加载较慢，可再点一次播放或切换播放方式");
-        }
-      }, 8000);
+      if (!playbackError.value)
+        loaderForceTimer = window.setTimeout(() => {
+          if (token !== switchToken) return;
+          const video = art.value?.video as HTMLVideoElement | undefined;
+          if (
+            mediaUiReady.value ||
+            (video && video.readyState >= 2 && videoHasFrame(video))
+          ) {
+            clearLoadingState();
+            return;
+          }
+          const st = loadStatusText.value || "";
+          if (
+            mode === "compat" &&
+            (/转码|排队|兼容/.test(st) ||
+              (loadProgress.value != null && loadProgress.value >= 90))
+          ) {
+            // Still attaching HLS / waiting first frame — keep loader.
+            return;
+          }
+          if (video && (video.readyState >= 2 || video.currentTime > 0)) {
+            clearLoadingState();
+          } else {
+            clearLoadingState({ force: true });
+            notice("加载较慢，可再点一次播放或切换播放方式");
+          }
+        }, 8000);
     }
   }
 }

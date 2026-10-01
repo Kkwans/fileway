@@ -633,6 +633,58 @@ test.describe("affected page browser gate", () => {
     expect(errors).toEqual([]);
   });
 
+  test("replaces a failed compatibility loader with a retry action", async ({
+    page,
+  }) => {
+    await installFixtureApi(page, []);
+    await page.route(/\/api\/media\/info(?:\?|$)/, (route) =>
+      json(route, {
+        videoCodec: "hevc",
+        audioCodec: "aac",
+        duration: 16,
+        resolution: { width: 1920, height: 1080 },
+      })
+    );
+    let attempts = 0;
+    await page.route(/\/api\/media\/hls(?:\?|$)/, (route) => {
+      attempts++;
+      return json(
+        route,
+        attempts === 1
+          ? {
+              id: "failed-window",
+              state: "failed",
+              error: "real encoder failure",
+            }
+          : {
+              id: "retry-window",
+              state: "completed",
+              durationSeconds: 16,
+              sourceDurationSeconds: 16,
+              sourceUrl: "/api/retry-window.webm",
+            }
+      );
+    });
+    const clip = readFileSync(
+      path.resolve(import.meta.dirname, "fixtures/timeline-16.webm")
+    );
+    await page.route(/\/api\/retry-window.webm/, (route) =>
+      route.fulfill({ status: 200, contentType: "video/webm", body: clip })
+    );
+    await login(page);
+    await page.goto("/files/fixture-video.mkv");
+    await expect(page.getByRole("alert")).toContainText("视频暂时无法播放");
+    await expect(page.locator(".art-player-stage > .art-loading")).toHaveCount(0);
+    await page.getByRole("button", { name: "重试播放", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.locator("video").evaluate((v: HTMLVideoElement) => v.readyState)
+      )
+      .toBeGreaterThanOrEqual(2);
+    await expect(page.getByRole("button", { name: "重试播放" })).toHaveCount(0);
+    expect(attempts).toBe(2);
+  });
+
   test("prefetches and reuses the next playback window without canceling it", async ({
     page,
   }) => {
