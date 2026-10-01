@@ -8,6 +8,14 @@ permissions:
   contents: read
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: '35'
+            target: google_apis
+          - api: '37.0'
+            target: google_apis_ps16k
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -50,20 +58,22 @@ jobs:
       - name: Native runtime and UI smoke (emulator only)
         uses: ReactiveCircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808
         with:
-          api-level: 35
+          api-level: ${{ matrix.api }}
           arch: x86_64
-          target: google_apis
+          target: ${{ matrix.target }}
           profile: pixel_7
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            adb shell getconf PAGESIZE
+            if [ '${{ matrix.target }}' = google_apis_ps16k ]; then test "$(adb shell getconf PAGESIZE | tr -d '\r')" = 16384; fi
             ./gradlew -p android :app:connectedDebugAndroidTest --stacktrace
             mkdir -p android/app/build/acceptance
             adb pull /sdcard/Download/nfb-client-acceptance android/app/build/acceptance/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: android-checkpoint
+          name: android-checkpoint-api${{ matrix.api }}
           path: |
             android/app/build/outputs/apk/debug/*.apk
             android/app/build/reports/

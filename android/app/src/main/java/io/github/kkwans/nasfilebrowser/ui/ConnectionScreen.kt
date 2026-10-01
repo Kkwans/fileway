@@ -1,5 +1,13 @@
 package io.github.kkwans.nasfilebrowser.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
@@ -24,6 +33,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
@@ -31,6 +43,26 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
 @Composable internal fun ConnectionScreen(model: ClientModel, state: ClientState) {
     val network by model.networkState.collectAsStateWithLifecycle()
     val focus = LocalFocusManager.current
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    fun hasLocalAccess() = Build.VERSION.SDK_INT < 37 || context.checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+    var localAccess by remember { mutableStateOf(hasLocalAccess()) }
+    var accessDenied by rememberSaveable { mutableStateOf(false) }
+    var accessMessage by remember { mutableStateOf<String?>(null) }
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        localAccess = granted
+        accessDenied = !granted
+        val next = afterPermission; afterPermission = null
+        // Permission denial must not block a public service that needs no LAN
+        // access. Local connections will report their real network error.
+        next?.invoke()
+    }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) localAccess = hasLocalAccess() }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     var url by rememberSaveable { mutableStateOf("") }
     var username by rememberSaveable { mutableStateOf("") }
     // Passwords never enter saved instance state or acceptance artifacts.
@@ -38,7 +70,17 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
     var visiblePassword by remember { mutableStateOf(false) }
     var mode by rememberSaveable { mutableStateOf("direct") }
     val canConnect = !state.busy && url.isNotBlank() && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected)
-    val connect = { if (canConnect) { focus.clearFocus(); model.connect(url.trim(), username, password, mode) } }
+    val connect = {
+        if (canConnect) {
+            focus.clearFocus()
+            val server = url.trim(); val user = username; val secret = password; val networkMode = mode
+            val action = { model.connect(server, user, secret, networkMode) }
+            if (Build.VERSION.SDK_INT >= 37 && networkMode == "direct" && !hasLocalAccess() && !accessDenied) {
+                afterPermission = action
+                permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            } else action()
+        }
+    }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(insets).imePadding(), contentAlignment = Alignment.TopCenter) {
@@ -53,6 +95,22 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
                         ConnectionMode("Tailscale", "远程连接", R.drawable.ic_network, mode == "tailnet", Modifier.weight(1f), !state.busy) { mode = "tailnet" }
                     }
                     if (mode == "tailnet") NetworkCard(model)
+                    if (Build.VERSION.SDK_INT >= 37 && !localAccess) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(14.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("本地网络访问", style = MaterialTheme.typography.titleMedium)
+                                Text(if (accessDenied) "尚未允许访问局域网。连接本地 NAS 和本地节点会受限。" else "连接局域网 NAS 和本地节点时，需要允许本地网络访问。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row {
+                                    TextButton(onClick = { afterPermission = null; permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK) }) { Text("允许访问") }
+                                    if (accessDenied) TextButton(onClick = {
+                                        try { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
+                                        catch (_: Exception) { accessMessage = "无法打开设置，请在系统应用设置中允许本地网络访问。" }
+                                    }) { Text("打开设置") }
+                                }
+                                accessMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            }
+                        }
+                    }
                     ConnectionField(url, { url = it }, "服务器地址", R.drawable.ic_link, enabled = !state.busy,
                         placeholder = "https://nas.example.com", keyboardType = KeyboardType.Uri,
                         supporting = "支持 IP、端口、域名和路径前缀")

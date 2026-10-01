@@ -90,3 +90,12 @@
 - Implemented strict route classification and netstack-only dialing, with the resolved address fixed before connecting. The unstable SDK subsystem access is isolated and documented in `embedded-routing.md` against the pinned SDK.
 - Windows Go tests/vet, both Android ABI builds, debug/lint/test-package compilation passed. Regression fixtures verified rejection of reachable unapproved LAN routes, original TLS/HTTP host with resolved-IP dialing, and cancellation. All twelve APK native libraries and ZIP layout still pass 16KiB alignment; latest staging APK SHA256 49CC268091F1B543F572A602458839AF89A48E7AAE633239D167F3573253EC42. Linux race/device CI is pending its commit.
 - ADB resource check was refreshed: zero attached devices on the available bridge. The correction is implemented; real overlay/HDR/MKV/long-play gates remain open. NAS production and unrelated Windows services remain unchanged. Prior client commit is the rollback point.
+- Commit 413f9ca was pushed; Linux Go race/vet run 36920603087 and Android run 36920603016 passed.
+
+## Android 17 local-network compatibility checkpoint
+
+- Official target-SDK37 requirements were verified: declare/request ACCESS_LOCAL_NETWORK and handle denial/revocation. The connection page exposes the purpose, explicit authorization and settings recovery. A direct connection requests permission before trying; denial preserves input and still permits a public server whose connection requires no LAN access. Embedded remote connections remain usable without forcing a local grant.
+- Foreground return rechecks permission. Permission callbacks bind the pending connection inputs; passwords stay only in transient memory. Android 10–16 retain their existing behavior.
+- Final Windows debug/lint/test-package build passed. Runtime authorization/denial/retry tests are compiled for SDK37, and primary-action reachability now covers a scrolling form with the permission panel.
+- CI matrix includes API35 and API37.0 google_apis_ps16k; the official image identifier and pinned runner's string API-level handling were verified. The 16KiB job checks actual guest page size before tests. Both matrix runs are pending the next commit; no Android17 runtime or physical-device acceptance is claimed yet.
+- Source: [Android local-network permission](https://developer.android.com/privacy-and-security/local-network-permission?hl=en). Production NAS and unrelated Windows services are unchanged; prior client commit is the rollback point.
