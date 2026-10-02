@@ -1,0 +1,9 @@
+diff --git a/modules/text_renderer/freetype/freetype.c b/modules/text_renderer/freetype/freetype.c
+--- a/modules/text_renderer/freetype/freetype.c
++++ b/modules/text_renderer/freetype/freetype.c
+@@ -63,4 +63,5 @@
+ /* Android */
+ #ifdef __ANDROID__
++# undef HAVE_FONTCONFIG
+ # define HAVE_GET_FONT_BY_FAMILY_NAME
+ #endif

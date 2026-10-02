@@ -1,0 +1,16 @@
+{
+  "version": "3.7.6",
+  "sdk": {
+    "commit": "c0cc8ce6443dcb09be9b43c7b7a3ed01e33cb3ac",
+    "url": "https://code.videolan.org/videolan/libvlcjni/-/archive/c0cc8ce6443dcb09be9b43c7b7a3ed01e33cb3ac/libvlcjni-c0cc8ce6443dcb09be9b43c7b7a3ed01e33cb3ac.tar.gz",
+    "sha256": "6710b027cf924f403be3e7d6bf8e2230328ed6a52f377a5e39bf675296eeef19",
+    "root": "libvlcjni-c0cc8ce6443dcb09be9b43c7b7a3ed01e33cb3ac"
+  },
+  "vlc": {
+    "commit": "66455a98c8c515796b4a192acaa125c5d68c76c8",
+    "url": "https://code.videolan.org/videolan/vlc/-/archive/66455a98c8c515796b4a192acaa125c5d68c76c8/vlc-66455a98c8c515796b4a192acaa125c5d68c76c8.tar.gz",
+    "sha256": "74786d29795e07c326ad3442065ad5ea8235d4c095d538b6c9d3d9acf490057f",
+    "root": "vlc-66455a98c8c515796b4a192acaa125c5d68c76c8"
+  },
+  "ndk": "28.2.13676358"
+}
