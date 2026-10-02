@@ -67,6 +67,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var closing: Job? = null
     private var mediaClosing: Job? = null
     private var lastSaved: Pair<Long, Long>? = null
+    val search = SearchController(viewModelScope, { context == it && generation == it.generation }, ::open)
     init { player.checkpoint = { saveProgress() } }
 
     fun connect(url: String, username: String, password: String, network: String = "direct") {
@@ -170,6 +171,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             browse(file.path, file.wirePath)
         } else if (file.type == "video" || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "avi", "mov", "m2ts", "ts")) {
             val bound = context ?: return
+            search.cancel()
             operation?.cancel(); val expected = generation
             mutable.value = mutable.value.copy(busy = true, stage = "正在打开视频", error = null)
             operation = viewModelScope.launch {
@@ -212,6 +214,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     private fun browse(path: String, wire: String) {
         val bound = context ?: return
+        search.close()
         operation?.cancel(); val expected = generation
         mutable.value = mutable.value.copy(busy = true, stage = "正在读取目录", error = null)
         operation = viewModelScope.launch {
@@ -221,6 +224,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun retry() { browse(mutable.value.path, mutable.value.wirePath) }
+    fun openSearch() {
+        val bound = context ?: return
+        if (!mutable.value.busy && mutable.value.selected == null) search.open(bound, mutable.value.path, mutable.value.wirePath)
+    }
     fun cancel() {
         operation?.cancel()
         resumeOperation?.cancel()
@@ -228,6 +235,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun back(): Boolean {
         if (mutable.value.selected != null) { leavePlayer(); return true }
+        if (search.state.value.open) { search.close(); return true }
         if (mutable.value.tab != "files") { tab("files"); return true }
         if (navigation.isNotEmpty()) { val previous = navigation.removeLast(); browse(previous.first, previous.second); return true }
         if (mutable.value.path != "/") {
@@ -236,7 +244,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
         return false
     }
-    fun tab(value: String) { mutable.value = mutable.value.copy(tab = value) }
+    fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return
         if (snapshot.accountKey != bound.account.key) return
@@ -312,6 +320,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun leavePlayer() { operation?.cancel(); endPlayback(); mutable.value = mutable.value.copy(selected = null, busy = false, stage = "") }
     private fun revokeLease() { val old = lease; lease = ""; if (old.isNotEmpty()) cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", old)) } }
     private fun closeSession() {
+        search.close()
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
         val previous = closing; val media = mediaClosing
@@ -345,7 +354,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun foreground(active: Boolean) {
         foreground = active
-        if (!active) { networkPollJob?.cancel(); return }
+        if (!active) { networkPollJob?.cancel(); search.cancel(); return }
         if (networkActivated && networkJob?.isActive != true) observeNetwork()
     }
     fun stopNetwork(logout: Boolean = false) {
