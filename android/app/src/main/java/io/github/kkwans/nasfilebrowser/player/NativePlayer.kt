@@ -53,7 +53,9 @@ class NativePlayer(context: Context) {
             }
             if (event.type in listOf(MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected, MediaPlayer.Event.Playing, MediaPlayer.Event.Vout)) refreshTracks()
             val resume = resumeTarget
-            if (resume != null && mutable.value.seekable && mutable.value.durationMs > 0) {
+            // Seekability describes the input, not a ready decoder/output.
+            // Resume only after the first advancing playback clock event.
+            if (resume != null && event.type == MediaPlayer.Event.TimeChanged && event.timeChanged > 0 && mutable.value.playing && mutable.value.seekable && mutable.value.durationMs > 0) {
                 resumeTarget = null
                 seek(resume)
             }
