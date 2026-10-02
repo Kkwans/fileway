@@ -138,3 +138,5 @@
 - Backgrounding cancels an in-flight resume check, and opening completed in the background cannot auto-play. Disconnect/logout waits for the local playback flush before stopping the embedded node. The native fixture covers the delayed-resume lifecycle case.
 
 - Commit 63e0a2c was pushed. Run 36954921981 failed both instrumented playback jobs; API37 actual XML: eighteen tests, one failure, zero errors/skips. The owned native MKV test timed out after 25 seconds; the other seventeen passed. Video-output creation errors appeared during cleanup, so the timeout's precise player/source state and failure frame must be captured before assigning a root cause. Native playback is not accepted.
+
+- Diagnostic commit d7e1e95 was pushed; run 36956606330 exited before instrumentation because the pinned emulator action runs each script line in its own `sh -c`. A standalone EXIT trap immediately attempted export. Corrected the test/export/status handling to one shell invocation; nine focused regressions verify ordering, failed-test evidence export, preserved nonzero status, export failure and actual 16KiB page gating. These are CI-script checks, not media acceptance.
