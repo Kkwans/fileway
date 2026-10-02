@@ -4,14 +4,26 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 abi="${1:?Specify arm64-v8a or x86_64}"
 workspace="${2:?Specify a new external workspace}"
 archive_dir="${3:?Specify an external source archive cache}"
+fail() { printf '%s\n' "$*" >&2; exit 1; }
 case "$abi" in arm64-v8a|x86_64) ;; *) echo 'Unsupported test ABI' >&2; exit 2 ;; esac
-test "$(uname -s)" = Linux
-test "$(uname -m)" = x86_64
-ndk_root="${ANDROID_NDK_HOME:-${ANDROID_HOME:?Set ANDROID_HOME}/ndk/28.2.13676358}"
-test -x "$ndk_root/ndk-build"
-grep -q '^Pkg.Revision = 28.2.13676358$' "$ndk_root/source.properties"
+test "$(uname -s)" = Linux || fail 'Native source build requires Linux'
+test "$(uname -m)" = x86_64 || fail 'Native source build requires an x64 host'
+# A runner's ambient ANDROID_NDK_HOME may point to a different preinstalled
+# version. Resolve the task SDK, or an explicit task-owned override, instead.
+ndk_root="${NFB_VLC_NDK_ROOT:-${ANDROID_HOME:?Set ANDROID_HOME}/ndk/28.2.13676358}"
+printf 'Selected native NDK: %s\n' "$ndk_root"
+test -x "$ndk_root/ndk-build" || fail 'Selected NDK has no executable ndk-build'
+ndk_revision="$(python3 - "$ndk_root/source.properties" <<'PY'
+from pathlib import Path
+import sys
+properties = dict(line.split('=', 1) for line in Path(sys.argv[1]).read_text().splitlines() if '=' in line)
+print(next((value.strip() for key, value in properties.items() if key.strip() == 'Pkg.Revision'), 'missing'))
+PY
+)"
+printf 'Selected native NDK revision: %s\n' "$ndk_revision"
+test "$ndk_revision" = 28.2.13676358 || fail 'Selected NDK differs from the locked version'
 for command in git python3 make autoconf automake autopoint libtoolize pkg-config cmake meson ninja; do
-  command -v "$command" >/dev/null
+  command -v "$command" >/dev/null || fail "Missing source-build tool: $command"
 done
 python3 "$repo_root/scripts/prepare-vlc-font-backend.py" --workspace "$workspace" --archive-dir "$archive_dir"
 workspace="$(cd "$workspace" && pwd)"
