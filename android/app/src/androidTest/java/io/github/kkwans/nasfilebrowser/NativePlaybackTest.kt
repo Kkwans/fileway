@@ -5,7 +5,9 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
+import android.os.Bundle
 import android.view.PixelCopy
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
@@ -16,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
@@ -45,6 +48,12 @@ class NativePlaybackTest {
 
     @Test fun mkvResumeSeekPauseRecentAndReplacementUseRealNativePlayer() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        arguments.getString("nfbFontScale")?.toFloat()?.let { expected ->
+            assertEquals("The actual app must use the requested font scale", expected, instrumentation.targetContext.resources.configuration.fontScale, 0.01f)
+        }
+        val visualVariant = arguments.getString("nfbVisualVariant").orEmpty()
+        require(visualVariant.matches(Regex("[a-z0-9-]{0,32}")))
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = Fixture(media)
         val storage = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
@@ -116,6 +125,11 @@ class NativePlaybackTest {
             }
             assertTrue("Native audio track must be discovered", model.player.state.value.audio.any { it.id >= 0 })
             val device = UiDevice.getInstance(instrumentation)
+            fun capture(name: String) {
+                val suffix = if (visualVariant.isEmpty()) "" else "-$visualVariant"
+                device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+                device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$name$suffix.png")
+            }
             assertTrue("Playing controls must hide after inactivity", device.wait(Until.gone(By.desc("暂停播放")), 6000))
             device.findObject(By.desc("视频画面")).click()
             assertTrue("A tap restores explicit playback controls", device.wait(Until.hasObject(By.desc("暂停播放")), 3000))
@@ -131,16 +145,53 @@ class NativePlaybackTest {
             assertEquals("fixture-v1", saved.identity)
             assertTrue(source.rawRequests.get() > 0)
             assertEquals(0, source.unexpected.get())
-            onMain { model.player.volume(35); model.player.rate(1.25f) }
+            device.findObject(By.desc("播放速度")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            device.findObject(By.text("1.25×")).click()
+            waitUntil { model.player.state.value.rate == 1.25f }
+            // At large font sizes this real action sits below the visible
+            // details area. Scroll the native page, never bypass its UI.
+            for (attempt in 0 until 4) {
+                val target = device.findObject(By.desc("播放器音量"))
+                if (target != null && target.visibleBounds.height() >= (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt()) break
+                device.findObject(By.desc("播放详情"))?.scroll(Direction.DOWN, 0.7f)
+            }
+            val volumeAction = device.findObject(By.desc("播放器音量"))
+            assertNotNull("Volume must be reachable after scrolling", volumeAction)
+            volumeAction.click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            fun adjustable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+                if (node.contentDescription?.toString() == "播放器音量" && node.rangeInfo != null) return node
+                for (index in 0 until node.childCount) node.getChild(index)?.let { child -> adjustable(child)?.let { return it } }
+                return null
+            }
+            var slider: AccessibilityNodeInfo? = null
+            val readyAt = android.os.SystemClock.uptimeMillis() + 5000
+            while (slider == null && android.os.SystemClock.uptimeMillis() < readyAt) {
+                instrumentation.uiAutomation.rootInActiveWindow?.let { slider = adjustable(it) }
+                if (slider == null) delay(100)
+            }
+            if (slider == null) {
+                fun inspect(node: AccessibilityNodeInfo) {
+                    android.util.Log.i("NfbAcceptance", "class=${node.className}, desc=${node.contentDescription}, range=${node.rangeInfo}, actions=${node.actionList.map { it.id }}")
+                    for (index in 0 until node.childCount) node.getChild(index)?.let(::inspect)
+                }
+                instrumentation.uiAutomation.rootInActiveWindow?.let(::inspect)
+            }
+            assertNotNull("The volume slider must expose an accessible range", slider)
+            val progress = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 35f) }
+            assertTrue(slider!!.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, progress))
+            waitUntil { model.player.state.value.volume == 35 }
             assertEquals(35, model.player.state.value.volume)
             assertEquals(1.25f, model.player.state.value.rate, 0.001f)
+            capture("player-volume-sheet")
+            device.findObject(By.desc("关闭播放设置")).click()
             device.findObject(By.desc("选择音轨")).click()
             assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
-            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
-            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-audio-sheet.png")
+            capture("player-audio-sheet")
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.desc("开始播放")), 3000))
-            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-fixture.png")
+            capture("player-fixture")
             device.findObject(By.desc("横屏全屏")).click()
             // Android's first immersive entry presents its own onboarding. Do
             // not mistake that system overlay for app controls or disable it.
@@ -152,16 +203,16 @@ class NativePlaybackTest {
             assertTrue("Rotation must preserve the paused source", !model.player.state.value.playing && model.state.value.selected == file)
             device.findObject(By.desc("选择音轨")).click()
             assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
-            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-landscape-audio.png")
+            capture("player-landscape-audio")
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.desc("退出全屏")), 3000))
-            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-landscape.png")
+            capture("player-landscape")
             device.findObject(By.desc("退出全屏")).click()
             assertTrue("Exit fullscreen must restore portrait controls", device.wait(Until.hasObject(By.desc("横屏全屏")), 5000))
             onMain { model.leavePlayer(); model.tab("recent") }
             waitUntil { model.recent.value.any { it.resourceKey == file.wirePath } }
             assertTrue("Recent capture must show the actual recent page", device.wait(Until.hasObject(By.text("继续观看")), 5000))
-            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/recent-fixture.png")
+            capture("recent-fixture")
             onMain { model.openRecent(saved) }
             checking = "recent reopen"
             waitUntil { model.player.state.value.playing && model.player.state.value.positionMs >= saved.positionMs - 1500 }
@@ -186,6 +237,15 @@ class NativePlaybackTest {
             val device = UiDevice.getInstance(instrumentation)
             device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/native-playback-failure.png")
+            // This test only uses owned fixture credentials/media. Restrict
+            // diagnostics to this process rather than exporting system logs.
+            runCatching {
+                val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "native-playback-failure-logcat.txt")
+                output.writeText(device.executeShellCommand("logcat -d --pid=${android.os.Process.myPid()} -t 2000"))
+                // UiAutomation runs argv directly. Copy before UTP removes the
+                // app-specific directory; do not rely on shell redirection.
+                device.executeShellCommand("cp ${output.absolutePath} /sdcard/Download/nfb-client-acceptance/native-playback-failure-logcat.txt")
+            }.onFailure { error.addSuppressed(it) }
             throw error
         } finally {
             source.releaseRead.countDown()

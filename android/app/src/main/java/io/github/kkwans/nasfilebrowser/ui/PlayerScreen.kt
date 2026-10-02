@@ -34,9 +34,16 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -169,7 +176,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         if (visible) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000)))).padding(horizontal = if (landscape) 20.dp else 12.dp)) {
                             PlayerSlider(seek ?: state.positionMs.toFloat().coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)), state.durationMs.toFloat().coerceAtLeast(1f),
                                 "播放进度", state.seekable && state.durationMs > 0,
-                                { seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() })
+                                { seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() },
+                                clock((seek ?: state.positionMs.toFloat()).toLong()) + "，共 " + clock(state.durationMs))
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 PlayerIcon(if (state.playing) R.drawable.art_pause else R.drawable.art_play, if (state.playing) "暂停播放" else "开始播放", { touch(); model.togglePlayback() }, !client.busy)
                                 if (landscape) {
@@ -188,7 +196,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                         }
                     }
-                    if (!landscape) Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    if (!landscape) Column(Modifier.weight(1f).semantics { contentDescription = "播放详情" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(file.name, fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
                             Text(client.serverLabel, color = PlayerSecondary, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -270,28 +278,51 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
     }
 }
 @Composable private fun PlayerLabel(text: String, label: String, enabled: Boolean = true, click: () -> Unit) {
-    Box(Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = label }.clickable(enabled = enabled, onClick = click).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).clickable(enabled = enabled, role = Role.Button, onClick = click).clearAndSetSemantics {
+        contentDescription = label
+        stateDescription = text
+        role = Role.Button
+        if (!enabled) disabled()
+    }.padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
         Text(text, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = if (enabled) 0.94f else 0.38f))
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun PlayerSlider(value: Float, maximum: Float, label: String, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit = {}) {
-    // Keep Compose's mature drag, keyboard and TalkBack implementation. Only
-    // the visual thumb/track adapt Artplayer's thin progress component.
-    Slider(value = value.coerceIn(0f, maximum), onValueChange = change, onValueChangeFinished = finish, valueRange = 0f..maximum, enabled = enabled,
-        modifier = Modifier.fillMaxWidth().height(48.dp).semantics { contentDescription = label },
+@Composable private fun PlayerSlider(value: Float, maximum: Float, label: String, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit = {}, description: String = "${value.toInt()}%") {
+    // Preserve Material's drag and keyboard handling. Export one named range
+    // with meaningful time/volume state, rather than split label/range nodes
+    // and the default raw millisecond number. Accessibility uses the same
+    // change/finish callbacks as direct manipulation.
+    Box(Modifier.fillMaxWidth().clearAndSetSemantics {
+        contentDescription = label
+        stateDescription = description
+        progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(0f, maximum), 0f..maximum)
+        if (!enabled) disabled()
+        setProgress { target ->
+            val next = target.coerceIn(0f, maximum)
+            if (!enabled || !next.isFinite() || next == value) false else { change(next); finish(); true }
+        }
+    }) {
+        Slider(value = value.coerceIn(0f, maximum), onValueChange = change, onValueChangeFinished = finish, valueRange = 0f..maximum, enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(48.dp),
         thumb = { Box(Modifier.size(10.dp).background(if (enabled) PlayerAccent else PlayerSecondary, CircleShape)) },
         track = { Canvas(Modifier.fillMaxWidth().height(3.dp)) {
             val y = size.height / 2
             drawLine(Color.White.copy(alpha = 0.28f), Offset(0f, y), Offset(size.width, y), 3.dp.toPx(), StrokeCap.Round)
             drawLine(if (enabled) PlayerAccent else PlayerSecondary, Offset(0f, y), Offset(size.width * (value / maximum).coerceIn(0f, 1f), y), 3.dp.toPx(), StrokeCap.Round)
         } })
+    }
 }
 @Composable private fun JumpAction(icon: Int, label: String, enabled: Boolean, click: () -> Unit) {
     PlayerIcon(icon, label, click, enabled)
 }
 @Composable private fun DetailAction(icon: Int, title: String, value: String, label: String, enabled: Boolean = true, click: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).semantics { contentDescription = label }.clickable(enabled = enabled, onClick = click).padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable(enabled = enabled, role = Role.Button, onClick = click).clearAndSetSemantics {
+        contentDescription = label
+        stateDescription = value
+        role = Role.Button
+        if (!enabled) disabled()
+    }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(painterResource(icon), null, Modifier.size(20.dp), tint = PlayerSecondary)
         Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Text(value, modifier = Modifier.weight(1f), fontSize = 13.sp, color = PlayerSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
