@@ -40,6 +40,7 @@ object NativeTransport {
                     val cleanup = when (request.optString("op")) {
                         "open" -> JSONObject().put("op", "close_session").put("session", result)
                         "lease", "asset" -> JSONObject().put("op", "revoke").put("url", result)
+                        "search_start" -> JSONObject().put("op", "search_cancel").put("session", request.optString("session")).put("search", result)
                         else -> null
                     }
                     cleanup?.let { nativeCall(it.toString().toByteArray(Charsets.UTF_8)) }

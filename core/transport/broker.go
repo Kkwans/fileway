@@ -49,6 +49,7 @@ type Broker struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	leases   map[string]*Lease
+	searches map[string]*searchStream
 	listener net.Listener
 	server   *http.Server
 	closed   bool
@@ -59,7 +60,7 @@ func New() (*Broker, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Broker{sessions: make(map[string]*Session), leases: make(map[string]*Lease), listener: ln}
+	b := &Broker{sessions: make(map[string]*Session), leases: make(map[string]*Lease), searches: make(map[string]*searchStream), listener: ln}
 	b.server = &http.Server{Handler: b, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() { _ = b.server.Serve(ln) }()
 	return b, nil
@@ -298,6 +299,12 @@ func (b *Broker) CloseSession(id string) {
 			delete(b.leases, key)
 		}
 	}
+	for key, search := range b.searches {
+		if search.session == s {
+			search.stop()
+			delete(b.searches, key)
+		}
+	}
 	b.mu.Unlock()
 	if s != nil {
 		s.cancel()
@@ -315,8 +322,12 @@ func (b *Broker) Close() error {
 	for _, l := range b.leases {
 		l.cancel()
 	}
+	for _, search := range b.searches {
+		search.stop()
+	}
 	b.sessions = make(map[string]*Session)
 	b.leases = make(map[string]*Lease)
+	b.searches = make(map[string]*searchStream)
 	b.mu.Unlock()
 	return b.server.Close()
 }

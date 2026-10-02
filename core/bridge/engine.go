@@ -32,6 +32,9 @@ type Command struct {
 	StateDir   string          `json:"stateDir"`
 	Hostname   string          `json:"hostname"`
 	StorageKey string          `json:"storageKey"`
+	Query      string          `json:"query"`
+	Scope      string          `json:"scope"`
+	Search     string          `json:"search"`
 }
 
 type Envelope struct {
@@ -212,6 +215,17 @@ func (e *Engine) execute(c Command) (any, error) {
 		return b.Login(ctx, c.Session, c.Username, c.Password)
 	case "request":
 		return b.Request(ctx, c.Session, c.Method, c.Endpoint, c.Body)
+	case "search_start":
+		id, err := b.StartSearch(ctx, c.Session, c.Path, c.WirePath, c.Query, c.Scope)
+		if err == nil && ctx.Err() != nil {
+			_ = b.CancelSearch(c.Session, id)
+			return nil, ctx.Err()
+		}
+		return id, err
+	case "search_poll":
+		return b.PollSearch(c.Session, c.Search)
+	case "search_cancel":
+		return nil, b.CancelSearch(c.Session, c.Search)
 	case "token":
 		return b.Token(c.Session)
 	case "lease":
