@@ -11,10 +11,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
 import android.content.ClipData
@@ -24,10 +22,8 @@ import android.net.Uri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
-import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import io.github.kkwans.nasfilebrowser.data.PlaybackSnapshot
 import io.github.kkwans.nasfilebrowser.data.ProgressSync
-import org.videolan.libvlc.util.VLCVideoLayout
 import java.util.Locale
 
 @Composable fun ClientApp(model: ClientModel) {
@@ -151,52 +147,4 @@ private fun readableSize(size: Long): String {
     if (size >= 1L shl 20) return String.format(Locale.ROOT, "%.1f MB", size.toDouble() / (1L shl 20))
     return String.format(Locale.ROOT, "%.0f KB", size.toDouble() / 1024)
 }
-private fun clock(ms: Long): String { val s = ms.coerceAtLeast(0) / 1000; return if (s >= 3600) String.format(Locale.ROOT, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) else String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60) }
-
-@Composable private fun PlayerScreen(model: ClientModel, file: ResourceRef) {
-    val state by model.player.state.collectAsStateWithLifecycle()
-    val client by model.state.collectAsStateWithLifecycle()
-    var audioMenu by remember { mutableStateOf(false) }; var subtitleMenu by remember { mutableStateOf(false) }; var speedMenu by remember { mutableStateOf(false) }
-    DisposableEffect(model.player) { onDispose { model.player.detach() } }
-    ClientTheme(darkTheme = true) {
-        Scaffold(containerColor = Color.Black) { insets ->
-            Column(Modifier.fillMaxSize().padding(insets)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = model::leavePlayer) { Text("返回") }
-                    Text(file.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                AndroidView(factory = { context -> VLCVideoLayout(context).also { model.player.attach(it) } }, modifier = Modifier.fillMaxWidth().weight(1f).background(Color.Black))
-                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(state.error ?: if (state.phase == "正在缓冲") "正在缓冲 ${state.buffering.toInt()}%" else state.phase, color = if (state.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                    client.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    if (client.busy) Text(client.stage, style = MaterialTheme.typography.bodySmall)
-                    client.progressStatus?.let { message ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                            if (message.contains("失败") || message.contains("待同步")) TextButton(onClick = model::retryProgress) { Text("重试保存") }
-                        }
-                    }
-                    if (state.width > 0) Text("${state.width} × ${state.height} · 原生播放", style = MaterialTheme.typography.bodySmall)
-                    var seek by remember { mutableStateOf<Float?>(null) }
-                    Slider(value = seek ?: state.positionMs.toFloat().coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)), onValueChange = { seek = it }, onValueChangeFinished = { seek?.let { model.player.seek(it.toLong()) }; seek = null }, valueRange = 0f..state.durationMs.toFloat().coerceAtLeast(1f), enabled = state.seekable && state.durationMs > 0)
-                    Row(Modifier.fillMaxWidth()) { Text(clock(state.positionMs), modifier = Modifier.weight(1f)); Text(if (state.durationMs > 0) clock(state.durationMs) else "时长读取中") }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { model.player.seek(state.positionMs - 10_000) }, enabled = state.seekable) { Text("−10秒") }
-                        FilledTonalButton(onClick = model::togglePlayback, enabled = !client.busy) { Text(if (state.playing) "暂停" else "播放") }
-                        TextButton(onClick = { model.player.seek(state.positionMs + 10_000) }, enabled = state.seekable) { Text("+10秒") }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        Box { TextButton(onClick = { audioMenu = true }, enabled = state.audio.isNotEmpty()) { Text("音轨") }; TrackMenu(audioMenu, { audioMenu = false }, state.audio, state.selectedAudio) { model.player.audio(it); audioMenu = false } }
-                        Box { TextButton(onClick = { subtitleMenu = true }, enabled = state.subtitles.isNotEmpty()) { Text("字幕") }; TrackMenu(subtitleMenu, { subtitleMenu = false }, state.subtitles, state.selectedSubtitle) { model.player.subtitle(it); subtitleMenu = false } }
-                        Box { TextButton(onClick = { speedMenu = true }) { Text("${state.rate}×") }; DropdownMenu(speedMenu, { speedMenu = false }) { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { value -> DropdownMenuItem(text = { Text("${value}×") }, onClick = { model.player.rate(value); speedMenu = false }) } } }
-                    }
-                }
-            }
-        }
-    }
-}
-@Composable private fun TrackMenu(expanded: Boolean, dismiss: () -> Unit, tracks: List<NativeTrack>, selected: Int, choose: (Int) -> Unit) {
-    DropdownMenu(expanded, dismiss) {
-        tracks.forEach { track -> DropdownMenuItem(text = { Column { Text((if (track.id == selected) "✓ " else "") + track.title); if (track.codec.isNotEmpty()) Text(listOf(track.language, track.codec).filter { it.isNotEmpty() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall) } }, onClick = { choose(track.id) }) }
-    }
-}
+internal fun clock(ms: Long): String { val s = ms.coerceAtLeast(0) / 1000; return if (s >= 3600) String.format(Locale.ROOT, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) else String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60) }

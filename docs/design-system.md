@@ -38,3 +38,19 @@ Connection implementation: compact media-library introduction, two accessible ne
 ## Visual gate
 
 Inspect actual rendered Android screenshots for each main page, both themes, compact/landscape/≥600dp and 100/130/200% font scale. Capture controls visible/hidden, long filenames, all errors and track sheets. Fix clipping, weak hierarchy, density and inconsistent spacing before release. Emulator images validate UI only; hardware decoding/HDR needs devices.
+
+## Player revision: Bilibili / Artplayer direction
+
+The user rejected the prototype's large default buttons, thick blue footer and unused portrait space. Keep Compose as the native rendering/interaction toolkit; Material's default component styling is not a product design requirement. Official Compose custom-design-system guidance supports independent colors, typography and components. Traditional Views can be embedded when a proven component fits; switching rendering frameworks alone does not improve hierarchy or spacing.
+
+Primary design reference: https://artplayer.org/document/ and the MIT-licensed Artplayer source pinned in `licenses/artplayer.md`. Reuse its actual play/pause/volume/fullscreen/check/close vectors, compact control composition, thin progress and accent/check selection. Reuse Compose's tested slider/dialog/selectable interaction and accessibility instead of introducing a custom gesture/keyboard framework. Artplayer itself is a JavaScript/HTML5 player, not a Kotlin UI library; do not replace native libVLC to import its DOM.
+
+BiliPai is a third-party Compose video app, not official Bilibili source. Its player UI contains application-specific account, danmaku, video-quality and Media3 integration. It is a reference, not a drop-in independent libVLC controller. General component libraries such as Miuix are also not complete video-control systems; no blanket UI-framework migration is needed for this slice. No claim is made about current proprietary Bilibili/YouTube/iQiyi/Tencent implementation details.
+
+Portrait: proportional video at the top, compact transport, then complete filename, quiet server identity, real playback metadata and track rows. Landscape: large native viewport, gradient title, thin timeline and a single compact transport/options row. The native subtitle viewport reserves the transport area so PGS cannot sit under controls; viewport size stays stable on idle HUD hide.
+
+Player palette: canvas #141416, panel #202023, white controls, secondary #B5B5BE and one pink accent #FF80A6. Use 22dp icons inside 48dp targets, a 3dp timeline with a 10dp thumb inside a 48dp interaction region. Selection uses a subtle accent fill and right-side check, without oversized radio controls or a Material drag handle. Portrait menus emerge from the bottom; landscape menus occupy a bounded right panel. Preserve real state, IDs, duration, accessible slider semantics and reduced interaction hiding under TalkBack.
+
+This is an implemented direction, not visual acceptance. Actual screenshots, rotation, control visibility, native picture, track interaction, large-font clipping and foreground recovery must be checked before release.
+
+Video layout correction: libVLC 3.7.6 `VideoHelper.updateVideoSurfaces` otherwise considers Activity orientation and swaps a wide embedded viewport in a portrait activity. `MediaPlayer.setUseOrientationFromBounds(true)` is used so aspect fitting follows the real native viewport. The owned 16:9 fixture test requires both decoded PixelCopy content and video Surface width fitting that viewport.

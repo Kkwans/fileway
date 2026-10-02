@@ -16,7 +16,7 @@ data class PlayerState(
     val durationMs: Long = 0, val buffering: Float = 0f, val seekable: Boolean = false,
     val audio: List<NativeTrack> = emptyList(), val subtitles: List<NativeTrack> = emptyList(),
     val selectedAudio: Int = -1, val selectedSubtitle: Int = -1, val width: Int = 0, val height: Int = 0,
-    val error: String? = null, val rate: Float = 1f,
+    val error: String? = null, val rate: Float = 1f, val volume: Int = 100,
 )
 
 class NativePlayer(context: Context) {
@@ -32,6 +32,9 @@ class NativePlayer(context: Context) {
     private var resumeTarget: Long? = null
 
     init {
+        // A portrait page embeds a landscape video viewport. libVLC's default
+        // activity-orientation heuristic swaps those bounds and shrinks video.
+        player.setUseOrientationFromBounds(true)
         player.setEventListener { event ->
             if (released) return@setEventListener
             val old = mutable.value
@@ -76,7 +79,8 @@ class NativePlayer(context: Context) {
         player.stop()
         seekTarget = null
         resumeTarget = positionMs.takeIf { it > 0 }
-        mutable.value = PlayerState(phase = "正在打开视频")
+        mutable.value = PlayerState(phase = "正在打开视频", volume = player.volume.takeIf { it >= 0 }?.coerceAtMost(100) ?: mutable.value.volume)
+        player.rate = 1f
         val media = Media(vlc, Uri.parse(url))
         media.setHWDecoderEnabled(true, false)
         media.addOption(":network-caching=1500")
@@ -97,7 +101,11 @@ class NativePlayer(context: Context) {
             mutable.value = mutable.value.copy(phase = "正在跳转")
         }
     }
-    fun rate(value: Float) { player.rate = value; mutable.value = mutable.value.copy(rate = value) }
+    fun rate(value: Float) { player.rate = value; mutable.value = mutable.value.copy(rate = player.rate) }
+    fun volume(value: Int) {
+        if (player.setVolume(value.coerceIn(0, 100)) < 0) mutable.value = mutable.value.copy(error = "无法调整播放器音量，请重试")
+        else mutable.value = mutable.value.copy(volume = player.volume.coerceIn(0, 100))
+    }
     fun audio(id: Int) { if (player.setAudioTrack(id)) refreshTracks() }
     fun subtitle(id: Int) { if (player.setSpuTrack(id)) refreshTracks() }
     fun stop() { requested = false; resumeTarget = null; if (!released) player.stop(); mutable.value = PlayerState() }
@@ -114,6 +122,7 @@ class NativePlayer(context: Context) {
             audio = describe(player.audioTracks, IMedia.Track.Type.Audio), subtitles = describe(player.spuTracks, IMedia.Track.Type.Text),
             selectedAudio = player.audioTrack, selectedSubtitle = player.spuTrack,
             width = video?.width ?: 0, height = video?.height ?: 0,
+            volume = player.volume.takeIf { it >= 0 }?.coerceAtMost(100) ?: mutable.value.volume,
         )
     }
     fun release() {

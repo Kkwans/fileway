@@ -1,12 +1,22 @@
 package io.github.kkwans.nasfilebrowser
 
 import android.util.Base64
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
+import android.view.SurfaceView
+import android.view.View
+import android.view.ViewGroup
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
@@ -42,12 +52,13 @@ class NativePlaybackTest {
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         val file = ResourceRef("/fixture.mkv", "/fixture.mkv", "Native playback fixture.mkv", false, "video", media.size.toLong())
+        var checking = "initial decode and resume"
         suspend fun onMain(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
         suspend fun waitUntil(predicate: () -> Boolean) {
             try { withTimeout(25_000) { while (!predicate()) delay(100) } }
             catch (error: TimeoutCancellationException) {
                 val state = model.player.state.value
-                throw AssertionError("Native timeout: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, duration=${state.durationMs}, seekable=${state.seekable}, video=${state.width}x${state.height}, error=${state.error}, clientBusy=${model.state.value.busy}, selected=${model.state.value.selected != null}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}", error)
+                throw AssertionError("Native timeout during $checking: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, duration=${state.durationMs}, seekable=${state.seekable}, video=${state.width}x${state.height}, error=${state.error}, clientBusy=${model.state.value.busy}, selected=${model.state.value.selected != null}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}", error)
             }
         }
         try {
@@ -55,10 +66,64 @@ class NativePlaybackTest {
             waitUntil { model.state.value.connected && !model.state.value.busy }
             onMain { model.open(file) }
             waitUntil { model.player.state.value.let { it.playing && it.seekable && it.durationMs in 11_500..12_500 && it.positionMs >= 2800 && it.width == 320 } }
+            withTimeout(5000) {
+                var picture = false
+                while (!picture) {
+                    val surfaces = mutableListOf<SurfaceView>()
+                    activity.scenario.onActivity { owner ->
+                        fun collect(view: View) {
+                            if (view is SurfaceView && view.holder.surface.isValid) surfaces.add(view)
+                            if (view is ViewGroup) for (index in 0 until view.childCount) collect(view.getChildAt(index))
+                        }
+                        collect(owner.window.decorView)
+                    }
+                    for (surface in surfaces) {
+                        val bitmap = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
+                        val completed = AtomicBoolean()
+                        try {
+                            val copied = suspendCancellableCoroutine<Int> { continuation ->
+                                try {
+                                    PixelCopy.request(surface, bitmap, { result ->
+                                        completed.set(true)
+                                        if (continuation.isActive) continuation.resumeWith(Result.success(result)) else bitmap.recycle()
+                                    }, Handler(Looper.getMainLooper()))
+                                } catch (_: IllegalArgumentException) {
+                                    completed.set(true)
+                                    continuation.resumeWith(Result.success(PixelCopy.ERROR_SOURCE_INVALID))
+                                }
+                            }
+                            if (copied == PixelCopy.SUCCESS) {
+                                val pixels = IntArray(64 * 36)
+                                bitmap.getPixels(pixels, 0, 64, 0, 0, 64, 36)
+                                // The owned pattern is colorful. A black output,
+                                // subtitle-only surface or metadata cannot pass.
+                                picture = picture || pixels.count { pixel ->
+                                    val channels = listOf(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
+                                    channels.max() - channels.min() > 30
+                                } > pixels.size / 5
+                                if (picture) {
+                                    activity.scenario.onActivity {
+                                        val viewport = surface.parent as View
+                                        assertTrue("The 16:9 fixture must fit the portrait viewport width", surface.width >= viewport.width * 0.95f)
+                                    }
+                                }
+                            }
+                        } finally { if (completed.get()) bitmap.recycle() }
+                    }
+                    if (!picture) delay(100)
+                }
+                assertTrue("The actual native Surface must contain the decoded pattern", picture)
+            }
             assertTrue("Native audio track must be discovered", model.player.state.value.audio.any { it.id >= 0 })
+            val device = UiDevice.getInstance(instrumentation)
+            assertTrue("Playing controls must hide after inactivity", device.wait(Until.gone(By.desc("暂停播放")), 6000))
+            device.findObject(By.desc("视频画面")).click()
+            assertTrue("A tap restores explicit playback controls", device.wait(Until.hasObject(By.desc("暂停播放")), 3000))
             onMain { model.player.seek(7000) }
+            checking = "explicit seek"
             waitUntil { model.player.state.value.positionMs in 6500..9500 && model.player.state.value.phase != "正在跳转" }
             onMain { model.pausePlayback() }
+            checking = "pause and remote checkpoint"
             waitUntil { !model.player.state.value.playing && source.position >= 6.5 }
             val account = storage.accounts(profile).single()
             val history = PlaybackHistory(ClientDatabase.get(instrumentation.targetContext))
@@ -66,16 +131,42 @@ class NativePlaybackTest {
             assertEquals("fixture-v1", saved.identity)
             assertTrue(source.rawRequests.get() > 0)
             assertEquals(0, source.unexpected.get())
-            val device = UiDevice.getInstance(instrumentation)
+            onMain { model.player.volume(35); model.player.rate(1.25f) }
+            assertEquals(35, model.player.state.value.volume)
+            assertEquals(1.25f, model.player.state.value.rate, 0.001f)
+            device.findObject(By.desc("选择音轨")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
             device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-audio-sheet.png")
+            device.pressBack()
+            assertTrue(device.wait(Until.hasObject(By.desc("开始播放")), 3000))
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-fixture.png")
+            device.findObject(By.desc("横屏全屏")).click()
+            // Android's first immersive entry presents its own onboarding. Do
+            // not mistake that system overlay for app controls or disable it.
+            if (device.wait(Until.hasObject(By.text("Got it")), 3000)) {
+                device.findObject(By.text("Got it")).click()
+                assertTrue("The system immersive prompt must be dismissed", device.wait(Until.gone(By.text("Got it")), 3000))
+            }
+            assertTrue("Fullscreen button must enter the actual landscape layout", device.wait(Until.hasObject(By.desc("退出全屏")), 5000))
+            assertTrue("Rotation must preserve the paused source", !model.player.state.value.playing && model.state.value.selected == file)
+            device.findObject(By.desc("选择音轨")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-landscape-audio.png")
+            device.pressBack()
+            assertTrue(device.wait(Until.hasObject(By.desc("退出全屏")), 3000))
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/player-landscape.png")
+            device.findObject(By.desc("退出全屏")).click()
+            assertTrue("Exit fullscreen must restore portrait controls", device.wait(Until.hasObject(By.desc("横屏全屏")), 5000))
             onMain { model.leavePlayer(); model.tab("recent") }
             waitUntil { model.recent.value.any { it.resourceKey == file.wirePath } }
-            instrumentation.waitForIdleSync()
+            assertTrue("Recent capture must show the actual recent page", device.wait(Until.hasObject(By.text("继续观看")), 5000))
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/recent-fixture.png")
             onMain { model.openRecent(saved) }
+            checking = "recent reopen"
             waitUntil { model.player.state.value.playing && model.player.state.value.positionMs >= saved.positionMs - 1500 }
             onMain { model.pausePlayback() }
+            checking = "recent pause and sync"
             waitUntil { !model.player.state.value.playing && model.state.value.progressStatus == "续播已同步" }
             source.stallNextRead.set(true)
             onMain { model.togglePlayback() }
@@ -88,6 +179,7 @@ class NativePlaybackTest {
             assertFalse(model.state.value.busy)
             source.identity = "fixture-v2"
             onMain { model.togglePlayback() }
+            checking = "replacement rejection"
             waitUntil { model.state.value.selected == null && model.state.value.error?.contains("文件已变化") == true }
             assertFalse("Replacement must not resume an old media lease", model.player.state.value.playing)
         } catch (error: Throwable) {
