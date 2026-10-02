@@ -1,6 +1,6 @@
 # Native search transport
 
-This implementation supplies streaming metadata through Go/JNI, a typed Android session Flow and a source-bound ViewModel search controller. The rendered search page is still pending.
+This implementation supplies streaming metadata through Go/JNI, a typed Android session Flow, a source-bound ViewModel search controller and a native search page.
 
 ## Existing NAS contract
 
@@ -26,7 +26,7 @@ If an Android caller is canceled while the JNI start response is arriving, `Nati
 
 Selecting a result first uses the existing read-only `/api/resources{wirePath}?metadata=1` contract. Both display path and original encoded path bytes must match the candidate, and a changed directory/file kind is rejected. Percent-escape case differences are equivalent; literal plus signs and opaque non-UTF8 base bytes are preserved. The authoritative metadata supplies the name/type/size/reference, after which the existing player verifies media identity and applies isolated resume state. Canceled or replaced metadata responses cannot navigate or start playback. Ambiguous names never send a guessed metadata request.
 
-The controller accumulates actual result rows keyed by relative path. The page must describe displayed results, show genuine termination/cancellation and preserve retry input; it must not present server traversal as a known percentage or total library count.
+The controller accumulates actual result rows keyed by relative path. The page describes displayed results, shows genuine termination/cancellation and preserves retry input; it does not present traversal as a known percentage or total library count. Its editable keyword/IME action, current/recursive scope, cancel/retry and results are bound to the real controller. Long press opens scrollable full-name/location details. During video source confirmation, editing/opening another result is disabled; Cancel or Back cancels that pending video operation as well as the search context.
 
 ## Resource identity boundary
 
@@ -40,4 +40,6 @@ Go tests exercise incremental delivery before completion, source/base/query enco
 
 `SearchSessionTest` covers account binding, cancellation/changed-principal rejection, path encoding with an opaque base, partial termination and invalid summaries. `SearchResult.resource` preserves the base wire bytes, encodes ordinary result segments once, and returns no guessed reference for ambiguous replacement characters. It retains legal space-only filename segments. A second real-JNI fixture test collects the typed session Flow before releasing the server's final summary.
 
-`ClientSearchTest` runs the actual ClientModel/Room/Keystore/JNI/Go path against an owned HTTP fixture: incremental results, upstream cancel, keyword replacement with late results, failed-stream retry, account switch, background cancel, rejected ambiguous/moved/type-changed metadata, canceled late selection and Unicode/plus/percent directory navigation. `ClientSessionTest` retains the separate multi-server/account/directory restoration regression. These are emulator integration checks, not actual NAS search results, search-screen interaction or hardware/network acceptance.
+`ClientSearchTest` runs the actual ClientModel/Room/Keystore/JNI/Go path against an owned HTTP fixture: incremental results, upstream cancel, keyword replacement with late results, failed-stream retry, account switch, background cancel, rejected ambiguous/moved/type-changed metadata, canceled late selection and Unicode/plus/percent directory navigation. `ClientSessionTest` retains the separate multi-server/account/directory restoration regression. These are emulator integration checks, not actual NAS search results or hardware/network acceptance.
+
+`SearchScreenTest` operates the installed MainActivity's real input/buttons/results against the same native HTTP fixture. It checks cancel, scope, retry, long press/details, opening directories, portrait/landscape long filenames and returning to files while a movie identity response is delayed. Screenshots and native accessibility trees are captured from the owned emulator. Run with `-e nfbFontScale 1.3` / `2.0` to assert the actual resource font scale and `-e nfbVisualVariant light-font130` / `dark-font200` to separate artifacts; set and restore those emulator settings around instrumentation. Large-font landscape details require a real scroll action before asserting the full path. Screenshot capture waits for a settled frame after dialog dismissal. Real NAS searches, physical-device/TalkBack and the full app's visual/network gates remain outstanding.

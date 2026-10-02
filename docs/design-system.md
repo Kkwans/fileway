@@ -53,4 +53,12 @@ Player palette: canvas #141416, panel #202023, white controls, secondary #B5B5BE
 
 This is an implemented direction, not visual acceptance. Actual screenshots, rotation, control visibility, native picture, track interaction, large-font clipping and foreground recovery must be checked before release.
 
+## Search page
+
+Search follows the player's restrained pink direction with a white light canvas and charcoal dark canvas. It inherits the app theme rather than independently forcing system color mode. Accent: #C63262 / #FF80A6; secondary text: #63636D / #B5B5BE. Measured text-on-canvas contrast: 5.21/7.79 for accent and 5.94/9.04 for secondary text. Native sans uses the existing 16sp body/file title and 13sp metadata roles. The result title remains two lines with full name/location in a scrollable long-press detail dialog.
+
+Use a compact BasicTextField/IME search action, 48dp clear/back targets, flat underlined scope controls and a quiet result row. Header context/status/details belong to the scrolling results area so landscape and 200% fonts remain usable. Result status reflects actual emitted rows and termination; no invented popular keywords, covers or traversal percentage. Reuse the pinned Material folder vector and existing Artplayer close icon, with original licenses; Compose input/selection/dialog/lazy-list primitives supply native editing, focus and accessibility actions. File-page search/up/refresh actions wrap at narrow/large-font widths.
+
+Owned API35 screenshots and actual control tests cover 100% light, 130% light and 200% dark, portrait/landscape and long-file-name detail scrolling. These are fixture visuals, not user aesthetic approval, all light/dark/font combinations, a ≥600dp device, physical TalkBack or the whole app's visual acceptance.
+
 Video layout correction: libVLC 3.7.6 `VideoHelper.updateVideoSurfaces` otherwise considers Activity orientation and swaps a wide embedded viewport in a portrait activity. `MediaPlayer.setUseOrientationFromBounds(true)` is used so aspect fitting follows the real native viewport. The owned 16:9 fixture test requires both decoded PixelCopy content and video Surface width fitting that viewport.

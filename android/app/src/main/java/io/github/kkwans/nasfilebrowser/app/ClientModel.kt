@@ -235,7 +235,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun back(): Boolean {
         if (mutable.value.selected != null) { leavePlayer(); return true }
-        if (search.state.value.open) { search.close(); return true }
+        if (search.state.value.open) { cancel(); search.close(); return true }
         if (mutable.value.tab != "files") { tab("files"); return true }
         if (navigation.isNotEmpty()) { val previous = navigation.removeLast(); browse(previous.first, previous.second); return true }
         if (mutable.value.path != "/") {

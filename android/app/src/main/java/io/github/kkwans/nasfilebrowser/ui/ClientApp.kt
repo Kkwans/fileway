@@ -26,12 +26,15 @@ import io.github.kkwans.nasfilebrowser.data.PlaybackSnapshot
 import io.github.kkwans.nasfilebrowser.data.ProgressSync
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable fun ClientApp(model: ClientModel) {
     val state by model.state.collectAsStateWithLifecycle()
     val recent by model.recent.collectAsStateWithLifecycle()
+    val search by model.search.state.collectAsStateWithLifecycle()
     BackHandler(state.connected) { if (!model.back()) model.disconnect() }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
+    if (search.open) { SearchScreen(model, state); return }
     Scaffold { insets ->
         Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Spacer(Modifier.height(12.dp))
@@ -45,7 +48,8 @@ import java.util.Locale
             }
             Text(if (state.tab == "recent") "继续观看" else state.path.trimEnd('/').substringAfterLast('/').ifBlank { "文件" }, style = MaterialTheme.typography.headlineLarge)
             if (state.tab == "files") Text(state.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (state.tab == "files") Row {
+            if (state.tab == "files") FlowRow {
+                TextButton(onClick = model::openSearch, enabled = !state.busy) { Text("搜索文件") }
                 TextButton(onClick = { model.back() }, enabled = state.path != "/") { Text("上一级") }
                 TextButton(onClick = model::retry, enabled = !state.busy) { Text("刷新") }
             }
@@ -142,7 +146,7 @@ import java.util.Locale
     }
 }
 
-private fun readableSize(size: Long): String {
+internal fun readableSize(size: Long): String {
     if (size >= 1L shl 30) return String.format(Locale.ROOT, "%.1f GB", size.toDouble() / (1L shl 30))
     if (size >= 1L shl 20) return String.format(Locale.ROOT, "%.1f MB", size.toDouble() / (1L shl 20))
     return String.format(Locale.ROOT, "%.0f KB", size.toDouble() / 1024)

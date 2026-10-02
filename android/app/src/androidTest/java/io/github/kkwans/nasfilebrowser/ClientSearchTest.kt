@@ -144,13 +144,14 @@ class ClientSearchTest {
         }
     }
 
-    private class Fixture : Closeable {
+    internal class Fixture : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
         val canceled = CountDownLatch(1)
         val searchStarted = CountDownLatch(1); val releaseSearch = CountDownLatch(1)
         val metadataStarted = CountDownLatch(1); val releaseMetadata = CountDownLatch(1)
+        val playbackStarted = CountDownLatch(1); val releasePlayback = CountDownLatch(1)
         val retryAttempts = AtomicInteger(); val metadataReads = AtomicInteger()
         private val acceptor = Thread({
             while (!server.isClosed) {
@@ -185,11 +186,16 @@ class ClientSearchTest {
                 val output = socket.getOutputStream()
                 output.write("HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n".toByteArray())
                 val path = if (query == "ambiguous") "bad\uFFFDname" else query
-                val item = JSONObject().put("path", path).put("name", query).put("dir", true).put("size", 0).put("modified", "2026-10-01T00:00:00Z").put("riskLevel", "low")
+                val item = JSONObject().put("path", path).put("name", query).put("dir", !query.endsWith(".mkv")).put("size", if (query.endsWith(".mkv")) 104857600 else 0).put("modified", "2026-10-01T00:00:00Z").put("riskLevel", "low")
                 output.write((JSONObject().put("type", "result").put("item", item).toString() + "\n").toByteArray()); output.flush()
                 if (query == "slow") { if (socket.getInputStream().read() == -1) canceled.countDown(); return }
                 if (query == "retry" && retryAttempts.incrementAndGet() == 1) return
                 output.write((JSONObject().put("type", "summary").put("reason", "completed").put("count", 1).toString() + "\n").toByteArray()); output.flush()
+                return
+            }
+            if (uri.path == "/api/media/playback") {
+                playbackStarted.countDown(); releasePlayback.await(10, TimeUnit.SECONDS)
+                reply(socket, JSONObject().put("identity", "search-movie-v1").put("position", 0).put("duration", 12).put("exists", false).toString())
                 return
             }
             check(uri.path.startsWith("/api/resources/"))
@@ -197,14 +203,14 @@ class ClientSearchTest {
                 metadataReads.incrementAndGet()
                 if (uri.path.endsWith("/late-folder")) { metadataStarted.countDown(); releaseMetadata.await(10, TimeUnit.SECONDS) }
                 val path = uri.path.substringAfter("/api/resources")
-                val wire = if (path.endsWith("/moved")) "/library/another" else SearchResult.encodePath(path).lowercase()
-                reply(socket, JSONObject().put("path", path).put("wirePath", wire).put("name", path.substringAfterLast('/')).put("isDir", !path.endsWith("/changed-type")).put("size", 0).put("type", "").toString())
+                val wire = if (path.endsWith("/moved")) "/library/another" else Regex("%[0-9A-Fa-f]{2}").replace(SearchResult.encodePath(path)) { it.value.lowercase() }
+                reply(socket, JSONObject().put("path", path).put("wirePath", wire).put("name", path.substringAfterLast('/')).put("isDir", !path.endsWith("/changed-type") && !path.endsWith(".mkv")).put("size", 0).put("type", "").toString())
             } else reply(socket, JSONObject().put("items", JSONArray()).toString())
         }
         private fun reply(socket: Socket, body: String, type: String = "application/json") {
             val bytes = body.toByteArray()
             socket.getOutputStream().apply { write("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
         }
-        override fun close() { server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
+        override fun close() { releasePlayback.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
     }
 }
