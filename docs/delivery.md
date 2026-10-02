@@ -136,3 +136,5 @@
 - File/recent/player layouts remain intermediate. Final visual refinement, themes/adaptive/font/TalkBack gates, signed release and true hardware/external-overlay acceptance remain outstanding. No backend service has changed; the previous pushed client commit and private migration backups are rollback assets.
 
 - Backgrounding cancels an in-flight resume check, and opening completed in the background cannot auto-play. Disconnect/logout waits for the local playback flush before stopping the embedded node. The native fixture covers the delayed-resume lifecycle case.
+
+- Commit 63e0a2c was pushed. Run 36954921981 failed both instrumented playback jobs; API37 actual XML: eighteen tests, one failure, zero errors/skips. The owned native MKV test timed out after 25 seconds; the other seventeen passed. Video-output creation errors appeared during cleanup, so the timeout's precise player/source state and failure frame must be captured before assigning a root cause. Native playback is not accepted.

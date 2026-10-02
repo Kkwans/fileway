@@ -67,9 +67,9 @@ jobs:
           script: |
             adb shell getconf PAGESIZE
             if [ '${{ matrix.target }}' = google_apis_ps16k ]; then test "$(adb shell getconf PAGESIZE | tr -d '\r')" = 16384; fi
-            ./gradlew -p android :app:connectedDebugAndroidTest --stacktrace
             mkdir -p android/app/build/acceptance
-            adb pull /sdcard/Download/nfb-client-acceptance android/app/build/acceptance/
+            trap 'NFB_TEST_STATUS=$?; adb pull /sdcard/Download/nfb-client-acceptance android/app/build/acceptance/ || NFB_TEST_STATUS=1; exit "$NFB_TEST_STATUS"' EXIT
+            ./gradlew -p android :app:connectedDebugAndroidTest --stacktrace
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

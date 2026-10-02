@@ -43,7 +43,13 @@ class NativePlaybackTest {
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         val file = ResourceRef("/fixture.mkv", "/fixture.mkv", "Native playback fixture.mkv", false, "video", media.size.toLong())
         suspend fun onMain(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
-        suspend fun waitUntil(predicate: () -> Boolean) = withTimeout(25_000) { while (!predicate()) delay(100) }
+        suspend fun waitUntil(predicate: () -> Boolean) {
+            try { withTimeout(25_000) { while (!predicate()) delay(100) } }
+            catch (error: TimeoutCancellationException) {
+                val state = model.player.state.value
+                throw AssertionError("Native timeout: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, duration=${state.durationMs}, seekable=${state.seekable}, video=${state.width}x${state.height}, error=${state.error}, clientBusy=${model.state.value.busy}, selected=${model.state.value.selected != null}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}", error)
+            }
+        }
         try {
             onMain { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             waitUntil { model.state.value.connected && !model.state.value.busy }
@@ -84,6 +90,11 @@ class NativePlaybackTest {
             onMain { model.togglePlayback() }
             waitUntil { model.state.value.selected == null && model.state.value.error?.contains("文件已变化") == true }
             assertFalse("Replacement must not resume an old media lease", model.player.state.value.playing)
+        } catch (error: Throwable) {
+            val device = UiDevice.getInstance(instrumentation)
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/native-playback-failure.png")
+            throw error
         } finally {
             source.releaseRead.countDown()
             onMain { model.disconnect() }
