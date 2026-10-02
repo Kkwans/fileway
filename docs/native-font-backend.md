@@ -1,6 +1,6 @@
 # Native font discovery trial
 
-Status: source-build checkpoint, not a shipped dependency or a verified playback fix.
+Status: x86_64 source build and two fresh-data native fixture runs passed. This remains an unshipped trial; text/ASS/font fidelity, arm64 and hardware gates are open.
 
 The signed preview and normal Android workflow still use unmodified Maven `libvlc-all:3.7.6`. No server, profile schema, node state or signing configuration changes in this trial.
 
@@ -33,3 +33,13 @@ ANDROID_HOME=/path/to/task-sdk bash scripts/build-vlc-font-backend.sh x86_64 /pa
 First require an actual source build and fresh-cache native fixture playback using the trial libraries. Compare initial picture/time, text subtitle glyphs/fallbacks, ASS styles/attached fonts and PGS against the unmodified dependency. Repeat for both ABIs, 16 KiB packaging/runtime, real hardware/HDR and the original full sample. Retain the existing 25-second assertion and the approved release performance gates.
 
 Only after those results support the change will an immutable checksum-locked replacement artifact enter the app build. Until then, rollback is the unchanged official dependency and the last pushed app commit; no runtime migration or backend rollback is involved.
+
+## First runtime evidence
+
+Linux trial run 36990353489 at c72d536 built the x86_64 SDK with NDK 28.2.13676358. All three output library hashes matched provenance and their ELF LOAD segments were aligned to 16KiB. A private development APK from the pushed 9da2ca8 source replaced only its x86_64 SDK libraries, retaining the arm64 official libraries; it is not a publishable production package.
+
+The first private repackaging attempt failed installation because .NET's `NoCompression` still created DEFLATE entries. The emulator's NativeLibraryHelper explicitly rejected compressed native libraries. Repackaging with Java `ZipEntry.STORED`, followed by zipalign and signing verification, produced SHA256 `339b0e752e5b5ed93357400b5ef3716eed0a79bb6c58d8153a643d4d516f8792` and installed successfully. Final ZIP methods for all three substituted libraries were zero.
+
+The owned API35 emulator then passed `NativePlaybackTest` twice after `pm clear` of this fixture-only package: 37.881s and 35.838s for the complete test, including original decoding/clock deadline, decoded PixelCopy picture, duration/seek/controls, save/recent and cancel/replacement assertions. These are full-test durations, not first-frame measurements. The original 25-second startup assertion was retained. This supports removing the observed first-install font initialization bottleneck on this emulator, but does not establish hardware/release p95, actual audio, subtitle content, HDR or long-play acceptance.
+
+The trial libraries are not yet selected by the normal app build. ARM64 source build 36994602301 was started from 9da2ca8; its result and both ABI subtitle/font/runtime checks must precede integration.
