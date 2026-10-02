@@ -1,6 +1,6 @@
 # Native font discovery trial
 
-Status: x86_64 source build and two fresh-data native fixture runs passed. This remains an unshipped trial; text/ASS/font fidelity, arm64 and hardware gates are open.
+Status: the previous FreeType-only trial built both ABIs and passed two x86_64 fresh-data playback runs. Actual subtitle testing found slow first ASS initialization and a long-cue seek regression. The new Android ASS provider is an unshipped source checkpoint; full SDK build and rendering gates are pending.
 
 The signed preview and normal Android workflow still use unmodified Maven `libvlc-all:3.7.6`. No server, profile schema, node state or signing configuration changes in this trial.
 
@@ -42,4 +42,18 @@ The first private repackaging attempt failed installation because .NET's `NoComp
 
 The owned API35 emulator then passed `NativePlaybackTest` twice after `pm clear` of this fixture-only package: 37.881s and 35.838s for the complete test, including original decoding/clock deadline, decoded PixelCopy picture, duration/seek/controls, save/recent and cancel/replacement assertions. These are full-test durations, not first-frame measurements. The original 25-second startup assertion was retained. This supports removing the observed first-install font initialization bottleneck on this emulator, but does not establish hardware/release p95, actual audio, subtitle content, HDR or long-play acceptance.
 
-The trial libraries are not yet selected by the normal app build. ARM64 source build 36994602301 was started from 9da2ca8; its result and both ABI subtitle/font/runtime checks must precede integration.
+The trial libraries are not selected by the normal app build. ARM64 source build 36994602301 at 9da2ca8 succeeded and its ABI/16KiB ELF checks passed; arm64 runtime, both ABI subtitle/font fidelity and hardware gates remain open.
+
+## Android ASS provider checkpoint (2026-10-03)
+
+Actual API35 diagnostics show the FreeType-only trial still waiting about 26 seconds for the first libass decoder initialization. The pinned libass 0.17.5 Fontconfig provider calls `FcConfigBuildFonts` and scans the system font database separately. The previous one-line FreeType change cannot fix that path.
+
+The new owned `native/ass_android_font_provider.h` integrates with libass's existing provider callbacks. AUTODETECT first tries the Android API29 matcher, resolving its documented functions from libandroid at runtime. Provider creation performs no font enumeration or FreeType face opening. Script families and missing Unicode scalars obtain physical fonts on demand; the original embedded-font selector, shaping and ASS renderer remain responsible for drawing. Explicit Fontconfig selection and fallback on missing Android APIs retain upstream behavior. No Java/JNI media-byte path is introduced.
+
+Physical faces retain collection indices and exact named variable-font instances. Variation settings that cannot be represented by an exact named instance are rejected with a warning, rather than falsely reported as honoured. This is a known integration limitation requiring actual font coverage tests; it is not permission to weaken the ASS/fallback acceptance requirements. Android family substitutions also require comparison against the original SDK before adoption.
+
+The contrib rule applies the owned libass patch only to Android and copies this provider into the checksum-verified 0.17.5 source. Provenance and the archive derivative revision now include the complete upstream/owned patch chain and provider digest. The normal Maven dependency, published APK, backend and user data remain unchanged. Rollback for this source-build experiment is 048ff29.
+
+The long-cue seek regression remains independent: both original and trial omit the earlier subtitle point during MKV seeking. No seek fix or rendering success is claimed by the font-provider source checkpoint. Pending gates include full native source build, fresh-data ASS initialization, attached font/drawing, system and fallback glyphs, six PGS streams, long-cue seeking, both ABIs, release performance and actual hardware/media acceptance.
+
+API source: [Android NDK font reference](https://developer.android.com/ndk/reference/group/font). Android matcher objects are local to each request and destroyed on that same thread; no shared matcher is passed across threads.

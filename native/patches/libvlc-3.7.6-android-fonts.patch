@@ -7,3 +7,15 @@ diff --git a/modules/text_renderer/freetype/freetype.c b/modules/text_renderer/f
 +# undef HAVE_FONTCONFIG
  # define HAVE_GET_FONT_BY_FAMILY_NAME
  #endif
+diff --git a/contrib/src/ass/rules.mak b/contrib/src/ass/rules.mak
+--- a/contrib/src/ass/rules.mak
++++ b/contrib/src/ass/rules.mak
+@@ -41,4 +41,8 @@ libass: libass-$(ASS_VERSION).tar.xz .sum-ass
+ 	$(UNPACK)
++ifdef HAVE_ANDROID
++	$(APPLY) $(SRC)/ass/nfb-android-provider.patch
++	cp $(SRC)/ass/nfb_android_font_provider.h $(UNPACK_DIR)/libass/
++endif
+ 	$(UPDATE_AUTOCONFIG)
+ 	$(call pkg_static,"libass.pc.in")
+ 	$(MOVE)

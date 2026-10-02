@@ -43,7 +43,7 @@ jobs:
           test "$SDK_STATUS" = 0
           "$SDKMANAGER" 'ndk;28.2.13676358'
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-      - name: Build locked libVLC with Android FreeType font discovery
+      - name: Build locked libVLC with Android text and ASS font discovery
         env:
           NFB_VLC_ABI: ${{ inputs.abi }}
         run: bash scripts/build-vlc-font-backend.sh "$NFB_VLC_ABI" "$RUNNER_TEMP/nfb-vlc-build" "$RUNNER_TEMP/nfb-vlc-source-archives"
@@ -56,4 +56,6 @@ jobs:
             ${{ runner.temp }}/nfb-vlc-build/source-provenance.json
             ${{ runner.temp }}/nfb-vlc-source-archives/
             native/patches/libvlc-3.7.6-android-fonts.patch
+            native/patches/libass-0.17.5-android-provider.patch
+            native/ass_android_font_provider.h
             native/vlc-font-backend.lock.json

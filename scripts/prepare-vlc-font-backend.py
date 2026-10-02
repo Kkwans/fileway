@@ -18,6 +18,8 @@ import urllib.request
 REPOSITORY = Path(__file__).resolve().parents[1]
 LOCK = REPOSITORY / "native/vlc-font-backend.lock.json"
 PATCH = REPOSITORY / "native/patches/libvlc-3.7.6-android-fonts.patch"
+ASS_PATCH = REPOSITORY / "native/patches/libass-0.17.5-android-provider.patch"
+ASS_PROVIDER = REPOSITORY / "native/ass_android_font_provider.h"
 MAX_ARCHIVE = 128 << 20
 MAX_EXTRACTED = 512 << 20
 
@@ -102,6 +104,8 @@ def prepare(workspace, cache):
         raise ValueError("SDK version does not match the app dependency")
     if "VLC_TESTED_HASH=" + lock["vlc"]["commit"] not in (sdk / "buildsystem/get-vlc.sh").read_text():
         raise ValueError("SDK tested VLC commit does not match the lock")
+    if "ASS_VERSION := 0.17.5" not in (vlc / "contrib/src/ass/rules.mak").read_text():
+        raise ValueError("Android ASS provider only supports the reviewed libass 0.17.5 source")
     patches = sorted((sdk / "libvlc/patches").glob("*.patch"))
     if len(patches) != 20:
         raise ValueError("Unexpected SDK patch series")
@@ -112,10 +116,18 @@ def prepare(workspace, cache):
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=vlc, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=vlc, check=True)
         applied.append({"name": patch.name, "sha256": sha256(patch)})
+    # Contrib verifies the upstream libass tarball with its pinned SHA512 rule.
+    # These two owned inputs are copied to that build rule, not to an existing
+    # app dependency. Include both in the derivative's provenance and revision.
+    for source, destination in ((ASS_PATCH, "nfb-android-provider.patch"),
+                                (ASS_PROVIDER, "nfb_android_font_provider.h")):
+        shutil.copyfile(source, vlc / "contrib/src/ass" / destination)
+        applied.append({"name": source.name, "sha256": sha256(source)})
     # VLC's supported archive-build fallback reads src/revision.txt when Git
     # describe is unavailable. Identify this derivative honestly instead of
     # manufacturing a Git repository or claiming an upstream release hash.
-    revision = lock["vlc"]["commit"][:12] + "-sdk-" + lock["sdk"]["commit"][:12] + "-nfb-" + sha256(PATCH)[:12]
+    derivative = hashlib.sha256(json.dumps(applied, sort_keys=True).encode()).hexdigest()
+    revision = lock["vlc"]["commit"][:12] + "-sdk-" + lock["sdk"]["commit"][:12] + "-nfb-" + derivative[:12]
     (vlc / "src/revision.txt").write_text(revision + "\n")
     manifest = {"lock": lock, "patches": applied, "archiveRevision": revision, "status": "prepared-not-built"}
     (workspace / "source-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
