@@ -112,7 +112,12 @@ def prepare(workspace, cache):
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=vlc, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=vlc, check=True)
         applied.append({"name": patch.name, "sha256": sha256(patch)})
-    manifest = {"lock": lock, "patches": applied, "status": "prepared-not-built"}
+    # VLC's supported archive-build fallback reads src/revision.txt when Git
+    # describe is unavailable. Identify this derivative honestly instead of
+    # manufacturing a Git repository or claiming an upstream release hash.
+    revision = lock["vlc"]["commit"][:12] + "-sdk-" + lock["sdk"]["commit"][:12] + "-nfb-" + sha256(PATCH)[:12]
+    (vlc / "src/revision.txt").write_text(revision + "\n")
+    manifest = {"lock": lock, "patches": applied, "archiveRevision": revision, "status": "prepared-not-built"}
     (workspace / "source-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return sdk
 

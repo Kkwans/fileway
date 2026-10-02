@@ -18,6 +18,8 @@ Source reference: [VLC FreeType](https://code.videolan.org/videolan/vlc/-/blob/6
 
 Preparation verifies downloaded/cached archives and refuses existing workspaces or any workspace inside the client checkout. It safely extracts sources, checks SDK/base versions and applies all upstream patches followed by our patch with exact-context checks. It does not invoke the upstream Git-reset/patch-commit bootstrap. Failures preserve their workspace for diagnosis.
 
+VLC's archive-build version rule needs `src/revision.txt` when `git describe` is unavailable. Preparation writes a derivative identifier containing the VLC base, SDK commit and our patch digest, and records it in provenance. It does not fabricate an upstream Git commit/release identity.
+
 The manual `VLC Android font backend trial` workflow compiles from source on an ephemeral Linux x64 runner. Source rules come from the locked VLC tree; no floating prebuilt contrib bundle is used. It checks each output's ABI and ELF LOAD alignment before exporting native trial libraries, source provenance, the exact source archives and patch. This is not an AAR/APK release or formal dependency-license completion. Record fetched contrib checksums/source licensing before a final distribution.
 
 For local Linux x64 execution with the build dependencies installed:
