@@ -219,6 +219,18 @@ class NativePlaybackTest {
             onMain { model.pausePlayback() }
             checking = "recent pause and sync"
             waitUntil { !model.player.state.value.playing && model.state.value.progressStatus == "续播已同步" }
+            checking = "cancel source confirmation"
+            source.stallNextRead.set(true)
+            onMain { model.togglePlayback() }
+            assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
+            assertTrue(device.wait(Until.hasObject(By.desc("处理播放状态")), 3000))
+            device.findObject(By.desc("处理播放状态")).click()
+            assertFalse("Cancel must immediately leave the loading state", model.state.value.busy)
+            source.releaseRead.countDown()
+            delay(700)
+            assertFalse("A canceled confirmation must not resume playback when its response arrives", model.player.state.value.playing)
+            source.resumeRead = CountDownLatch(1)
+            source.releaseRead = CountDownLatch(1)
             source.stallNextRead.set(true)
             onMain { model.togglePlayback() }
             assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
@@ -261,8 +273,8 @@ class NativePlaybackTest {
         val rawRequests = AtomicInteger()
         val unexpected = AtomicInteger()
         val stallNextRead = AtomicBoolean()
-        val resumeRead = CountDownLatch(1)
-        val releaseRead = CountDownLatch(1)
+        @Volatile var resumeRead = CountDownLatch(1)
+        @Volatile var releaseRead = CountDownLatch(1)
         @Volatile var position = 3.0
         @Volatile var identity = "fixture-v1"
         @Volatile private var updated = 1L

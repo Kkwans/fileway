@@ -221,7 +221,11 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun retry() { browse(mutable.value.path, mutable.value.wirePath) }
-    fun cancel() { operation?.cancel(); mutable.value = mutable.value.copy(busy = false, stage = "") }
+    fun cancel() {
+        operation?.cancel()
+        resumeOperation?.cancel()
+        mutable.value = mutable.value.copy(busy = false, stage = "")
+    }
     fun back(): Boolean {
         if (mutable.value.selected != null) { leavePlayer(); return true }
         if (mutable.value.tab != "files") { tab("files"); return true }
