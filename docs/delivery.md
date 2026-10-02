@@ -125,3 +125,14 @@
 - Conditional sync completion cannot overwrite a newer local snapshot. Pre/post PUT identity checks and a replacement guard prevent applying old progress to changed files in this client. The backend's missing expected-identity mutation argument and non-UTF8 JSON limitation are recorded in `local-state.md`; no backend changes were introduced.
 - Windows debug/lint/test-package build passed. Generated schema2 SQLite validation passed conditional-update and cascade checks. Android migration, identity/reconciliation and late-sync tests are compiled and await committed CI.
 - Player event hooks, ten-second saving, exit/switch flush and recent UI are the next subslice, not completed by this data checkpoint. Production NAS is unchanged; prior client source and the private v1 metadata backup are rollback assets.
+
+- Commit d7d1ec9 was pushed; API35/API37.0 matrix run 36933054354 passed. Actual API37 report contains sixteen tests with zero failures/errors/skips, including schema migration, remote/local reconciliation and delayed sync isolation.
+
+## Playback event and recent integration checkpoint
+
+- The actual libVLC timeline drives ten-second saves while playing and immediate saves on pause, exit and source switching. Ordered local writes are independent of coalesced, bounded remote synchronization; a weak network leaves explicit pending state.
+- Exit/switch waits for durable local save, then stops the engine, revokes the source lease and closes its account context before another source opens. Recent entries remain scoped to the current account. Opening or resuming checks file identity; a replacement cannot silently inherit an old position.
+- Instrumented coverage includes a stalled remote-write fixture and an owned 12-second MKV played through the actual libVLC/JNI/Go HTTP lease. Final Windows `:app:assembleDebug :app:lintDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest` passed (JVM unit task NO-SOURCE). `git diff --check` and scoped diff review passed. Committed runtime results are pending; this does not replace full-film, HEVC/PGS/ASS/HDR or physical audio verification.
+- File/recent/player layouts remain intermediate. Final visual refinement, themes/adaptive/font/TalkBack gates, signed release and true hardware/external-overlay acceptance remain outstanding. No backend service has changed; the previous pushed client commit and private migration backups are rollback assets.
+
+- Backgrounding cancels an in-flight resume check, and opening completed in the background cannot auto-play. Disconnect/logout waits for the local playback flush before stopping the embedded node. The native fixture covers the delayed-resume lifecycle case.

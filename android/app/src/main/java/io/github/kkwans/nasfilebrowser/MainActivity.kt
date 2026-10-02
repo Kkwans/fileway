@@ -19,5 +19,5 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onStart() { super.onStart(); model.foreground(true) }
-    override fun onStop() { model.foreground(false); model.player.pause(); super.onStop() }
+    override fun onStop() { model.foreground(false); model.pausePlayback(); super.onStop() }
 }

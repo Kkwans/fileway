@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import java.net.URLEncoder
 
@@ -30,14 +32,19 @@ data class ClientState(
     val error: String? = null, val selected: ResourceRef? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
+    val progressStatus: String? = null, val tab: String = "files",
 )
 data class SessionContext(val profile: ServerProfile, val account: AccountRecord, val api: NasSession, val generation: Int)
+private data class PlaybackBinding(val context: SessionContext, val file: ResourceRef, val identity: String, val writer: PlaybackWriter)
 
 class ClientModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(ClientState())
     val state = mutable.asStateFlow()
     val player = NativePlayer(application)
     private val store = ProfileStore(ClientDatabase.get(application), CredentialVault(application))
+    private val history = PlaybackHistory(ClientDatabase.get(application))
+    private val recentMutable = MutableStateFlow<List<PlaybackSnapshot>>(emptyList())
+    val recent = recentMutable.asStateFlow()
     val profiles = store.profiles.catch { mutable.value = mutable.value.copy(error = "无法读取服务器档案，请重试") }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private val embeddedNetwork = EmbeddedNetwork(application)
@@ -53,6 +60,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var operation: Job? = null
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val navigation = ArrayDeque<Pair<String, String>>()
+    private var playback: PlaybackBinding? = null
+    private var saveTimer: Job? = null
+    private var resumeOperation: Job? = null
+    private var recentJob: Job? = null
+    private var closing: Job? = null
+    private var mediaClosing: Job? = null
+    private var lastSaved: Pair<Long, Long>? = null
+    init { player.checkpoint = { saveProgress() } }
 
     fun connect(url: String, username: String, password: String, network: String = "direct") {
         val profile = mutable.value.profile
@@ -72,6 +87,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operation = viewModelScope.launch {
             var opened: NasSession? = null
             try {
+                closing?.join()
                 val profile = store.save(draft)
                 require(profile.backend == BackendKind.NAS) { "Windows 服务适配尚未完成，暂不支持连接" }
                 if (profile.network == ConnectionMode.TAILNET) {
@@ -89,6 +105,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 val directory = store.directory(account)
                 if (generation != expected) return@launch
                 context = bound
+                recentJob?.cancel()
+                recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
                 mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null)
                 if (directory == null || directory.path == "/") applyDirectory(root, "/", "/", bound)
                 else try { loadDirectory(directory.path, directory.wirePath, bound) } catch (error: Exception) {
@@ -156,11 +174,36 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             mutable.value = mutable.value.copy(busy = true, stage = "正在打开视频", error = null)
             operation = viewModelScope.launch {
                 try {
+                    endPlayback()
+                    mediaClosing?.join()
+                    val remote = history.remote(bound.api, file.path, file.wirePath)
+                    val key = file.wirePath.ifEmpty { file.path }
+                    val local = history.local(bound.account, key, remote.identity)
+                    val resume = PlaybackHistory.resume(local, remote)
                     val url = bound.api.lease(file.path, file.wirePath)
                     if (generation != expected) { cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)) }; return@launch }
                     revokeLease(); lease = url
-                    mutable.value = mutable.value.copy(selected = file, busy = false, stage = "")
-                    player.open(url)
+                    val writer = PlaybackWriter(history, bound.api) { snapshot, failure -> viewModelScope.launch {
+                        val current = playback
+                        if (current?.context == bound && current.file.wirePath.ifEmpty { current.file.path } == key && current.identity == remote.identity &&
+                            (snapshot == null || lastSaved == (snapshot.positionMs to snapshot.durationMs))) {
+                            val message = when (snapshot?.sync) {
+                                ProgressSync.SYNCED -> "续播已同步"
+                                ProgressSync.IDENTITY_CHANGED -> "文件已变化，旧进度仅保留本机"
+                                ProgressSync.UNSUPPORTED -> "续播已保存本机，此路径无法远端同步"
+                                ProgressSync.PENDING -> "续播已保存本机，待同步"
+                                null -> if (failure != null) "续播保存失败，请重试" else null
+                            }
+                            if (snapshot == null && failure != null) lastSaved = null
+                            mutable.value = mutable.value.copy(progressStatus = message)
+                        }
+                    } }
+                    playback = PlaybackBinding(bound, file, remote.identity, writer)
+                    lastSaved = null
+                    mutable.value = mutable.value.copy(selected = file, busy = false, stage = "", progressStatus = null)
+                    player.open(url, resume, autoplay = foreground)
+                    saveTimer?.cancel()
+                    saveTimer = viewModelScope.launch { while (true) { delay(10_000); if (player.state.value.playing) saveProgress() } }
                 } catch (error: Exception) {
                     if (error !is CancellationException && generation == expected) mutable.value = mutable.value.copy(busy = false, error = "无法打开视频，请重试")
                 }
@@ -181,6 +224,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun cancel() { operation?.cancel(); mutable.value = mutable.value.copy(busy = false, stage = "") }
     fun back(): Boolean {
         if (mutable.value.selected != null) { leavePlayer(); return true }
+        if (mutable.value.tab != "files") { tab("files"); return true }
         if (navigation.isNotEmpty()) { val previous = navigation.removeLast(); browse(previous.first, previous.second); return true }
         if (mutable.value.path != "/") {
             fun parent(value: String) = value.trimEnd('/').substringBeforeLast('/', "").ifBlank { "/" }
@@ -188,11 +232,86 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
         return false
     }
-    fun leavePlayer() { player.stop(); revokeLease(); mutable.value = mutable.value.copy(selected = null) }
+    fun tab(value: String) { mutable.value = mutable.value.copy(tab = value) }
+    fun openRecent(snapshot: PlaybackSnapshot) {
+        val bound = context ?: return
+        if (snapshot.accountKey != bound.account.key) return
+        open(ResourceRef(snapshot.path, snapshot.wirePath, snapshot.name, false, "video", 0))
+    }
+    fun togglePlayback() {
+        if (player.state.value.playing) { pausePlayback(); return }
+        val binding = playback ?: return
+        if (!foreground) return
+        resumeOperation?.cancel()
+        mutable.value = mutable.value.copy(busy = true, stage = "正在确认播放来源", error = null)
+        resumeOperation = viewModelScope.launch {
+            try {
+                val remote = history.remote(binding.context.api, binding.file.path, binding.file.wirePath)
+                if (playback != binding || context != binding.context) return@launch
+                if (remote.identity != binding.identity) {
+                    endPlayback()
+                    mutable.value = mutable.value.copy(busy = false, stage = "", selected = null, error = "文件已变化，请重新打开；旧进度不会用于新文件。")
+                } else {
+                    mutable.value = mutable.value.copy(busy = false, stage = "")
+                    player.toggle()
+                }
+            } catch (error: Exception) {
+                if (error !is CancellationException && playback == binding) mutable.value = mutable.value.copy(busy = false, stage = "", error = "无法确认网络和文件，请重试播放。")
+            }
+        }
+    }
+    fun pausePlayback() {
+        if (resumeOperation?.isActive == true) {
+            resumeOperation?.cancel()
+            mutable.value = mutable.value.copy(busy = false, stage = "")
+        }
+        player.pause(); saveProgress()
+    }
+    fun retryProgress() { lastSaved = null; saveProgress() }
+    private fun snapshot(binding: PlaybackBinding): PlaybackSnapshot? {
+        val value = player.state.value
+        if (value.durationMs <= 0 && value.positionMs <= 0) return null
+        return PlaybackSnapshot(binding.context.account.key, binding.file.wirePath.ifEmpty { binding.file.path }, binding.identity,
+            binding.file.path, binding.file.wirePath, binding.file.name, value.positionMs, value.durationMs, System.currentTimeMillis(), ProgressSync.PENDING)
+    }
+    private fun saveProgress() {
+        val binding = playback ?: return
+        val value = snapshot(binding) ?: return
+        val fingerprint = value.positionMs to value.durationMs
+        if (lastSaved == fingerprint) return
+        lastSaved = fingerprint
+        mutable.value = mutable.value.copy(progressStatus = "正在保存续播")
+        binding.writer.submit(value)
+    }
+    private fun endPlayback() {
+        resumeOperation?.cancel()
+        saveTimer?.cancel()
+        val old = playback; val value = old?.let(::snapshot)
+        playback = null; lastSaved = null
+        player.pause()
+        val stored = if (old != null && value != null) old.writer.submit(value) else null
+        val oldLease = lease; lease = ""
+        val previous = mediaClosing
+        if (old != null || oldLease.isNotEmpty()) mediaClosing = cleanup.launch {
+            previous?.join()
+            try { stored?.await() }
+            catch (error: Exception) {
+                if (error is CancellationException) throw error
+                withContext(Dispatchers.Main) { mutable.value = mutable.value.copy(notice = "上次的续播未能保存，请检查本机存储。") }
+            } finally {
+                withContext(Dispatchers.Main) { player.stop() }
+                try { if (oldLease.isNotEmpty()) NativeTransport.call(JSONObject().put("op", "revoke").put("url", oldLease)) }
+                finally { old?.writer?.close() }
+            }
+        } else player.stop()
+    }
+    fun leavePlayer() { operation?.cancel(); endPlayback(); mutable.value = mutable.value.copy(selected = null, busy = false, stage = "") }
     private fun revokeLease() { val old = lease; lease = ""; if (old.isNotEmpty()) cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", old)) } }
     private fun closeSession() {
-        player.stop(); revokeLease(); val old = context; context = null
-        if (old != null) cleanup.launch { old.api.close() }
+        endPlayback(); val old = context; context = null
+        recentJob?.cancel(); recentMutable.value = emptyList()
+        val previous = closing; val media = mediaClosing
+        if (old != null) closing = cleanup.launch { previous?.join(); media?.join(); old.api.close() }
     }
     fun disconnect() { operation?.cancel(); generation++; closeSession(); navigation.clear(); mutable.value = ClientState(editorVersion = mutable.value.editorVersion) }
     fun connectNetwork() {
@@ -227,7 +346,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun stopNetwork(logout: Boolean = false) {
         networkJob?.cancel(); networkPollJob?.cancel(); disconnect()
-        networkJob = viewModelScope.launch { try { if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
+        networkJob = viewModelScope.launch { try { closing?.join(); mediaClosing?.join(); if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
     }
-    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); player.release(); super.onCleared() }
+    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); player.checkpoint = null; player.release(); super.onCleared() }
 }

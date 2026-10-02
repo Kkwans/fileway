@@ -24,10 +24,12 @@ class NativePlayer(context: Context) {
     private val player = MediaPlayer(vlc)
     private val mutable = MutableStateFlow(PlayerState())
     val state = mutable.asStateFlow()
+    var checkpoint: (() -> Unit)? = null
     private var attached = false
     private var requested = false
     private var released = false
     private var seekTarget: Long? = null
+    private var resumeTarget: Long? = null
 
     init {
         player.setEventListener { event ->
@@ -45,11 +47,17 @@ class NativePlayer(context: Context) {
                 }
                 MediaPlayer.Event.LengthChanged -> old.copy(durationMs = event.lengthChanged.coerceAtLeast(0))
                 MediaPlayer.Event.SeekableChanged -> old.copy(seekable = event.seekable)
-                MediaPlayer.Event.EndReached -> old.copy(playing = false, phase = "播放完毕")
+                MediaPlayer.Event.EndReached -> old.copy(playing = false, positionMs = old.durationMs.takeIf { it > 0 } ?: old.positionMs, phase = "播放完毕")
                 MediaPlayer.Event.EncounteredError -> old.copy(playing = false, phase = "无法播放", error = "视频读取或解码失败，可重试或选择其他音轨。")
                 else -> old
             }
             if (event.type in listOf(MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected, MediaPlayer.Event.Playing, MediaPlayer.Event.Vout)) refreshTracks()
+            val resume = resumeTarget
+            if (resume != null && mutable.value.seekable && mutable.value.durationMs > 0) {
+                resumeTarget = null
+                seek(resume)
+            }
+            if (event.type == MediaPlayer.Event.Paused || event.type == MediaPlayer.Event.EndReached) checkpoint?.invoke()
         }
     }
 
@@ -61,18 +69,19 @@ class NativePlayer(context: Context) {
         if (requested) player.play()
     }
     fun detach() { if (!released && attached) { player.detachViews(); attached = false } }
-    fun open(url: String) {
+    fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true) {
         if (released) return
         player.stop()
         seekTarget = null
+        resumeTarget = positionMs.takeIf { it > 0 }
         mutable.value = PlayerState(phase = "正在打开视频")
         val media = Media(vlc, Uri.parse(url))
         media.setHWDecoderEnabled(true, false)
         media.addOption(":network-caching=1500")
         player.media = media
         media.release()
-        requested = true
-        if (attached) player.play()
+        requested = autoplay
+        if (attached && requested) player.play()
     }
     fun toggle() {
         if (mutable.value.playing) pause() else { requested = true; if (attached) player.play() }
@@ -89,7 +98,7 @@ class NativePlayer(context: Context) {
     fun rate(value: Float) { player.rate = value; mutable.value = mutable.value.copy(rate = value) }
     fun audio(id: Int) { if (player.setAudioTrack(id)) refreshTracks() }
     fun subtitle(id: Int) { if (player.setSpuTrack(id)) refreshTracks() }
-    fun stop() { requested = false; if (!released) player.stop(); mutable.value = PlayerState() }
+    fun stop() { requested = false; resumeTarget = null; if (!released) player.stop(); mutable.value = PlayerState() }
 
     private fun refreshTracks() {
         val media = player.media
