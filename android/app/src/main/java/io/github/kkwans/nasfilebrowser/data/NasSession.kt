@@ -6,6 +6,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
+import kotlinx.coroutines.flow.Flow
 
 data class AccountIdentity(val id: Long, val username: String, val hostname: String)
 class ServiceException(val status: Int, message: String) : Exception(message)
@@ -32,6 +33,8 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
     }
     suspend fun request(method: String, endpoint: String, body: JSONObject? = null) = JSONObject(response(method, endpoint, body))
     suspend fun array(endpoint: String) = JSONArray(response("GET", endpoint))
+    fun search(path: String, wirePath: String, query: String, scope: SearchScope): Flow<SearchUpdate> =
+        searchFlow(path, wirePath, query, scope, identity = { token(); Unit }) { command -> native(command.put("session", id)) }
     suspend fun lease(path: String, wirePath: String): String {
         token()
         return native(JSONObject().put("op", "lease").put("session", id).put("path", path).put("wirePath", wirePath)) as String

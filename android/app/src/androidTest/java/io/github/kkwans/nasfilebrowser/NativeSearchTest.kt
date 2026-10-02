@@ -5,9 +5,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
 import io.github.kkwans.nasfilebrowser.data.NasSession
 import io.github.kkwans.nasfilebrowser.data.ServerProfile
+import io.github.kkwans.nasfilebrowser.data.SearchScope
+import io.github.kkwans.nasfilebrowser.data.SearchEnding
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -25,6 +28,29 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Real JNI/Go/HTTP NDJSON metadata, without an activity/player or real identity. */
 @RunWith(AndroidJUnit4::class)
 class NativeSearchTest {
+    @Test fun sessionAdapterDeliversTypedResultsOverRealJniAndHttp() = runBlocking {
+        SearchFixture().use { fixture ->
+            val session = NasSession.login(ServerProfile(name = "Owned search adapter", address = fixture.url), "fixture", "fixture-only")
+            var delivered = 0
+            var finished = false
+            try {
+                withTimeout(5000) {
+                    session.search("/", "/", "电影🎬 & + #", SearchScope.CURRENT).collect { update ->
+                        if (update.items.isNotEmpty()) {
+                            assertFalse(update.done)
+                            assertEquals("/电影🎬 # ?.mkv", update.items.single().resource("/", "/")!!.path)
+                            delivered += update.items.size
+                            fixture.release.set(true)
+                        }
+                        if (update.done) { assertEquals(SearchEnding.COMPLETED, update.ending); finished = true }
+                    }
+                }
+                assertEquals(1, delivered)
+                assertTrue(finished)
+                assertTrue(fixture.valid.get())
+            } finally { session.close() }
+        }
+    }
     @Test fun incrementalMetadataAndCancellationUseTheActualNativeBridge() = runBlocking {
         val fixture = SearchFixture()
         val profile = ServerProfile(name = "Owned search fixture", address = fixture.url)

@@ -1,6 +1,6 @@
 # Native search transport
 
-This slice supplies real streaming metadata through Go/JNI. The search page and its lifecycle/generation integration are still pending.
+This slice supplies real streaming metadata through Go/JNI and a typed Android session Flow. The search page and its model/generation integration are still pending.
 
 ## Existing NAS contract
 
@@ -18,7 +18,7 @@ Protocol 1 retains its existing commands and adds:
 
 Workers live under the source session, not the short JNI call context. Replacing a query must cancel its previous handle. Closing a profile/account session cancels every owned search. At most four unconsumed handles exist per session, with 64 queued items each, 64KiB per NDJSON record, and a 45-second client deadline. Full result bodies are not read into memory before delivery. Search reuses the source session's HTTP/embedded client, X-Auth, renewal and redirect policy; it introduces no tasks or backend API.
 
-If an Android caller is canceled while the JNI start response is arriving, `NativeTransport` explicitly releases that returned handle. The future repository/model must also verify account identity before accepting each batch, cancel in `finally`, bind query/source generation and preserve retry context. JNI carries these bounded metadata batches; media bytes still use the existing localhost HTTP lease.
+If an Android caller is canceled while the JNI start response is arriving, `NativeTransport` explicitly releases that returned handle. `NasSession.search` now checks identity before start and before/after each poll, emits typed deltas/termination and cancels its handle in a bounded non-cancelable finally block. Server limits/timeouts/permissions/failures receive user-facing messages without raw server details. The future model must bind query/source generation and preserve retry context. JNI carries these bounded metadata batches; media bytes still use the existing localhost HTTP lease.
 
 ## Resource identity boundary
 
@@ -29,3 +29,5 @@ This NAS search response does not include `wirePath`. Its relative path is metad
 Go tests exercise incremental delivery before completion, source/base/query encoding, heartbeats, summaries/partial timeout, missing/truncated/oversized data, bounded backpressure, actual upstream cancellation, session ownership/closure, handle limits, renewal and permissions. Bridge tests prove the stream survives return from its short native call and a pre-canceled queued start does not contact the source.
 
 `NativeSearchTest` uses the actual byte-array JNI → Go → owned HTTP fixture, requiring an early Unicode result and observing upstream socket closure on cancel. It uses no real NAS identity, activity/player, node enrollment or server data. These checks do not prove the unfinished search UI, real NAS results, external embedded networking, physical devices or the whole goal.
+
+`SearchSessionTest` covers account binding, cancellation/changed-principal rejection, path encoding with an opaque base, partial termination and invalid summaries. `SearchResult.resource` preserves the base wire bytes, encodes ordinary result segments once, and returns no guessed reference for ambiguous replacement characters. It retains legal space-only filename segments. A second real-JNI fixture test collects the typed session Flow before releasing the server's final summary.
