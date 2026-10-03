@@ -53,6 +53,13 @@ jobs:
         run: bash scripts/build-native.sh
       - name: Build and check
         run: ./gradlew -p android :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest --stacktrace
+      - name: Upload installable preview candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        continue-on-error: true
+        with:
+          name: android-preview-candidate-api${{ matrix.api }}
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
       - name: Allow KVM in ephemeral runner
         run: |
           test -c /dev/kvm
