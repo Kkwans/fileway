@@ -145,11 +145,12 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         Text("正在观看", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                     }
-                    // Reserve the compact transport strip outside the native
-                    // subtitle viewport, also while hidden. No resize on HUD idle.
+                    // Portrait keeps transport below the picture. Fullscreen
+                    // uses the entire viewport with controls over the video;
+                    // hiding the HUD never changes the native surface size.
                     val stage = if (landscape) Modifier.weight(1f) else Modifier.fillMaxWidth().height(portraitStageHeight)
                     Box(stage.background(Color.Black)) {
-                        Box(Modifier.fillMaxSize().padding(bottom = 96.dp)) {
+                        Box(Modifier.fillMaxSize().padding(bottom = if (landscape) 0.dp else 96.dp)) {
                             AndroidView(factory = { VLCVideoLayout(it).also(model.player::attach) }, modifier = Modifier.fillMaxSize())
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"

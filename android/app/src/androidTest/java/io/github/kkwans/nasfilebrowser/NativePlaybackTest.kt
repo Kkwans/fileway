@@ -209,6 +209,16 @@ class NativePlaybackTest {
             device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.desc("退出全屏")), 3000))
             capture("player-landscape")
+            activity.scenario.onActivity { owner ->
+                var videoSurface: SurfaceView? = null
+                fun findVideo(view: View) {
+                    if (view is SurfaceView && runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull() == "surface_video") videoSurface = view
+                    if (view is ViewGroup) for (index in 0 until view.childCount) findVideo(view.getChildAt(index))
+                }
+                findVideo(owner.window.decorView)
+                val surface = requireNotNull(videoSurface)
+                assertTrue("Landscape video must use the full available height rather than reserve a black transport strip", surface.height >= owner.window.decorView.height * .95f)
+            }
             device.findObject(By.desc("退出全屏")).click()
             assertTrue("Exit fullscreen must restore portrait controls", device.wait(Until.hasObject(By.desc("横屏全屏")), 5000))
             onMain { model.leavePlayer(); model.tab("recent") }
