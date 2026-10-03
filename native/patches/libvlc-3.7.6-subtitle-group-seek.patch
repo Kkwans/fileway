@@ -1,0 +1,12 @@
+diff --git a/modules/demux/mkv/matroska_segment.cpp b/modules/demux/mkv/matroska_segment.cpp
+--- a/modules/demux/mkv/matroska_segment.cpp
++++ b/modules/demux/mkv/matroska_segment.cpp
+@@ -1309,7 +1309,7 @@
+             if( p_track != NULL && p_track->fmt.i_cat == SPU_ES )
+             {
+                 vars.obj->_seeker.add_seekpoint( kblock.TrackNum(),
+-                    SegmentSeeker::Seekpoint( kblock.GetElementPosition(), VLC_TICK_FROM_NS(kblock.GlobalTimecode()) ) );
++                    SegmentSeeker::Seekpoint( vars.obj->i_block_pos, VLC_TICK_FROM_NS(kblock.GlobalTimecode()) ) );
+             }
+ 
+             vars.ep->Keep ();

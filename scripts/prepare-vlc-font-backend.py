@@ -21,6 +21,7 @@ PATCH = REPOSITORY / "native/patches/libvlc-3.7.6-android-fonts.patch"
 ASS_PATCH = REPOSITORY / "native/patches/libass-0.17.5-android-provider.patch"
 ASS_PROVIDER = REPOSITORY / "native/ass_android_font_provider.h"
 SUBTITLE_PATCH = REPOSITORY / "native/patches/libvlc-3.7.6-subtitle-cache.patch"
+SUBTITLE_GROUP_PATCH = REPOSITORY / "native/patches/libvlc-3.7.6-subtitle-group-seek.patch"
 MAX_ARCHIVE = 128 << 20
 MAX_EXTRACTED = 512 << 20
 
@@ -111,7 +112,7 @@ def prepare(workspace, cache):
     if len(patches) != 20:
         raise ValueError("Unexpected SDK patch series")
     applied = []
-    for patch in [*patches, PATCH, SUBTITLE_PATCH]:
+    for patch in [*patches, PATCH, SUBTITLE_PATCH, SUBTITLE_GROUP_PATCH]:
         if patch == SUBTITLE_PATCH:
             # Retain the actual upstream callbacks for an expected-failing
             # regression comparison, without preparing a second source tree.

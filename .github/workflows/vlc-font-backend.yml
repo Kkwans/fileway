@@ -60,5 +60,6 @@ jobs:
             native/patches/libvlc-3.7.6-android-fonts.patch
             native/patches/libass-0.17.5-android-provider.patch
             native/patches/libvlc-3.7.6-subtitle-cache.patch
+            native/patches/libvlc-3.7.6-subtitle-group-seek.patch
             native/ass_android_font_provider.h
             native/vlc-font-backend.lock.json
