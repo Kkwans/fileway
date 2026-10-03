@@ -324,3 +324,9 @@
 
 - Workflow 37102077622 at d2305c8 succeeded. Downloaded ARM64 artifacts match provenance and independently pass ELF machine/LOAD alignment checks (16KiB). Revision `66455a98c8c5-sdk-c0cc8ce6443d-nfb-3c7c2fbf4640`; libvlc SHA256 `245e2eaace40c1e880b9dc8923c16eadeb35777bd99caa7310837013342603b5`, JNI `1a35c2d217a06f4fb4cd2dab8812e95ab7546c5ceb9aec230333ba64a31878ce`, libc++ `ab4e6c71b96b851de45a8a9bd86369e7dbc2130a44b3b4520564be94847910f2`.
 - This completes the source-build/ELF checks for both trial ABIs, not Android ARM64 runtime, actual audio/HDR/performance or reliable first subtitle presentation. Normal dependency/public APK remain unchanged; no backend operation. Original Maven SDK/public preview remain rollback artifacts.
+
+## Existing NAS thumbnail transport
+
+- Added a typed internal `preview` command mapping to the existing NAS `/api/preview/thumb/{path}` route. It reuses the current immutable session/localhost asset lease, X-Auth/renewal, source transport, streaming and cancellation. Ordinary paths encode once; opaque wire bytes/base paths are preserved. No NAS endpoint, thumbnail generator, search implementation or backend/schema change is introduced.
+- Go1.26.6 `CGO_ENABLED=0 go test ./...` and `go vet ./...` passed locally; `gofmt`, `git diff --check` and scoped review passed. The bridge test streams an owned actual PNG through an authenticated preview source, checks legacy encoded bytes/base path and requires HTTP410 after session closure. Endpoint regression covers special characters and single encoding. Linux CI must separately verify race; the NAS has no native race compiler configured.
+- Android thumbnail loader/display, source-isolated image cache, real NAS previews and screenshot-based UI rebuild are pending. This is the shared transport foundation, not visible thumbnail delivery. Public preview and production NAS remain unchanged; source rollback is 4befbfe.

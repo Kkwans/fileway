@@ -236,6 +236,12 @@ func (e *Engine) execute(c Command) (any, error) {
 		return b.Lease(c.Session, endpoint, true)
 	case "asset":
 		return b.Lease(c.Session, c.Endpoint, false)
+	case "preview":
+		endpoint, err := transport.PreviewEndpoint(c.Path, c.WirePath)
+		if err != nil {
+			return nil, err
+		}
+		return b.Lease(c.Session, endpoint, false)
 	case "revoke":
 		b.Revoke(c.URL)
 		return nil, nil

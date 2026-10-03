@@ -58,3 +58,13 @@ func RawEndpoint(path, wirePath string) (string, error) {
 	}
 	return "/api/raw" + strings.Join(segments, "/"), nil
 }
+
+// PreviewEndpoint reuses the NAS's existing thumbnail route, keeping opaque
+// wire bytes intact. Preview generation is separate from native playback.
+func PreviewEndpoint(path, wirePath string) (string, error) {
+	raw, err := RawEndpoint(path, wirePath)
+	if err != nil {
+		return "", err
+	}
+	return "/api/preview/thumb" + strings.TrimPrefix(raw, "/api/raw"), nil
+}

@@ -46,6 +46,10 @@ func TestURLPreservesBaseAndWireBytes(t *testing.T) {
 			t.Fatal("accepted", bad)
 		}
 	}
+	preview, err := PreviewEndpoint("/中文/a%2F?#.mkv", "")
+	if err != nil || preview != "/api/preview/thumb/%E4%B8%AD%E6%96%87/a%252F%3F%23.mkv" {
+		t.Fatal("preview path was not encoded exactly once", preview, err)
+	}
 }
 
 func TestAuthenticatedRangeAndImmutableLease(t *testing.T) {
