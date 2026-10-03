@@ -1,6 +1,15 @@
 package io.github.kkwans.nasfilebrowser
 
 import android.os.Bundle
+import android.graphics.Color
+import androidx.activity.SystemBarStyle
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.core.view.WindowCompat
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.kkwans.nasfilebrowser.data.AppTheme
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -15,7 +24,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            ClientTheme { ClientApp(model) }
+            val appearance by model.appearance.state.collectAsStateWithLifecycle()
+            val client by model.state.collectAsStateWithLifecycle()
+            val dark = when (appearance.theme) {
+                AppTheme.SYSTEM -> isSystemInDarkTheme()
+                AppTheme.LIGHT -> false
+                AppTheme.DARK -> true
+            }
+            DisposableEffect(dark) {
+                val style = if (dark) SystemBarStyle.dark(Color.TRANSPARENT)
+                    else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+                onDispose { }
+            }
+            SideEffect {
+                val lightBars = !dark && client.selected == null
+                val bars = WindowCompat.getInsetsController(window, window.decorView)
+                bars.isAppearanceLightStatusBars = lightBars
+                bars.isAppearanceLightNavigationBars = lightBars
+            }
+            ClientTheme(darkTheme = dark) { ClientApp(model) }
         }
     }
     override fun onStart() { super.onStart(); model.foreground(true) }

@@ -2,6 +2,8 @@ package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +17,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -23,6 +26,8 @@ import io.github.kkwans.nasfilebrowser.BuildConfig
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.kkwans.nasfilebrowser.data.AppTheme
 import io.github.kkwans.nasfilebrowser.data.ConnectionMode
 import kotlinx.coroutines.launch
 
@@ -61,9 +66,12 @@ import kotlinx.coroutines.launch
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun SettingsScreen(model: ClientModel, state: ClientState) {
     var profileDetails by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
+    var themeSheet by remember { mutableStateOf(false) }
+    val appearance by model.appearance.state.collectAsStateWithLifecycle()
     var cacheBytes by remember { mutableLongStateOf(model.previewImageLoader.memoryCache?.size ?: 0) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -93,6 +101,19 @@ import kotlinx.coroutines.launch
                     }
                 }
                 item {
+                    Text("外观", style = MaterialTheme.typography.titleMedium)
+                    SettingsAction("主题", when {
+                        appearance.loading -> "正在读取"
+                        appearance.saving -> "正在保存"
+                        !appearance.loaded -> "读取失败"
+                        else -> appearance.theme.label()
+                    }, R.drawable.ic_visibility, enabled = appearance.loaded && !appearance.saving && !appearance.loading) { themeSheet = true }
+                    appearance.error?.let { message ->
+                        Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        if (!appearance.loaded) TextButton(onClick = model.appearance::reload) { Text("重试读取") }
+                    }
+                }
+                item {
                     Text("服务器与连接", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
                     SettingsAction("服务器档案", "NAS · ${if (state.profile?.network == ConnectionMode.TAILNET) "内嵌 Tailscale" else "直接连接"}", R.drawable.ic_storage) { profileDetails = true }
                     NetworkCard(model)
@@ -109,6 +130,20 @@ import kotlinx.coroutines.launch
                     SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
                 }
                 state.error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+            }
+        }
+    }
+    if (themeSheet) ModalBottomSheet(onDismissRequest = { themeSheet = false },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp).selectableGroup()) {
+            Text("选择主题", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 12.dp))
+            AppTheme.entries.forEach { mode ->
+                Row(Modifier.fillMaxWidth().selectable(selected = appearance.theme == mode, role = Role.RadioButton,
+                    enabled = !appearance.saving, onClick = { model.appearance.save(mode); themeSheet = false }).heightIn(min = 56.dp).padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    RadioButton(selected = appearance.theme == mode, onClick = null)
+                    Text(mode.label(), style = MaterialTheme.typography.bodyLarge)
+                }
             }
         }
     }
@@ -131,8 +166,8 @@ import kotlinx.coroutines.launch
     }
 }
 
-@Composable private fun SettingsAction(title: String, subtitle: String, icon: Int, action: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = action).heightIn(min = 64.dp).padding(vertical = 12.dp),
+@Composable private fun SettingsAction(title: String, subtitle: String, icon: Int, enabled: Boolean = true, action: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = action).heightIn(min = 64.dp).padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(painterResource(icon), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -141,4 +176,10 @@ import kotlinx.coroutines.launch
         }
         Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+internal fun AppTheme.label() = when (this) {
+    AppTheme.SYSTEM -> "跟随系统"
+    AppTheme.LIGHT -> "明色"
+    AppTheme.DARK -> "暗色"
 }

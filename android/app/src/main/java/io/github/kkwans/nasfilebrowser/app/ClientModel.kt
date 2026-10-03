@@ -25,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -51,6 +52,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         .memoryCache { MemoryCache.Builder().maxSizeBytes(16L * 1024 * 1024).build() }
         .diskCache(null).build()
     private val store = ProfileStore(ClientDatabase.get(application), CredentialVault(application))
+    private val appearanceStore = AppearanceStore(ClientDatabase.get(application))
+    val appearance = AppearanceController(viewModelScope, { appearanceStore.theme.first() }, appearanceStore::save)
     private val history = PlaybackHistory(ClientDatabase.get(application))
     private val recentMutable = MutableStateFlow<List<PlaybackSnapshot>>(emptyList())
     val recent = recentMutable.asStateFlow()

@@ -327,6 +327,7 @@ class NativePlaybackTest {
                     send(token.toByteArray(), "text/plain")
                 }
                 endpoint == "/api/resources/" -> send(JSONObject().put("items", JSONArray().put(JSONObject().put("path", "/fixture.mkv").put("wirePath", "/fixture.mkv").put("name", "Native playback fixture.mkv").put("type", "video").put("size", media.size))).toString().toByteArray())
+                endpoint == "/api/preview/thumb/fixture.mkv" -> send(ByteArray(0), status = 404)
                 endpoint.startsWith("/api/media/playback") -> {
                     if (request[0] == "GET" && stallNextRead.compareAndSet(true, false)) { resumeRead.countDown(); releaseRead.await(10, TimeUnit.SECONDS) }
                     if (request[0] == "PUT") { position = JSONObject(String(body)).getDouble("position"); updated = System.currentTimeMillis() }
