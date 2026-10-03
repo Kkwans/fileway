@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import java.net.URLEncoder
 
+enum class FileLayout(val label: String) { COVER("封面网格"), DETAIL("大图列表"), LIST("常规列表"), COMPACT("紧凑网格") }
+
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
@@ -36,7 +38,7 @@ data class ClientState(
     val error: String? = null, val selected: ResourceRef? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
-    val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "",
+    val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
 )
 data class SessionContext(val profile: ServerProfile, val account: AccountRecord, val api: NasSession, val generation: Int)
 private data class PlaybackBinding(val context: SessionContext, val file: ResourceRef, val identity: String, val writer: PlaybackWriter)
@@ -91,7 +93,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
         val expected = generation
-        mutable.value = mutable.value.copy(busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, previewScope = "")
+        mutable.value = mutable.value.copy(busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, previewScope = "", fileLayout = FileLayout.COVER)
         operation = viewModelScope.launch {
             var opened: NasSession? = null
             try {
@@ -263,6 +265,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
         return false
     }
+    fun fileLayout(value: FileLayout) { mutable.value = mutable.value.copy(fileLayout = value) }
     fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return

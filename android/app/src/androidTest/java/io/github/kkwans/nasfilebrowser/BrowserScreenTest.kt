@@ -38,11 +38,16 @@ class BrowserScreenTest {
         try {
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy && it.files.size == 6 } }
+            var currentLayout = "封面网格"
+            fun chooseLayout(next: String) { text(currentLayout).click(); text(next).click(); currentLayout = next }
+            assertTrue(device.wait(Until.hasObject(By.desc("文件网格")), 5000))
+            capture("cover-default")
+            chooseLayout("常规列表")
             val list = device.wait(Until.findObject(By.desc("文件列表")), 5000) ?: error("File list missing")
             if (instrumentation.targetContext.resources.configuration.fontScale <= 1.05f)
                 assertTrue("Files must occupy at least 60% of the compact portrait screen", list.visibleBounds.height() >= device.displayHeight * .6f)
             capture("list")
-            text("网格").click()
+            chooseLayout("封面网格")
             val grid = device.wait(Until.findObject(By.desc("文件网格")), 5000) ?: error("File grid missing")
             if (instrumentation.targetContext.resources.configuration.fontScale <= 1.05f) {
                 instrumentation.waitForIdleSync()
@@ -63,7 +68,13 @@ class BrowserScreenTest {
             capture("details")
             text("关闭").click()
             capture("grid")
-            text("列表").click()
+            chooseLayout("紧凑网格")
+            assertTrue(device.wait(Until.hasObject(By.desc("紧凑文件网格")), 5000))
+            capture("compact-grid")
+            chooseLayout("大图列表")
+            assertTrue(device.wait(Until.hasObject(By.desc("大图文件列表")), 5000))
+            capture("detail-list")
+            chooseLayout("常规列表")
             text("刷新").click()
             withTimeout(5000) { model.state.first { !it.busy && it.files.size == 6 } }
             text("旅行").click()
