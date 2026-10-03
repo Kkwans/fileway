@@ -38,7 +38,10 @@ class ThemeScreenTest {
         withTimeout(5000) { model.appearance.state.first { it.theme == mode && !it.saving } }
     }
     private suspend fun color(dark: Boolean) {
-        withTimeout(5000) {
+        var lastPixels = emptyList<Int>()
+        val canvas = if (dark) Color.rgb(32, 32, 35) else Color.rgb(245, 245, 247)
+        val navigation = if (dark) Color.rgb(20, 20, 22) else Color.WHITE
+        val matched = withTimeoutOrNull(5000) {
             while (true) {
                 val screenshot = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
                 val bitmap = screenshot.copy(Bitmap.Config.ARGB_8888, false)
@@ -48,12 +51,26 @@ class ThemeScreenTest {
                     listOf(bitmap.getPixel(10, bitmap.height / 2),
                         bitmap.getPixel(10, 10), bitmap.getPixel(10, bitmap.height - 10))
                 } finally { bitmap.recycle(); screenshot.recycle() }
-                val expected = if (dark) Color.rgb(20, 20, 22) else Color.WHITE
-                if (values.all { it == expected }) break
+                lastPixels = values
+                if (values == listOf(canvas, canvas, navigation)) break
                 delay(100)
             }
+            true
         }
+        if (matched != true) {
+            capture("theme-bars-failure-${if (dark) "dark" else "light"}")
+            activity.scenario.onActivity {
+                val rect = android.graphics.Rect()
+                it.findViewById<android.view.View>(android.R.id.content).getGlobalVisibleRect(rect)
+                println("Theme window: content=$rect, flags=${it.window.attributes.flags}")
+            }
+        }
+        assertTrue("System bar/page pixels dark=$dark: ${lastPixels.map { Integer.toHexString(it) }}", matched == true)
         activity.scenario.onActivity {
+            val rect = android.graphics.Rect()
+            it.findViewById<android.view.View>(android.R.id.content).getGlobalVisibleRect(rect)
+            assertEquals("Content must cover the status-bar region", 0, rect.top)
+            assertEquals("Content must cover the navigation-bar region", device.displayHeight, rect.bottom)
             val bars = WindowCompat.getInsetsController(it.window, it.window.decorView)
             assertEquals(!dark, bars.isAppearanceLightStatusBars)
             assertEquals(!dark, bars.isAppearanceLightNavigationBars)
