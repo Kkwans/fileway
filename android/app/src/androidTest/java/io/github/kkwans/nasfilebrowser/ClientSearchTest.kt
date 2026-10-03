@@ -28,6 +28,34 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(AndroidJUnit4::class)
 class ClientSearchTest {
+    @Test fun savedLayoutRestoresAfterAccountSwitchAndNewViewModel(): Unit = runBlocking {
+        Harness().use { h ->
+            h.connect()
+            val profile = h.model.state.value.profile!!
+            h.main { fileLayout(FileLayout.LIST); fileLayout(FileLayout.DETAIL); fileLayout(FileLayout.COMPACT) }
+            withTimeout(5000) { h.model.state.first { it.fileLayout == FileLayout.COMPACT } }
+            h.main { connectDraft(profile.name, h.fixture.url, BackendKind.NAS, "two", "fixture-only", "direct") }
+            withTimeout(10_000) { h.model.state.first { it.connected && !it.busy && it.accountName == "two" } }
+            assertEquals(FileLayout.COVER, h.model.state.value.fileLayout)
+            h.main { fileLayout(FileLayout.LIST) }
+            withTimeout(5000) { h.model.state.first { it.fileLayout == FileLayout.LIST } }
+            h.main { connectDraft(profile.name, h.fixture.url, BackendKind.NAS, "one", "fixture-only", "direct") }
+            withTimeout(10_000) { h.model.state.first { it.connected && !it.busy && it.accountName == "one" } }
+            assertEquals(FileLayout.COMPACT, h.model.state.value.fileLayout)
+            assertEquals("/library", h.model.state.value.path)
+            h.main { disconnect() }
+            val holder = ViewModelStore()
+            val app = InstrumentationRegistry.getInstrumentation().targetContext.applicationContext as Application
+            val fresh = withContext(Dispatchers.Main) { ClientModel(app).also { holder.put("layout-restart", it) } }
+            try {
+                withContext(Dispatchers.Main) { fresh.selectProfile(profile); fresh.connectDraft(profile.name, h.fixture.url, BackendKind.NAS, "one", "fixture-only", "direct") }
+                withTimeout(10_000) { fresh.state.first { it.connected && !it.busy } }
+                assertEquals(FileLayout.COMPACT, fresh.state.value.fileLayout)
+                assertEquals("/library", fresh.state.value.path)
+            } finally { withContext(Dispatchers.Main) { holder.clear() } }
+        }
+    }
+
     @Test fun incrementalSearchCancelReplaceAndRetryUseRealNativeHttp(): Unit = runBlocking {
         Harness().use { h ->
             h.connect()

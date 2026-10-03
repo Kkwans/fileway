@@ -20,7 +20,7 @@ class AppearanceStorageTest {
     private val context = instrumentation.targetContext
     private fun folder() = File(context.cacheDir, "appearance-${UUID.randomUUID()}").apply { check(mkdirs()) }
     private fun open(file: File, backups: File) = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath)
-        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups)).build()
+        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups)).build()
 
     @Test fun themesPersistAcrossDatabaseReopenAndPreserveProfiles(): Unit = runBlocking {
         val folder = folder(); val file = File(folder, "state.db")
@@ -57,7 +57,7 @@ class AppearanceStorageTest {
                 val old = db.playback().snapshot("account", "/%D6%D0/movie.mkv", "source-id")
                 assertEquals(12345L, old?.positionMs); assertEquals(120000L, old?.durationMs)
                 assertEquals(ProgressSync.PENDING, old?.sync)
-                val backup = JSONObject(backups.listFiles()!!.single().readText())
+                val backup = JSONObject(backups.listFiles()!!.single { it.name.startsWith("schema2-before3-") }.readText())
                 assertEquals(2, backup.getInt("schemaVersion"))
                 for (table in listOf("server_profiles", "accounts", "directory_state", "playback_snapshots"))
                     assertEquals(1, backup.getJSONArray(table).length())

@@ -27,10 +27,12 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.net.URLEncoder
 
-enum class FileLayout(val label: String) { COVER("封面网格"), DETAIL("大图列表"), LIST("常规列表"), COMPACT("紧凑网格") }
+typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
 
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
@@ -79,6 +81,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var closing: Job? = null
     private var mediaClosing: Job? = null
     private var lastSaved: Pair<Long, Long>? = null
+    private val layoutWrites = Mutex()
+    private var layoutRequest = 0L
     val search = SearchController(viewModelScope, { context == it && generation == it.generation }, ::open)
     init { player.checkpoint = { saveProgress() } }
 
@@ -120,7 +124,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 context = bound
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
-                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username)
+                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username, fileLayout = directory?.fileLayout ?: FileLayout.COVER)
                 if (directory == null || directory.path == "/") applyDirectory(root, "/", "/", bound)
                 else try { loadDirectory(directory.path, directory.wirePath, bound) } catch (error: Exception) {
                     if (error !is ServiceException || error.status !in setOf(403, 404)) throw error
@@ -269,7 +273,24 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         return false
     }
     fun clearPreviewCache() { previewImageLoader.memoryCache?.clear() }
-    fun fileLayout(value: FileLayout) { mutable.value = mutable.value.copy(fileLayout = value) }
+    fun fileLayout(value: FileLayout) {
+        val bound = context ?: return
+        val request = ++layoutRequest
+        viewModelScope.launch {
+            try {
+                // Preserve write order for rapid selections. Each write keeps
+                // its original account; a late result never changes a new session.
+                layoutWrites.withLock { store.saveFileLayout(bound.account, value) }
+                if (context == bound && generation == bound.generation && layoutRequest == request)
+                    mutable.value = mutable.value.copy(fileLayout = value,
+                        notice = mutable.value.notice.takeUnless { it == "布局未能保存，请重新选择并重试" })
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (context == bound && generation == bound.generation && layoutRequest == request)
+                    mutable.value = mutable.value.copy(notice = "布局未能保存，请重新选择并重试")
+            }
+        }
+    }
     fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return

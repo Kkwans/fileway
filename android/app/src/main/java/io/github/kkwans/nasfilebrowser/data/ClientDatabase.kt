@@ -7,6 +7,7 @@ import java.util.UUID
 
 enum class BackendKind { NAS, WINDOWS }
 enum class ConnectionMode { DIRECT, TAILNET }
+enum class FileLayout(val label: String) { COVER("封面网格"), DETAIL("大图列表"), LIST("常规列表"), COMPACT("紧凑网格") }
 
 @Entity(tableName = "server_profiles")
 data class ServerProfile(
@@ -35,7 +36,8 @@ data class AccountRecord(
 @Entity(tableName = "directory_state", foreignKeys = [ForeignKey(
     entity = AccountRecord::class, parentColumns = ["key"], childColumns = ["accountKey"], onDelete = ForeignKey.CASCADE,
 )])
-data class DirectoryState(@PrimaryKey val accountKey: String, val path: String, val wirePath: String)
+data class DirectoryState(@PrimaryKey val accountKey: String, val path: String, val wirePath: String,
+    @ColumnInfo(defaultValue = "'COVER'") val fileLayout: FileLayout = FileLayout.COVER)
 
 enum class ProgressSync { PENDING, SYNCED, IDENTITY_CHANGED, UNSUPPORTED }
 
@@ -74,7 +76,7 @@ data class PlaybackSnapshot(
     @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
 }
 
-@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class], version = 3, exportSchema = true)
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class], version = 4, exportSchema = true)
 abstract class ClientDatabase : RoomDatabase() {
     abstract fun profiles(): ProfileDao
     abstract fun playback(): PlaybackDao
@@ -85,7 +87,8 @@ abstract class ClientDatabase : RoomDatabase() {
             instance ?: Room.databaseBuilder(context.applicationContext, ClientDatabase::class.java, "nfb-client.db")
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .addMigrations(HistoryMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
-                    AppearanceMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
+                    AppearanceMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
+                    FileLayoutMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
                 // Never silently delete state when a future migration is missing.
                 .build().also { instance = it }
         }

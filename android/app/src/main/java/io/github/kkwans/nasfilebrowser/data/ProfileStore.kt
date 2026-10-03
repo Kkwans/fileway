@@ -31,7 +31,14 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
     suspend fun profile(id: String) = dao.profile(id)
     suspend fun accounts(profile: ServerProfile) = dao.accounts(profile.id, profile.sourceRevision)
     suspend fun directory(account: AccountRecord) = dao.directory(account.key)
-    suspend fun saveDirectory(account: AccountRecord, path: String, wirePath: String) = dao.saveDirectory(DirectoryState(account.key, path, wirePath))
+    suspend fun saveDirectory(account: AccountRecord, path: String, wirePath: String) = database.withTransaction {
+        val old = dao.directory(account.key)
+        dao.saveDirectory(DirectoryState(account.key, path, wirePath, old?.fileLayout ?: FileLayout.COVER))
+    }
+    suspend fun saveFileLayout(account: AccountRecord, layout: FileLayout) = database.withTransaction {
+        val old = dao.directory(account.key) ?: DirectoryState(account.key, "/", "/")
+        dao.saveDirectory(old.copy(fileLayout = layout))
+    }
 
     // Call only after the source has authenticated this identity. These fields
     // select local storage; service permissions always remain server-enforced.
