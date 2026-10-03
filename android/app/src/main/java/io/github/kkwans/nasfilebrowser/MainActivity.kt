@@ -45,6 +45,10 @@ class MainActivity : ComponentActivity() {
             }
             ClientTheme(darkTheme = dark) { ClientApp(model) }
         }
+        // Theme.Material's native content parent consumes Insets via fitsSystemWindows.
+        // Compose owns those Insets; prevent duplicate native padding after recreation.
+        (findViewById<android.view.View>(android.R.id.content).parent as? android.view.View)
+            ?.fitsSystemWindows = false
     }
     override fun onStart() { super.onStart(); model.foreground(true) }
     override fun onStop() { model.foreground(false); model.pausePlayback(); super.onStop() }

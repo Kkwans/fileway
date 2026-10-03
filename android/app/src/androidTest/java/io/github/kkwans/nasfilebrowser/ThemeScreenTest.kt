@@ -37,7 +37,20 @@ class ThemeScreenTest {
         (device.wait(Until.findObject(By.text(label)), 5000) ?: error("Theme choice missing")).click()
         withTimeout(5000) { model.appearance.state.first { it.theme == mode && !it.saving } }
     }
-    private suspend fun color(dark: Boolean) {
+    private fun windowGeometry(stage: String) {
+        activity.scenario.onActivity {
+            fun visit(view: android.view.View, depth: Int) {
+                if (depth > 3) return
+                val bounds = android.graphics.Rect()
+                view.getGlobalVisibleRect(bounds)
+                println("Theme geometry $stage depth=$depth ${view.javaClass.simpleName} bounds=$bounds padding=${view.paddingTop}/${view.paddingBottom} fits=${view.fitsSystemWindows}")
+                if (view is android.view.ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index), depth + 1)
+            }
+            visit(it.window.decorView, 0)
+        }
+    }
+    private suspend fun color(dark: Boolean, stage: String) {
+        windowGeometry(stage)
         var lastPixels = emptyList<Int>()
         val canvas = if (dark) Color.rgb(32, 32, 35) else Color.rgb(245, 245, 247)
         val navigation = if (dark) Color.rgb(20, 20, 22) else Color.WHITE
@@ -58,14 +71,14 @@ class ThemeScreenTest {
             true
         }
         if (matched != true) {
-            capture("theme-bars-failure-${if (dark) "dark" else "light"}")
+            capture("theme-bars-failure-$stage")
             activity.scenario.onActivity {
                 val rect = android.graphics.Rect()
                 it.findViewById<android.view.View>(android.R.id.content).getGlobalVisibleRect(rect)
-                println("Theme window: content=$rect, flags=${it.window.attributes.flags}")
+                println("Theme window stage=$stage: content=$rect, flags=${it.window.attributes.flags}, visibility=${it.window.decorView.systemUiVisibility}")
             }
         }
-        assertTrue("System bar/page pixels dark=$dark: ${lastPixels.map { Integer.toHexString(it) }}", matched == true)
+        assertTrue("System bar/page pixels stage=$stage dark=$dark: ${lastPixels.map { Integer.toHexString(it) }}", matched == true)
         activity.scenario.onActivity {
             val rect = android.graphics.Rect()
             it.findViewById<android.view.View>(android.R.id.content).getGlobalVisibleRect(rect)
@@ -99,14 +112,14 @@ class ThemeScreenTest {
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
             (device.wait(Until.findObject(By.desc("设置导航")), 5000) ?: error("Settings nav missing")).click()
-            choose(model, AppTheme.DARK, "暗色"); color(true); capture("theme-dark")
+            choose(model, AppTheme.DARK, "暗色"); color(true, "dark-selected"); capture("theme-dark")
             assertEquals(AppTheme.DARK, AppearanceStore(ClientDatabase.get(instrumentation.targetContext)).theme.first())
             activity.scenario.recreate()
-            color(true)
-            choose(model, AppTheme.LIGHT, "明色"); color(false); capture("theme-light")
+            color(true, "dark-recreated")
+            choose(model, AppTheme.LIGHT, "明色"); color(false, "light-selected"); capture("theme-light")
             choose(model, AppTheme.SYSTEM, "跟随系统")
             val systemDark = (instrumentation.targetContext.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-            color(systemDark)
+            color(systemDark, "system-selected")
         } finally {
             withContext(Dispatchers.Main) { model.appearance.save(original) }
             withTimeout(5000) { model.appearance.state.first { it.theme == original && !it.saving } }
