@@ -185,6 +185,33 @@ class NativeSubtitleTest {
         frame.count { Color.alpha(it) > 100 && Color.red(it) > 200 && Color.green(it) > 200 && Color.blue(it) > 200 } > 60
     }
 
+    private val fadeRoi = (30 until 50).flatMap { y -> (200 until 240).map { x -> y * 320 + x } }
+    private suspend fun fadedPixels() = rendered(checking,
+        nativeCheck = { frame -> fadeRoi.count { Color.alpha(frame[it]) > 20 } > 300 }) { frame ->
+        fadeRoi.count { index ->
+            val pixel = frame[index]
+            Color.red(pixel) in 50..170 && Color.green(pixel) in 50..170 && Color.blue(pixel) in 50..170
+        } > 300
+    }
+
+    /** A missed short red interval must not prevent an independent fade gate. */
+    @Test fun actualAssOpaqueRegionFadesInTheComposedViewport(): Unit = runBlocking {
+        withFixture("fade", "ass-animation-fixture.mkv") { model ->
+            select(model, "NFB ASS Attachment")
+            checking = "ASS opaque region before fade"
+            rendered(checking) { frame -> fadeRoi.count { index ->
+                val pixel = frame[index]
+                Color.alpha(pixel) > 200 && Color.red(pixel) > 220 && Color.green(pixel) > 220 && Color.blue(pixel) > 220
+            } > 300 }
+            assertTrue("Opaque baseline must precede fade-out", model.player.state.value.positionMs < 9000)
+            capture("fade-opaque")
+            withTimeout(10_000) { model.player.state.first { it.positionMs >= 9900 } }
+            checking = "ASS independent visible fade-out"
+            fadedPixels()
+            capture("fade-grey")
+        }
+    }
+
     @Test fun actualTextRendersAtCueStartThroughNativeLease(): Unit = runBlocking {
         withFixture("text") { model ->
             select(model, "NFB Text")
@@ -262,13 +289,7 @@ class NativeSubtitleTest {
             capture("animation-moved")
             withTimeout(6500) { model.player.state.first { it.positionMs >= 9900 } }
             checking = "ASS visible fade-out"
-            val roi = (30 until 50).flatMap { y -> (200 until 240).map { x -> y * 320 + x } }
-            rendered(checking, nativeCheck = { frame -> roi.count { Color.alpha(frame[it]) > 20 } > 300 }) { frame ->
-                roi.count { index ->
-                    val pixel = frame[index]
-                    Color.red(pixel) in 50..170 && Color.green(pixel) in 50..170 && Color.blue(pixel) in 50..170
-                } > 300
-            }
+            fadedPixels()
             capture("animation-faded")
             checking = "ASS end clears all animated regions"
             rendered(checking) { frame -> frame.none { Color.alpha(it) > 100 && maxOf(Color.red(it), Color.green(it), Color.blue(it)) > 100 } }
