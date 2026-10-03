@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Executes the actual patched VLC callbacks with controlled native-window
  * failures. The injected callbacks retain their upstream LGPL-2.1+ license.
+ * Injected VLC portions: Copyright (C) 2014 VLC authors and VideoLAN.
+ * See the pinned source archive's COPYING.LIB for the LGPL-2.1 terms.
  * This tests caching/retry state, not Android rendering or subtitle fidelity.
  */
 #include <assert.h>
