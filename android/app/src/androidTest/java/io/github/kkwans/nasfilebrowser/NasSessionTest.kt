@@ -15,6 +15,36 @@ class NasSessionTest {
         val payload = JSONObject().put("user", JSONObject().put("id", id).put("username", "viewer"))
         return "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
     }
+    @Test fun previewCapabilityPreservesWirePathAndReleasesOnce() = runBlocking {
+        var account = 7L
+        var previewCalls = 0
+        var revoked = 0
+        val wire = "/%D6%D0/a%252F.mkv"
+        val native: suspend (JSONObject) -> Any? = { request ->
+            when (request.getString("op")) {
+                "open" -> "preview-session"
+                "login" -> JSONObject().put("status", 200).put("body", token(account))
+                "token" -> token(account)
+                "preview" -> {
+                    previewCalls++
+                    assertEquals("preview-session", request.getString("session"))
+                    assertEquals(wire, request.getString("wirePath"))
+                    "http://127.0.0.1:12345/stream/owned-preview"
+                }
+                "revoke" -> { revoked++; assertEquals("http://127.0.0.1:12345/stream/owned-preview", request.getString("url")); null }
+                else -> null
+            }
+        }
+        val session = NasSession.login(ServerProfile(name = "NAS", address = "https://nas.example.test"), "viewer", "fixture", native)
+        val asset = session.preview("/display.mkv", wire)
+        assertEquals("preview-session", asset.scope)
+        asset.release(); asset.release()
+        assertEquals(1, revoked)
+        account = 8
+        try { session.preview("/display.mkv", wire); fail("Changed account cannot allocate a preview") }
+        catch (_: IllegalStateException) { }
+        assertEquals(1, previewCalls)
+    }
     @Test fun textJwtLoginAndOpaqueEndpointRemainBoundToSession() = runBlocking {
         val profile = ServerProfile(name = "NAS", address = "https://nas.example.test:8443/base")
         val calls = mutableListOf<JSONObject>()

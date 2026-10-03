@@ -39,6 +39,11 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         token()
         return native(JSONObject().put("op", "lease").put("session", id).put("path", path).put("wirePath", wirePath)) as String
     }
+    suspend fun preview(path: String, wirePath: String): PreviewLease {
+        token()
+        val url = native(JSONObject().put("op", "preview").put("session", id).put("path", path).put("wirePath", wirePath)) as String
+        return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
+    }
     suspend fun close() { native(JSONObject().put("op", "close_session").put("session", id)) }
 
     companion object {

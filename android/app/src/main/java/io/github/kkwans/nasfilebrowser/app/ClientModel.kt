@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -32,7 +34,7 @@ data class ClientState(
     val error: String? = null, val selected: ResourceRef? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
-    val progressStatus: String? = null, val tab: String = "files",
+    val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "",
 )
 data class SessionContext(val profile: ServerProfile, val account: AccountRecord, val api: NasSession, val generation: Int)
 private data class PlaybackBinding(val context: SessionContext, val file: ResourceRef, val identity: String, val writer: PlaybackWriter)
@@ -84,7 +86,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
         val expected = generation
-        mutable.value = mutable.value.copy(busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null)
+        mutable.value = mutable.value.copy(busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, previewScope = "")
         operation = viewModelScope.launch {
             var opened: NasSession? = null
             try {
@@ -108,7 +110,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 context = bound
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
-                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null)
+                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id)
                 if (directory == null || directory.path == "/") applyDirectory(root, "/", "/", bound)
                 else try { loadDirectory(directory.path, directory.wirePath, bound) } catch (error: Exception) {
                     if (error !is ServiceException || error.status !in setOf(403, 404)) throw error
@@ -224,6 +226,18 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun retry() { browse(mutable.value.path, mutable.value.wirePath) }
+    suspend fun preview(file: ResourceRef): PreviewLease {
+        val bound = context ?: error("服务器尚未连接")
+        val asset = bound.api.preview(file.path, file.wirePath)
+        try {
+            currentCoroutineContext().ensureActive()
+            check(context == bound && generation == bound.generation) { "服务器来源已切换" }
+            return asset
+        } catch (error: Throwable) {
+            runCatching { asset.release() }.onFailure { error.addSuppressed(it) }
+            throw error
+        }
+    }
     fun openSearch() {
         val bound = context ?: return
         if (!mutable.value.busy && mutable.value.selected == null) search.open(bound, mutable.value.path, mutable.value.wirePath)
