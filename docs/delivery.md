@@ -420,3 +420,9 @@
 - Actual API35 first dark transition still FAILS:pageff202023,top/bottomff303030; contentRect(0,136–1080,2337)on1080x2400viewport. Thus the mismatch is persistent within the deadline,not proved harmless animation. Exact root cause remains unconfirmed.
 - Two bounded window-appearance/fitting changes both failed the same gate; ALL trial production MainActivity/PlayerScreen changes were reverted to db6a978. No speculative window fix is shipped. Diagnostic test APK/lint builds passed; regression test remains explicitly failing. Private theme-bars-diagnosis-native-20261003n.log,theme-bars-fixed-native-20261003n.log,theme-bars-fit-last-native-20261003n.log. Existing successful card slices are unaffected.
 - This checkpoint must be disclosed in the next UI preview; it is not final visual acceptance. Rollbackdb6a978 removes only diagnostic test changes,production/UI/schema behavior unchanged.
+
+## Preview0.2 version and installation contract
+
+- versionCode2/versionName0.2.0-preview; documented four-layout/category-card acceptance and honest outstanding theme/device/media/network gates in docs/android-preview-0.2.md. No final-release claim.
+- Windows assembleDebug/assembleDebugAndroidTest/lintDebug/testDebugUnitTest SUCCESS(2m22s; JVM unit NO-SOURCE). Actual aapt2 badging verifies package/version2/min29/target37/arm64-v8a+x86_64. git diff --check/scoped CR PASS. Private preview02-version-build-20261003o.log,preview02-badging.ps1. Build metadata verified; signed Linux package/publication and upgrade checks are next,pending rather than presumed complete.
+- Rollback14cdbdf(schema3 unchanged); lowering versionCode requires deliberate reinstall,not ordinary covering downgrade. No NAS/backend changes.
