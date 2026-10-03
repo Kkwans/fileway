@@ -20,6 +20,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.data.PlaybackSnapshot
 import io.github.kkwans.nasfilebrowser.data.ProgressSync
@@ -33,18 +34,23 @@ import java.util.Locale
     BackHandler(state.connected) { if (!model.back()) model.disconnect() }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
-    if (search.open) { SearchScreen(model, state); return }
-    if (state.tab == "files") { BrowserScreen(model, state); return }
-    Scaffold { insets ->
+    LibraryTheme {
+        when {
+            search.open -> SearchScreen(model, state)
+            state.tab == "files" -> BrowserScreen(model, state)
+            state.tab == "settings" -> SettingsScreen(model, state)
+            else -> RecentScreen(model, state, recent)
+        }
+    }
+}
+
+@Composable private fun RecentScreen(model: ClientModel, state: ClientState, recent: List<PlaybackSnapshot>) {
+    Scaffold(bottomBar = { ClientNavigation(model, "recent") }) { insets ->
         Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text(state.serverLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton(onClick = model::disconnect) { Text("切换服务器") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FilterChip(selected = state.tab == "files", onClick = { model.tab("files") }, label = { Text("文件") })
-                FilterChip(selected = state.tab == "recent", onClick = { model.tab("recent") }, label = { Text("最近播放") })
             }
             Text("继续观看", style = MaterialTheme.typography.headlineLarge)
             state.error?.let { message ->

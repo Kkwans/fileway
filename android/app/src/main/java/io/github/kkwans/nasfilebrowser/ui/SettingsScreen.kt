@@ -1,0 +1,144 @@
+package io.github.kkwans.nasfilebrowser.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import io.github.kkwans.nasfilebrowser.BuildConfig
+import io.github.kkwans.nasfilebrowser.R
+import io.github.kkwans.nasfilebrowser.app.ClientModel
+import io.github.kkwans.nasfilebrowser.app.ClientState
+import io.github.kkwans.nasfilebrowser.data.ConnectionMode
+import kotlinx.coroutines.launch
+
+/** Shared connected-library palette; native player and connection flow retain their own theme. */
+@Composable internal fun LibraryTheme(content: @Composable () -> Unit) {
+    val dark = MaterialTheme.colorScheme.background.luminance() < .5f
+    val background = if (dark) Color(0xFF141416) else Color.White
+    val surface = if (dark) Color(0xFF202023) else Color(0xFFF5F5F7)
+    val ink = if (dark) Color(0xFFF3F3F6) else Color(0xFF202023)
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
+        primary = if (dark) Color(0xFFFF80A6) else Color(0xFFC63262),
+        primaryContainer = if (dark) Color(0xFF38212B) else Color(0xFFFFEDF3),
+        onPrimaryContainer = if (dark) Color(0xFFFF80A6) else Color(0xFFC63262),
+        background = background, onBackground = ink, surface = background, onSurface = ink,
+        surfaceContainer = surface, surfaceContainerLow = surface, surfaceContainerHigh = surface,
+        onSurfaceVariant = if (dark) Color(0xFFB5B5BE) else Color(0xFF63636D),
+        outlineVariant = if (dark) Color(0xFF34343A) else Color(0xFFE9E9ED),
+    ), content = content)
+}
+
+@Composable internal fun ClientNavigation(model: ClientModel, selected: String) {
+    val labelStyle = MaterialTheme.typography.labelMedium
+    val labelPixels = rememberTextMeasurer().measure("最近播放", style = labelStyle, maxLines = 1).size.height
+    val barHeight = 64.dp + with(LocalDensity.current) { labelPixels.toDp() }
+    NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
+        modifier = Modifier.heightIn(min = barHeight)) {
+        listOf(Triple("files", "文件", R.drawable.ic_folder), Triple("recent", "最近播放", R.drawable.ic_history),
+            Triple("settings", "设置", R.drawable.ic_person)).forEach { (tab, label, icon) ->
+            NavigationBarItem(selected = selected == tab, onClick = { model.tab(tab) },
+                modifier = Modifier.semantics { contentDescription = "${label}导航" },
+                icon = { Icon(painterResource(icon), null, Modifier.size(26.dp)) }, label = { Text(label, style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                colors = NavigationBarItemDefaults.colors(indicatorColor = Color.Transparent,
+                    selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant))
+        }
+    }
+}
+
+@Composable internal fun SettingsScreen(model: ClientModel, state: ClientState) {
+    var profileDetails by remember { mutableStateOf(false) }
+    var about by remember { mutableStateOf(false) }
+    var cacheBytes by remember { mutableLongStateOf(model.previewImageLoader.memoryCache?.size ?: 0) }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    Scaffold(bottomBar = { ClientNavigation(model, "settings") }, snackbarHost = { SnackbarHost(snackbar) }) { insets ->
+        Box(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets), contentAlignment = Alignment.TopCenter) {
+            LazyColumn(Modifier.widthIn(max = 840.dp).fillMaxSize().semantics { contentDescription = "设置内容" },
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                item { Text("设置", style = MaterialTheme.typography.titleLarge) }
+                item {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Box(Modifier.size(64.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape), contentAlignment = Alignment.Center) {
+                            Icon(painterResource(R.drawable.ic_person), null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+                        }
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(state.accountName, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(state.profile?.name.orEmpty(), style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        SettingsShortcut("文件", R.drawable.ic_folder, Modifier.weight(1f)) { model.tab("files") }
+                        SettingsShortcut("最近播放", R.drawable.ic_history, Modifier.weight(1f)) { model.tab("recent") }
+                        SettingsShortcut("服务器", R.drawable.ic_network, Modifier.weight(1f), model::disconnect)
+                    }
+                }
+                item {
+                    Text("服务器与连接", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                    SettingsAction("服务器档案", "NAS · ${if (state.profile?.network == ConnectionMode.TAILNET) "内嵌 Tailscale" else "直接连接"}", R.drawable.ic_storage) { profileDetails = true }
+                    NetworkCard(model)
+                }
+                item {
+                    Text("存储", style = MaterialTheme.typography.titleMedium)
+                    SettingsAction("清理缩略图缓存", "${readableSize(cacheBytes)} · 仅清理此设备的缩略图", R.drawable.ic_storage) {
+                        model.clearPreviewCache(); cacheBytes = model.previewImageLoader.memoryCache?.size ?: 0
+                        scope.launch { snackbar.showSnackbar("缩略图缓存已清理") }
+                    }
+                }
+                item {
+                    Text("应用", style = MaterialTheme.typography.titleMedium)
+                    SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
+                }
+                state.error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+            }
+        }
+    }
+    if (profileDetails) AlertDialog(onDismissRequest = { profileDetails = false }, title = { Text("服务器档案") }, text = {
+        Column(Modifier.heightIn(max = 320.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(state.profile?.name.orEmpty()); Text(state.profile?.address.orEmpty()); Text("账号：${state.accountName}")
+            Text(if (state.profile?.network == ConnectionMode.TAILNET) "连接方式：内嵌 Tailscale" else "连接方式：直接连接")
+        }
+    }, confirmButton = { TextButton(onClick = { profileDetails = false }) { Text("关闭") } })
+    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("NAS File Browser") }, text = {
+        Text("版本 ${BuildConfig.VERSION_NAME}\n原生 Android 客户端\nGPL-3.0-or-later")
+    }, confirmButton = { TextButton(onClick = { about = false }) { Text("关闭") } })
+}
+
+@Composable private fun SettingsShortcut(label: String, icon: Int, modifier: Modifier, action: () -> Unit) {
+    Column(modifier.clickable(onClick = action).heightIn(min = 80.dp).padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(painterResource(icon), null, Modifier.size(30.dp), tint = MaterialTheme.colorScheme.primary)
+        Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable private fun SettingsAction(title: String, subtitle: String, icon: Int, action: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = action).heightIn(min = 64.dp).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Icon(painterResource(icon), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}

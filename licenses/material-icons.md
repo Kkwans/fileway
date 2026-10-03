@@ -20,3 +20,5 @@ Google Material Icons, Apache-2.0. Pinned source commit: `bd8cb85bd4bad964fe6918
 - `ic_arrow_back.xml`: [navigation/arrow_back](https://raw.githubusercontent.com/google/material-design-icons/bd8cb85bd4bad964fe6918f79665bb40c3a8efef/src/navigation/arrow_back/materialiconsoutlined/24px.svg) — SVG SHA256 `5eab5a4557e97143f2166479366672a76bbc31d805be62efa75c7d1a10e13cf2`
 - `ic_info.xml`: [action/info](https://raw.githubusercontent.com/google/material-design-icons/bd8cb85bd4bad964fe6918f79665bb40c3a8efef/src/action/info/materialiconsoutlined/24px.svg) — SVG SHA256 `196cbf2420d05da17413907eb7ba67d66a799feb9e04fe60053394cf15af5225`
 - `ic_folder.xml`: [file/folder](https://raw.githubusercontent.com/google/material-design-icons/bd8cb85bd4bad964fe6918f79665bb40c3a8efef/src/file/folder/materialiconsoutlined/24px.svg) — SVG SHA256 `ad9106c980e54054e752983972ff907418f63c928fbeba88a98ff47ee7199948`
+
+- `ic_history.xml`: [action/history](https://raw.githubusercontent.com/google/material-design-icons/bd8cb85bd4bad964fe6918f79665bb40c3a8efef/src/action/history/materialiconsoutlined/24px.svg) — SVG SHA256 `f31421e8e3ba19ff3fcd9affe72875171570ea405a4cbd114acecf0024f347e7`

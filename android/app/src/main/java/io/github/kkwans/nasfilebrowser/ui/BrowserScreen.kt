@@ -57,12 +57,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     val gridState = rememberLazyGridState()
     LaunchedEffect(state.wirePath) { listState.scrollToItem(0); gridState.scrollToItem(0) }
     MaterialTheme(colorScheme = colors) {
-        Scaffold(containerColor = colors.background, bottomBar = {
-            Row(Modifier.fillMaxWidth().background(colors.background).padding(horizontal = 16.dp)) {
-                TextButton(onClick = {}, modifier = Modifier.weight(1f)) { Text("文件", style = MaterialTheme.typography.titleSmall) }
-                TextButton(onClick = { model.tab("recent") }, modifier = Modifier.weight(1f)) { Text("最近播放", color = colors.onSurfaceVariant) }
-            }
-        }) { insets ->
+        Scaffold(containerColor = colors.background, bottomBar = { ClientNavigation(model, "files") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(state.serverLabel, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onBackground)

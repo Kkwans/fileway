@@ -34,7 +34,7 @@ enum class FileLayout(val label: String) { COVER("封面网格"), DETAIL("大图
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
-    val serverLabel: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
+    val serverLabel: String = "", val accountName: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
     val error: String? = null, val selected: ResourceRef? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
@@ -117,7 +117,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 context = bound
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
-                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id)
+                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username)
                 if (directory == null || directory.path == "/") applyDirectory(root, "/", "/", bound)
                 else try { loadDirectory(directory.path, directory.wirePath, bound) } catch (error: Exception) {
                     if (error !is ServiceException || error.status !in setOf(403, 404)) throw error
@@ -265,6 +265,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
         return false
     }
+    fun clearPreviewCache() { previewImageLoader.memoryCache?.clear() }
     fun fileLayout(value: FileLayout) { mutable.value = mutable.value.copy(fileLayout = value) }
     fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun openRecent(snapshot: PlaybackSnapshot) {
