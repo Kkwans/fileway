@@ -42,9 +42,14 @@ class ThemeScreenTest {
             while (true) {
                 val screenshot = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
                 val bitmap = screenshot.copy(Bitmap.Config.ARGB_8888, false)
-                val value = try { bitmap.getPixel(10, bitmap.height / 2) } finally { bitmap.recycle(); screenshot.recycle() }
+                // A closing theme sheet can still own the system bars after the page changes.
+                // Wait for the actual status/navigation backgrounds, not only window icon flags.
+                val values = try {
+                    listOf(bitmap.getPixel(10, bitmap.height / 2),
+                        bitmap.getPixel(10, 10), bitmap.getPixel(10, bitmap.height - 10))
+                } finally { bitmap.recycle(); screenshot.recycle() }
                 val expected = if (dark) Color.rgb(20, 20, 22) else Color.WHITE
-                if (value == expected) break
+                if (values.all { it == expected }) break
                 delay(100)
             }
         }
