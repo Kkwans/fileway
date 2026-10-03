@@ -58,16 +58,33 @@ diff --git a/modules/video_output/android/display.c b/modules/video_output/andro
  
      /* Clear the subtitles surface. */
      SubtitleGetDirtyBounds(vd, subpicture, &memset_bounds);
-@@ -1057,6 +1047,8 @@
+@@ -1055,8 +1045,24 @@
+         memset(&sys->p_sub_pic->p[0].p_pixels[y * sys->p_sub_pic->p[0].i_pitch
+                                               + x_pixels_offset], 0, i_line_size);
  
-     if (subpicture)
+-    if (subpicture)
++    if (subpicture) {
          picture_BlendSubpicture(sys->p_sub_pic, sys->p_spu_blend, subpicture);
++        /* VLC blends straight RGBA; Android's translucent Surface uses
++         * premultiplied alpha. Convert only after all regions are blended,
++         * and only the cleared/painted bounds, before posting this buffer. */
++        for (int y = memset_bounds.top; y < memset_bounds.bottom; y++) {
++            uint8_t *row = sys->p_sub_pic->p[0].p_pixels
++                         + y * sys->p_sub_pic->p[0].i_pitch;
++            for (int x = memset_bounds.left; x < memset_bounds.right; x++) {
++                uint8_t *pixel = row + x * sys->p_sub_pic->p[0].i_pixel_pitch;
++                const unsigned alpha = pixel[3];
++                for (unsigned channel = 0; channel < 3; channel++)
++                    pixel[channel] = (pixel[channel] * alpha + 127) / 255;
++            }
++        }
++    }
 +
 +    return true;
  }
  
  static picture_pool_t *Pool(vout_display_t *vd, unsigned requested_count)
-@@ -1077,6 +1069,7 @@
+@@ -1077,6 +1083,7 @@
      if (subpicture && sys->p_sub_window) {
          if (sys->b_sub_invalid) {
              sys->b_sub_invalid = false;
@@ -75,7 +92,7 @@ diff --git a/modules/video_output/android/display.c b/modules/video_output/andro
              if (sys->p_sub_pic) {
                  picture_Release(sys->p_sub_pic);
                  sys->p_sub_pic = NULL;
-@@ -1104,8 +1097,8 @@
+@@ -1104,8 +1111,8 @@
         surface are expensive operations. */
      if (sys->b_has_subpictures)
      {

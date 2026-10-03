@@ -18,7 +18,7 @@
 typedef int64_t vlc_tick_t;
 
 typedef struct { int left, top, right, bottom; } ARect;
-typedef struct { int i_order; uint8_t colour; } subpicture_t;
+typedef struct { int i_order; uint8_t colour, alpha; } subpicture_t;
 typedef struct {
     uint8_t *p_pixels;
     int i_pixel_pitch, i_pitch;
@@ -65,7 +65,10 @@ static void AndroidWindow_UnlockPicture(vout_display_sys_t *sys, android_window 
 }
 static void picture_BlendSubpicture(picture_t *pic, void *blend, subpicture_t *sub)
 {
-    (void)blend; assert(pic->locked); blends++; memset(rgba, sub->colour, sizeof(rgba));
+    (void)blend; assert(pic->locked); blends++;
+    for (unsigned offset = 0; offset < sizeof(rgba); offset += 4) {
+        memset(rgba + offset, sub->colour, 3); rgba[offset + 3] = sub->alpha;
+    }
 }
 static void picture_Release(picture_t *pic)
 {
@@ -110,7 +113,7 @@ static void frame(vout_display_t *vd, subpicture_t *cue)
 
 int main(void)
 {
-    android_window window = {0}; subpicture_t cue = {.i_order = 7, .colour = 255};
+    android_window window = {0}; subpicture_t cue = {.i_order = 7, .colour = 255, .alpha = 255};
     vout_display_sys_t sys = reset(&window); vout_display_t vd = {&sys};
     frame(&vd, &cue); cue.colour = 127; frame(&vd, &cue);
     assert(blends == 2 && posts == 2 && locks == 2 && rgba[0] == 127);
@@ -148,5 +151,16 @@ int main(void)
     frame(&vd, &cue);
     assert(sys.p_sub_pic && blends == 2 && posts == 2);
     puts("PASS failed buffer reconstruction remains recoverable without null access");
+
+    sys = reset(&window); cue.colour = 255; cue.alpha = 119;
+    frame(&vd, &cue);
+    assert(rgba[0] == 119 && rgba[1] == 119 && rgba[2] == 119 && rgba[3] == 119);
+    frame(&vd, &cue);
+    assert(rgba[0] == 119 && rgba[3] == 119);
+    cue.colour = 200; cue.alpha = 128; frame(&vd, &cue);
+    assert(rgba[0] == 100 && rgba[3] == 128);
+    cue.alpha = 0; frame(&vd, &cue);
+    assert(rgba[0] == 0 && rgba[3] == 0);
+    puts("PASS straight subtitle pixels become premultiplied once per painted buffer");
     return 0;
 }
