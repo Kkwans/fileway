@@ -91,7 +91,7 @@ class SearchScreenTest {
             resultWithName("retry").click()
             withTimeout(5000) { model.state.first { !it.busy && it.path == "/retry" } }
             assertFalse(model.search.state.value.open)
-            assertTrue(device.wait(Until.hasObject(By.text("上一级")), 5000))
+            assertTrue(device.wait(Until.hasObject(By.desc("上一级")), 5000))
         }
     }
 

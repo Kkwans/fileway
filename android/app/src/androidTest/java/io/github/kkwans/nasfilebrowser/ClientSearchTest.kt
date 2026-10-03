@@ -144,7 +144,7 @@ class ClientSearchTest {
         }
     }
 
-    internal class Fixture : Closeable {
+    internal class Fixture(private val directoryItems: List<String> = emptyList()) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -205,7 +205,14 @@ class ClientSearchTest {
                 val path = uri.path.substringAfter("/api/resources")
                 val wire = if (path.endsWith("/moved")) "/library/another" else Regex("%[0-9A-Fa-f]{2}").replace(SearchResult.encodePath(path)) { it.value.lowercase() }
                 reply(socket, JSONObject().put("path", path).put("wirePath", wire).put("name", path.substringAfterLast('/')).put("isDir", !path.endsWith("/changed-type") && !path.endsWith(".mkv")).put("size", 0).put("type", "").toString())
-            } else reply(socket, JSONObject().put("items", JSONArray()).toString())
+            } else {
+                val items = JSONArray()
+                if (uri.path == "/api/resources/") directoryItems.forEach { name ->
+                    items.put(JSONObject().put("name", name).put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
+                        .put("isDir", !name.endsWith(".mkv")).put("type", if (name.endsWith(".mkv")) "video" else "").put("size", 104857600))
+                }
+                reply(socket, JSONObject().put("items", items).toString())
+            }
         }
         private fun reply(socket: Socket, body: String, type: String = "application/json") {
             val bytes = body.toByteArray()

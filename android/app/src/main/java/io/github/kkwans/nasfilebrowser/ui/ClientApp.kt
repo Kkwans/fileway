@@ -21,7 +21,6 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientModel
-import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.PlaybackSnapshot
 import io.github.kkwans.nasfilebrowser.data.ProgressSync
 import java.util.Locale
@@ -35,6 +34,7 @@ import java.util.Locale
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
     if (search.open) { SearchScreen(model, state); return }
+    if (state.tab == "files") { BrowserScreen(model, state); return }
     Scaffold { insets ->
         Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Spacer(Modifier.height(12.dp))
@@ -46,13 +46,7 @@ import java.util.Locale
                 FilterChip(selected = state.tab == "files", onClick = { model.tab("files") }, label = { Text("文件") })
                 FilterChip(selected = state.tab == "recent", onClick = { model.tab("recent") }, label = { Text("最近播放") })
             }
-            Text(if (state.tab == "recent") "继续观看" else state.path.trimEnd('/').substringAfterLast('/').ifBlank { "文件" }, style = MaterialTheme.typography.headlineLarge)
-            if (state.tab == "files") Text(state.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (state.tab == "files") FlowRow {
-                TextButton(onClick = model::openSearch, enabled = !state.busy) { Text("搜索文件") }
-                TextButton(onClick = { model.back() }, enabled = state.path != "/") { Text("上一级") }
-                TextButton(onClick = model::retry, enabled = !state.busy) { Text("刷新") }
-            }
+            Text("继续观看", style = MaterialTheme.typography.headlineLarge)
             state.error?.let { message ->
                 Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(message, color = MaterialTheme.colorScheme.onErrorContainer); if (state.connected) TextButton(onClick = model::retry) { Text("重试") } }
@@ -66,13 +60,6 @@ import java.util.Locale
                 if (recent.isEmpty()) Text("开始观看后，进度会保存在这里。", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
                     items(recent, key = { it.resourceKey }) { snapshot -> RecentRow(snapshot) { model.openRecent(snapshot) } }
-                }
-            }
-            if (state.tab == "files" && !state.busy && state.files.isEmpty() && state.error == null) Text("这个目录还没有文件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (state.tab == "files") LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
-                items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                    FileRow(file) { model.open(file) }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 }
             }
         }
@@ -132,18 +119,6 @@ import java.util.Locale
         }
     }
     if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("退出 Tailscale？") }, text = { Text("将停止当前播放并退出内嵌节点，下次连接需要重新登录。") }, confirmButton = { TextButton(onClick = { confirmLogout = false; model.stopNetwork(logout = true) }) { Text("退出账号") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } })
-}
-
-@Composable private fun FileRow(file: ResourceRef, open: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = open).padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(12.dp), modifier = Modifier.size(48.dp)) {
-            Box(contentAlignment = Alignment.Center) { Text(if (file.directory) "目录" else file.name.substringAfterLast('.', "文件").uppercase().take(4), style = MaterialTheme.typography.labelSmall) }
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(file.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(if (file.directory) "文件夹" else readableSize(file.size), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
 }
 
 internal fun readableSize(size: Long): String {
