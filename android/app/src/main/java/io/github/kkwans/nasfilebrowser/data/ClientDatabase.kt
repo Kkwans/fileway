@@ -74,16 +74,18 @@ data class PlaybackSnapshot(
     @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
 }
 
-@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class], version = 2, exportSchema = true)
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class], version = 3, exportSchema = true)
 abstract class ClientDatabase : RoomDatabase() {
     abstract fun profiles(): ProfileDao
     abstract fun playback(): PlaybackDao
+    abstract fun preferences(): PreferenceDao
     companion object {
         @Volatile private var instance: ClientDatabase? = null
         fun get(context: Context): ClientDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, ClientDatabase::class.java, "nfb-client.db")
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-                .addMigrations(HistoryMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
+                .addMigrations(HistoryMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
+                    AppearanceMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
                 // Never silently delete state when a future migration is missing.
                 .build().also { instance = it }
         }

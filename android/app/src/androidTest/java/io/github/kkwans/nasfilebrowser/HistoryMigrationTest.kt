@@ -36,11 +36,16 @@ class HistoryMigrationTest {
             database.version = 1
         }
         val backups = File(folder, "backups")
-        val upgraded = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath).addMigrations(HistoryMigration(backups)).build()
+        val upgraded = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath).addMigrations(HistoryMigration(backups), AppearanceMigration(backups)).build()
         try {
             assertEquals("Fixture", upgraded.profiles().profile("profile")?.name)
             assertEquals("/films", upgraded.profiles().directory("account")?.wirePath)
-            val backup = backups.listFiles()!!.single()
+            val files = backups.listFiles()!!
+            assertEquals(2, files.size)
+            val backup = files.single { it.name.startsWith("schema1-before2-") }
+            val v2 = JSONObject(files.single { it.name.startsWith("schema2-before3-") }.readText())
+            assertEquals(2, v2.getInt("schemaVersion"))
+            assertEquals(0, v2.getJSONArray("playback_snapshots").length())
             val data = JSONObject(backup.readText())
             assertEquals(1, data.getInt("schemaVersion"))
             assertEquals("opaque-ref", data.getJSONArray("accounts").getJSONObject(0).getString("credentialRef"))
