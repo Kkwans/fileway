@@ -8,6 +8,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -71,63 +72,72 @@ import kotlinx.coroutines.launch
     var profileDetails by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var themeSheet by remember { mutableStateOf(false) }
+    var networkDetails by remember { mutableStateOf(false) }
+    val network by model.networkState.collectAsStateWithLifecycle()
     val appearance by model.appearance.state.collectAsStateWithLifecycle()
     var cacheBytes by remember { mutableLongStateOf(model.previewImageLoader.memoryCache?.size ?: 0) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    Scaffold(bottomBar = { ClientNavigation(model, "settings") }, snackbarHost = { SnackbarHost(snackbar) }) { insets ->
+    Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "settings") }, snackbarHost = { SnackbarHost(snackbar) }) { insets ->
         Box(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets), contentAlignment = Alignment.TopCenter) {
             LazyColumn(Modifier.widthIn(max = 840.dp).fillMaxSize().semantics { contentDescription = "设置内容" },
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 item { Text("设置", style = MaterialTheme.typography.titleLarge) }
                 item {
-                    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Box(Modifier.size(64.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(painterResource(R.drawable.ic_person), null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+                        Box(Modifier.size(48.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape), contentAlignment = Alignment.Center) {
+                            Icon(painterResource(R.drawable.ic_person), null, Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
                         }
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(state.accountName, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary,
+                            Text(state.accountName, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary,
                                 maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(state.profile?.name.orEmpty(), style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
                 item {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        SettingsShortcut("文件", R.drawable.ic_folder, Modifier.weight(1f)) { model.tab("files") }
-                        SettingsShortcut("最近播放", R.drawable.ic_history, Modifier.weight(1f)) { model.tab("recent") }
-                        SettingsShortcut("服务器", R.drawable.ic_network, Modifier.weight(1f), model::disconnect)
+                    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.background) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            SettingsShortcut("文件", R.drawable.ic_folder, Modifier.weight(1f)) { model.tab("files") }
+                            SettingsShortcut("最近播放", R.drawable.ic_history, Modifier.weight(1f)) { model.tab("recent") }
+                            SettingsShortcut("服务器", R.drawable.ic_network, Modifier.weight(1f), model::disconnect)
+                        }
                     }
                 }
                 item {
-                    Text("外观", style = MaterialTheme.typography.titleMedium)
-                    SettingsAction("主题", when {
-                        appearance.loading -> "正在读取"
-                        appearance.saving -> "正在保存"
-                        !appearance.loaded -> "读取失败"
-                        else -> appearance.theme.label()
-                    }, R.drawable.ic_visibility, enabled = appearance.loaded && !appearance.saving && !appearance.loading) { themeSheet = true }
-                    appearance.error?.let { message ->
-                        Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                        if (!appearance.loaded) TextButton(onClick = model.appearance::reload) { Text("重试读取") }
+                    SettingsGroup("外观") {
+                        SettingsAction("主题", when {
+                            appearance.loading -> "正在读取"
+                            appearance.saving -> "正在保存"
+                            !appearance.loaded -> "读取失败"
+                            else -> appearance.theme.label()
+                        }, R.drawable.ic_visibility, enabled = appearance.loaded && !appearance.saving && !appearance.loading) { themeSheet = true }
+                        appearance.error?.let { message ->
+                            Text(message, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            if (!appearance.loaded) TextButton(onClick = model.appearance::reload) { Text("重试读取") }
+                        }
                     }
                 }
                 item {
-                    Text("服务器与连接", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
-                    SettingsAction("服务器档案", "NAS · ${if (state.profile?.network == ConnectionMode.TAILNET) "内嵌 Tailscale" else "直接连接"}", R.drawable.ic_storage) { profileDetails = true }
-                    NetworkCard(model)
-                }
-                item {
-                    Text("存储", style = MaterialTheme.typography.titleMedium)
-                    SettingsAction("清理缩略图缓存", "${readableSize(cacheBytes)} · 仅清理此设备的缩略图", R.drawable.ic_storage) {
-                        model.clearPreviewCache(); cacheBytes = model.previewImageLoader.memoryCache?.size ?: 0
-                        scope.launch { snackbar.showSnackbar("缩略图缓存已清理") }
+                    SettingsGroup("服务器与连接") {
+                        SettingsAction("服务器档案", "NAS · ${if (state.profile?.network == ConnectionMode.TAILNET) "内嵌 Tailscale" else "直接连接"}", R.drawable.ic_storage) { profileDetails = true }
+                        HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                        SettingsAction("应用内 Tailscale", network.label, R.drawable.ic_network) { networkDetails = true }
                     }
                 }
                 item {
-                    Text("应用", style = MaterialTheme.typography.titleMedium)
-                    SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
+                    SettingsGroup("存储") {
+                        SettingsAction("清理缩略图缓存", "${readableSize(cacheBytes)} · 此设备的缩略图", R.drawable.ic_storage) {
+                            model.clearPreviewCache(); cacheBytes = model.previewImageLoader.memoryCache?.size ?: 0
+                            scope.launch { snackbar.showSnackbar("缩略图缓存已清理") }
+                        }
+                    }
+                }
+                item {
+                    SettingsGroup("应用") {
+                        SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
+                    }
                 }
                 state.error?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
             }
@@ -147,6 +157,9 @@ import kotlinx.coroutines.launch
             }
         }
     }
+    if (networkDetails) AlertDialog(onDismissRequest = { networkDetails = false }, title = { Text("应用内 Tailscale") }, text = {
+        Column(Modifier.heightIn(max = 420.dp).verticalScroll(androidx.compose.foundation.rememberScrollState())) { NetworkCard(model) }
+    }, confirmButton = { TextButton(onClick = { networkDetails = false }) { Text("关闭") } })
     if (profileDetails) AlertDialog(onDismissRequest = { profileDetails = false }, title = { Text("服务器档案") }, text = {
         Column(Modifier.heightIn(max = 320.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(state.profile?.name.orEmpty()); Text(state.profile?.address.orEmpty()); Text("账号：${state.accountName}")
@@ -158,18 +171,30 @@ import kotlinx.coroutines.launch
     }, confirmButton = { TextButton(onClick = { about = false }) { Text("关闭") } })
 }
 
+/** One category per card; its actions remain full-width selectable rows. */
+@Composable private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.background,
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "${title}设置分组" }) {
+            Column(content = content)
+        }
+    }
+}
+
 @Composable private fun SettingsShortcut(label: String, icon: Int, modifier: Modifier, action: () -> Unit) {
-    Column(modifier.clickable(onClick = action).heightIn(min = 80.dp).padding(vertical = 8.dp),
+    Column(modifier.clickable(onClick = action).heightIn(min = 76.dp).padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(painterResource(icon), null, Modifier.size(30.dp), tint = MaterialTheme.colorScheme.primary)
+        Icon(painterResource(icon), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
         Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable private fun SettingsAction(title: String, subtitle: String, icon: Int, enabled: Boolean = true, action: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = action).heightIn(min = 64.dp).padding(vertical = 12.dp),
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = action).heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(painterResource(icon), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(painterResource(icon), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
