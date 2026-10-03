@@ -113,6 +113,9 @@ def prepare(workspace, cache):
         raise ValueError("Unexpected SDK patch series")
     applied = []
     for patch in [*patches, PATCH, SUBTITLE_PATCH, SUBTITLE_GROUP_PATCH]:
+        if patch == SUBTITLE_GROUP_PATCH:
+            shutil.copyfile(vlc / "modules/demux/mkv/matroska_segment_seeker.cpp",
+                            workspace / "subtitle-seek-baseline.cpp")
         if patch == SUBTITLE_PATCH:
             # Retain the actual upstream callbacks for an expected-failing
             # regression comparison, without preparing a second source tree.
@@ -138,6 +141,7 @@ def prepare(workspace, cache):
     (vlc / "src/revision.txt").write_text(revision + "\n")
     manifest = {"lock": lock, "patches": applied, "archiveRevision": revision,
                 "subtitleCacheBaselineSha256": sha256(workspace / "subtitle-cache-baseline.c"),
+                "subtitleSeekBaselineSha256": sha256(workspace / "subtitle-seek-baseline.cpp"),
                 "status": "prepared-not-built"}
     (workspace / "source-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return sdk
