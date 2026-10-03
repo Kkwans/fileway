@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.kkwans.nasfilebrowser"
         minSdk = 29
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0-preview"
+        versionCode = 3
+        versionName = "0.2.1-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
