@@ -22,11 +22,20 @@ PY
 )"
 printf 'Selected native NDK revision: %s\n' "$ndk_revision"
 test "$ndk_revision" = 28.2.13676358 || fail 'Selected NDK differs from the locked version'
-for command in git python3 make autoconf automake autopoint libtoolize pkg-config cmake meson ninja; do
+for command in git python3 cc make autoconf automake autopoint libtoolize pkg-config cmake meson ninja; do
   command -v "$command" >/dev/null || fail "Missing source-build tool: $command"
 done
 python3 "$repo_root/scripts/prepare-vlc-font-backend.py" --workspace "$workspace" --archive-dir "$archive_dir"
 workspace="$(cd "$workspace" && pwd)"
+python3 "$repo_root/scripts/generate-subtitle-cache-test.py" "$workspace" "$workspace/subtitle-cache-test.c"
+cc -std=gnu99 -Wall -Wextra -Werror "$workspace/subtitle-cache-test.c" -o "$workspace/subtitle-cache-test"
+"$workspace/subtitle-cache-test"
+python3 "$repo_root/scripts/generate-subtitle-cache-test.py" "$workspace" "$workspace/subtitle-cache-original.c" --baseline --baseline-source "$workspace/subtitle-cache-baseline.c"
+cc -std=gnu99 -Wall -Wextra -Werror "$workspace/subtitle-cache-original.c" -o "$workspace/subtitle-cache-original"
+baseline_status=0
+"$workspace/subtitle-cache-original" >"$workspace/subtitle-cache-original-result.txt" 2>&1 || baseline_status=$?
+test "$baseline_status" = 1 || fail 'Original callbacks did not reproduce the expected cache failure'
+grep -q 'FAIL.*blends == 2.*rgba\[0\] == 127' "$workspace/subtitle-cache-original-result.txt" || fail 'Original callbacks failed for an unexpected reason'
 cd "$workspace/sdk"
 # The archive is already prepared with every upstream patch. Do not invoke
 # get-vlc.sh: its default path resets Git history and commits the patch series.

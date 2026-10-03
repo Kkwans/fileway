@@ -1,0 +1,88 @@
+diff --git a/modules/video_output/android/display.c b/modules/video_output/android/display.c
+--- a/modules/video_output/android/display.c
++++ b/modules/video_output/android/display.c
+@@ -54,7 +54,7 @@
+ static int  Open (vlc_object_t *);
+ static int  OpenOpaque (vlc_object_t *);
+ static void Close(vlc_object_t *);
+-static void SubpicturePrepare(vout_display_t *vd, subpicture_t *subpicture);
++static bool SubpicturePrepare(vout_display_t *vd, subpicture_t *subpicture);
+ 
+ vlc_module_begin()
+     set_category(CAT_VIDEO)
+@@ -133,8 +133,6 @@
+     filter_t *p_spu_blend;
+     picture_t *p_sub_pic;
+     buffer_bounds *p_sub_buffer_bounds;
+-    int64_t i_sub_last_order;
+-    ARect sub_last_region;
+ 
+     bool b_has_subpictures;
+ 
+@@ -708,7 +706,6 @@
+     if (sys->p_sub_window) {
+ 
+         FixSubtitleFormat(sys);
+-        sys->i_sub_last_order = -1;
+ 
+         /* Export the subpicture capability of this vout. */
+         vd->info.subpicture_chromas = subpicture_chromas;
+@@ -1025,25 +1022,18 @@
+         SubtitleRegionToBounds(subpicture, &sys->p_sub_buffer_bounds[i].bounds);
+ }
+ 
+-static void SubpicturePrepare(vout_display_t *vd, subpicture_t *subpicture)
++static bool SubpicturePrepare(vout_display_t *vd, subpicture_t *subpicture)
+ {
+     vout_display_sys_t *sys = vd->sys;
+     ARect memset_bounds;
+ 
++    /* Cue order and rectangle are not image identity: ASS can change colour
++     * or alpha without changing either. Redraw active cues, retaining the
++     * bounded dirty-region clear and blend below. */
+     SubtitleRegionToBounds(subpicture, &memset_bounds);
+ 
+-    if( subpicture )
+-    {
+-        if( subpicture->i_order == sys->i_sub_last_order
+-         && memcmp( &memset_bounds, &sys->sub_last_region, sizeof(ARect) ) == 0 )
+-            return;
+-
+-        sys->i_sub_last_order = subpicture->i_order;
+-        sys->sub_last_region = memset_bounds;
+-    }
+-
+     if (AndroidWindow_LockPicture(sys, sys->p_sub_window, sys->p_sub_pic) != 0)
+-        return;
++        return false;
+ 
+     /* Clear the subtitles surface. */
+     SubtitleGetDirtyBounds(vd, subpicture, &memset_bounds);
+@@ -1057,6 +1047,8 @@
+ 
+     if (subpicture)
+         picture_BlendSubpicture(sys->p_sub_pic, sys->p_spu_blend, subpicture);
++
++    return true;
+ }
+ 
+ static picture_pool_t *Pool(vout_display_t *vd, unsigned requested_count)
+@@ -1077,6 +1069,7 @@
+     if (subpicture && sys->p_sub_window) {
+         if (sys->b_sub_invalid) {
+             sys->b_sub_invalid = false;
++            sys->b_has_subpictures = false;
+             if (sys->p_sub_pic) {
+                 picture_Release(sys->p_sub_pic);
+                 sys->p_sub_pic = NULL;
+@@ -1104,8 +1097,8 @@
+        surface are expensive operations. */
+     if (sys->b_has_subpictures)
+     {
+-        SubpicturePrepare(vd, subpicture);
+-        if (!subpicture)
++        const bool prepared = SubpicturePrepare(vd, subpicture);
++        if (!subpicture && prepared)
+         {
+             /* The surface has been cleared and there is no new
+                subpicture to upload, do not clear again until a new

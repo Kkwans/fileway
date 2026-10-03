@@ -1,0 +1,150 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * Executes the actual patched VLC callbacks with controlled native-window
+ * failures. The injected callbacks retain their upstream LGPL-2.1+ license.
+ * This tests caching/retry state, not Android rendering or subtitle fidelity.
+ */
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#undef assert
+#define assert(condition) do { if (!(condition)) { \
+    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #condition); exit(1); \
+} } while (0)
+typedef int64_t vlc_tick_t;
+
+typedef struct { int left, top, right, bottom; } ARect;
+typedef struct { int i_order; uint8_t colour; } subpicture_t;
+typedef struct {
+    uint8_t *p_pixels;
+    int i_pixel_pitch, i_pitch;
+} plane_t;
+typedef struct {
+    plane_t p[1]; int format; void *p_sys; int64_t date; bool locked;
+} picture_t;
+typedef struct { bool b_opaque; int fmt; } android_window;
+typedef struct {
+    android_window *p_sub_window, *p_window;
+    picture_t *p_sub_pic;
+    void *p_spu_blend, *p_sub_buffer_bounds;
+    bool b_sub_invalid, b_has_subpictures, b_displayed;
+    int i_sub_last_order;
+    ARect sub_last_region;
+} vout_display_sys_t;
+typedef struct { vout_display_sys_t *sys; } vout_display_t;
+
+static uint8_t rgba[8];
+static picture_t subtitle, video;
+static int locks, fail_locks, fail_setups, blends, posts, releases, allocations, blend_storage;
+#define VLC_UNUSED(x) ((void)(x))
+#define VLC_OBJECT(x) (x)
+#define msg_Warn(...) ((void)0)
+
+static void SubtitleRegionToBounds(subpicture_t *sub, ARect *rect)
+{
+    *rect = sub ? (ARect){0, 0, 2, 1} : (ARect){0, 0, 0, 0};
+}
+static void SubtitleGetDirtyBounds(vout_display_t *vd, subpicture_t *sub, ARect *rect)
+{
+    (void)vd; (void)sub; *rect = (ARect){0, 0, 2, 1};
+}
+static int AndroidWindow_LockPicture(vout_display_sys_t *sys, android_window *window, picture_t *pic)
+{
+    (void)sys; (void)window; locks++;
+    if (fail_locks) { fail_locks--; return -1; }
+    assert(!pic->locked); pic->locked = true; return 0;
+}
+static void AndroidWindow_UnlockPicture(vout_display_sys_t *sys, android_window *window, picture_t *pic, bool render)
+{
+    (void)sys; (void)window;
+    if (pic->locked) { pic->locked = false; if (render) posts++; }
+}
+static void picture_BlendSubpicture(picture_t *pic, void *blend, subpicture_t *sub)
+{
+    (void)blend; assert(pic->locked); blends++; memset(rgba, sub->colour, sizeof(rgba));
+}
+static void picture_Release(picture_t *pic)
+{
+    if (pic == &subtitle) releases++;
+}
+static void filter_DeleteBlend(void *blend) { (void)blend; }
+static int AndroidWindow_Setup(vout_display_sys_t *sys, android_window *window, int count)
+{
+    (void)sys; (void)window; (void)count;
+    if (fail_setups) { fail_setups--; return -1; }
+    return 0;
+}
+static picture_t *PictureAlloc(vout_display_sys_t *sys, int *format, bool opaque)
+{
+    (void)sys; (void)format; (void)opaque; allocations++; return &subtitle;
+}
+static void *filter_NewBlend(void *owner, int *format)
+{
+    (void)owner; (void)format; return &blend_storage;
+}
+static bool AndroidOpaquePicture_CanReleaseAtTime(void *sys) { (void)sys; return false; }
+static int64_t mdate(void) { return 0; }
+static void AndroidOpaquePicture_ReleaseAtTime(void *sys, int64_t date) { (void)sys; (void)date; }
+static void AndroidOpaquePicture_Release(void *sys, bool render) { (void)sys; (void)render; }
+static void subpicture_Delete(subpicture_t *sub) { (void)sub; }
+
+/* NFB_ACTUAL_CALLBACKS */
+
+static vout_display_sys_t reset(android_window *window)
+{
+    memset(rgba, 0, sizeof(rgba));
+    locks = fail_locks = fail_setups = blends = posts = releases = allocations = 0;
+    subtitle = (picture_t){.p = {{rgba, 4, 8}}, .locked = false};
+    video = (picture_t){0};
+    return (vout_display_sys_t){.p_window = window, .p_sub_window = window,
+        .p_sub_pic = &subtitle, .p_spu_blend = &blend_storage, .i_sub_last_order = -1};
+}
+static void frame(vout_display_t *vd, subpicture_t *cue)
+{
+    Prepare(vd, &video, cue); Display(vd, &video, cue);
+}
+
+int main(void)
+{
+    android_window window = {0}; subpicture_t cue = {.i_order = 7, .colour = 255};
+    vout_display_sys_t sys = reset(&window); vout_display_t vd = {&sys};
+    frame(&vd, &cue); cue.colour = 127; frame(&vd, &cue);
+    assert(blends == 2 && posts == 2 && locks == 2 && rgba[0] == 127);
+    puts("PASS changing pixels repaint despite unchanged cue order and bounds");
+
+    frame(&vd, NULL);
+    assert(!sys.b_has_subpictures && rgba[0] == 0);
+    frame(&vd, &cue);
+    assert(blends == 3 && posts == 4 && rgba[0] == 127);
+    puts("PASS clearing permits the same cue to be drawn again");
+
+    sys = reset(&window); fail_locks = 1;
+    frame(&vd, &cue);
+    assert(blends == 0 && posts == 0);
+    frame(&vd, &cue);
+    assert(locks == 2 && blends == 1 && posts == 1);
+    puts("PASS failed first buffer lock does not cache an unpainted cue");
+
+    cue.colour = 255;
+    sys = reset(&window); frame(&vd, &cue); fail_locks = 1;
+    frame(&vd, NULL);
+    assert(sys.b_has_subpictures && rgba[0] == 255 && posts == 1);
+    frame(&vd, NULL);
+    assert(!sys.b_has_subpictures && rgba[0] == 0 && posts == 2);
+    puts("PASS a failed clear remains pending and retries on the next frame");
+
+    sys = reset(&window); frame(&vd, &cue); sys.b_sub_invalid = true;
+    frame(&vd, &cue);
+    assert(!sys.b_sub_invalid && releases == 1 && allocations == 1 && blends == 2 && posts == 2);
+    puts("PASS rebuilding the subtitle buffer redraws an unchanged cue");
+
+    sys = reset(&window); frame(&vd, &cue); sys.b_sub_invalid = true; fail_setups = 1;
+    frame(&vd, &cue);
+    assert(!sys.p_sub_pic && !sys.b_has_subpictures && posts == 1);
+    frame(&vd, &cue);
+    assert(sys.p_sub_pic && blends == 2 && posts == 2);
+    puts("PASS failed buffer reconstruction remains recoverable without null access");
+    return 0;
+}

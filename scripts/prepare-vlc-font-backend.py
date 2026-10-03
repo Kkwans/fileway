@@ -20,6 +20,7 @@ LOCK = REPOSITORY / "native/vlc-font-backend.lock.json"
 PATCH = REPOSITORY / "native/patches/libvlc-3.7.6-android-fonts.patch"
 ASS_PATCH = REPOSITORY / "native/patches/libass-0.17.5-android-provider.patch"
 ASS_PROVIDER = REPOSITORY / "native/ass_android_font_provider.h"
+SUBTITLE_PATCH = REPOSITORY / "native/patches/libvlc-3.7.6-subtitle-cache.patch"
 MAX_ARCHIVE = 128 << 20
 MAX_EXTRACTED = 512 << 20
 
@@ -110,7 +111,12 @@ def prepare(workspace, cache):
     if len(patches) != 20:
         raise ValueError("Unexpected SDK patch series")
     applied = []
-    for patch in [*patches, PATCH]:
+    for patch in [*patches, PATCH, SUBTITLE_PATCH]:
+        if patch == SUBTITLE_PATCH:
+            # Retain the actual upstream callbacks for an expected-failing
+            # regression comparison, without preparing a second source tree.
+            shutil.copyfile(vlc / "modules/video_output/android/display.c",
+                            workspace / "subtitle-cache-baseline.c")
         # git apply works on this external archive tree without a Git repository.
         # Check exact context first; do not use reset/am/rebase or fuzzy patching.
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=vlc, check=True)
@@ -129,7 +135,9 @@ def prepare(workspace, cache):
     derivative = hashlib.sha256(json.dumps(applied, sort_keys=True).encode()).hexdigest()
     revision = lock["vlc"]["commit"][:12] + "-sdk-" + lock["sdk"]["commit"][:12] + "-nfb-" + derivative[:12]
     (vlc / "src/revision.txt").write_text(revision + "\n")
-    manifest = {"lock": lock, "patches": applied, "archiveRevision": revision, "status": "prepared-not-built"}
+    manifest = {"lock": lock, "patches": applied, "archiveRevision": revision,
+                "subtitleCacheBaselineSha256": sha256(workspace / "subtitle-cache-baseline.c"),
+                "status": "prepared-not-built"}
     (workspace / "source-provenance.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return sdk
 
