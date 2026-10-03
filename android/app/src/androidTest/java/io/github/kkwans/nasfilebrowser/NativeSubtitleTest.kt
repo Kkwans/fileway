@@ -101,12 +101,13 @@ class NativeSubtitleTest {
         } finally { screenshot.recycle() }
     }
 
-    private suspend fun rendered(label: String, check: (IntArray) -> Boolean): IntArray = withTimeout(10_000) {
+    private suspend fun rendered(label: String, nativeCheck: ((IntArray) -> Boolean)? = null,
+                                 check: (IntArray) -> Boolean): IntArray = withTimeout(10_000) {
         while (true) {
             val frame = pixels()
             // A Surface buffer can arrive before presentation. Require the
             // same content in the actual compositor's visible video viewport.
-            if (frame != null && check(frame)) {
+            if (frame != null && (nativeCheck ?: check)(frame)) {
                 val composed = composedPixels()
                 if (composed != null && check(composed)) return@withTimeout composed
             }
@@ -125,8 +126,9 @@ class NativeSubtitleTest {
     private suspend fun onMain(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
 
     /** Every gate owns its fixture/session, so ASS failure cannot hide PGS results. */
-    private suspend fun withFixture(label: String, verify: suspend (ClientModel) -> Unit) {
-        val media = instrumentation.context.assets.open("media/subtitle-fixture.mkv").use { it.readBytes() }
+    private suspend fun withFixture(label: String, asset: String = "subtitle-fixture.mkv",
+                                    verify: suspend (ClientModel) -> Unit) {
+        val media = instrumentation.context.assets.open("media/$asset").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(media)
         val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Native subtitle fixture", address = source.url))
@@ -220,6 +222,44 @@ class NativeSubtitleTest {
             withTimeout(5000) { model.player.state.first { it.positionMs in 2500..4500 && it.phase != "正在跳转" } }
             textPixels()
             capture("seek")
+        }
+    }
+
+    @Test fun actualAssColourMotionAndFadeReachTheComposedViewport(): Unit = runBlocking {
+        withFixture("animation", "ass-animation-fixture.mkv") { model ->
+            fun yellowCenter(frame: IntArray): Double {
+                val xs = frame.indices.filter { matches(frame[it], listOf(255, 255, 0)) }.map { it % 320 }
+                assertTrue("Attached moving glyph must have visible pixels", xs.size > 80)
+                return xs.average()
+            }
+            checking = "ASS initial red"
+            select(model, "NFB ASS Attachment")
+            val early = rendered(checking) { count(it, listOf(255, 0, 0)) > 300 }
+            val firstX = yellowCenter(early)
+            capture("animation-red")
+            checking = "ASS same-bounds blue transform"
+            rendered(checking) { count(it, listOf(0, 0, 255)) > 300 && count(it, listOf(255, 0, 0)) < 30 }
+            capture("animation-blue")
+            withTimeout(6000) { model.player.state.first { it.positionMs >= 4800 } }
+            checking = "ASS attached-glyph motion"
+            val moved = rendered(checking) { count(it, listOf(255, 255, 0)) > 80 }
+            assertTrue("The glyph must move rather than retain an old cached position", yellowCenter(moved) - firstX > 40)
+            val occupied = (0 until 320).map { x -> (0 until 180).count { y -> matches(moved[y * 320 + x], listOf(255, 255, 0)) } > 3 }
+            assertEquals("The attached I retains both bars during motion", 2, occupied.indices.count { occupied[it] && (it == 0 || !occupied[it - 1]) })
+            capture("animation-moved")
+            withTimeout(6500) { model.player.state.first { it.positionMs >= 9900 } }
+            checking = "ASS visible fade-out"
+            val roi = (30 until 50).flatMap { y -> (200 until 240).map { x -> y * 320 + x } }
+            rendered(checking, nativeCheck = { frame -> roi.count { Color.alpha(frame[it]) > 20 } > 300 }) { frame ->
+                roi.count { index ->
+                    val pixel = frame[index]
+                    Color.red(pixel) in 50..170 && Color.green(pixel) in 50..170 && Color.blue(pixel) in 50..170
+                } > 300
+            }
+            capture("animation-faded")
+            checking = "ASS end clears all animated regions"
+            rendered(checking) { frame -> frame.none { Color.alpha(it) > 100 && maxOf(Color.red(it), Color.green(it), Color.blue(it)) > 100 } }
+            capture("animation-cleared")
         }
     }
 }
