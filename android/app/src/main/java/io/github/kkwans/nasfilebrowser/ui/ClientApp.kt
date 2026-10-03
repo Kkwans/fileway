@@ -2,7 +2,6 @@ package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,7 +11,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import android.content.Intent
 import android.content.ClipData
@@ -22,6 +25,9 @@ import android.net.Uri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
+import io.github.kkwans.nasfilebrowser.app.ResourceRef
+import io.github.kkwans.nasfilebrowser.app.FileLayout
+import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.data.PlaybackSnapshot
 import io.github.kkwans.nasfilebrowser.data.ProgressSync
 import java.util.Locale
@@ -45,44 +51,66 @@ import java.util.Locale
 }
 
 @Composable private fun RecentScreen(model: ClientModel, state: ClientState, recent: List<PlaybackSnapshot>) {
-    Scaffold(bottomBar = { ClientNavigation(model, "recent") }) { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text(state.serverLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                TextButton(onClick = model::disconnect) { Text("切换服务器") }
-            }
-            Text("继续观看", style = MaterialTheme.typography.headlineLarge)
-            state.error?.let { message ->
-                Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(message, color = MaterialTheme.colorScheme.onErrorContainer); if (state.connected) TextButton(onClick = model::retry) { Text("重试") } }
+    val colors = MaterialTheme.colorScheme.copy(surface = MaterialTheme.colorScheme.surfaceContainer)
+    var details by remember(state.previewScope) { mutableStateOf<ResourceRef?>(null) }
+    MaterialTheme(colorScheme = colors) {
+        Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "recent") }) { insets ->
+            Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Text(state.serverLabel, style = MaterialTheme.typography.titleMedium, color = colors.onBackground,
+                        modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    TextButton(onClick = model::disconnect) { Text("切换服务器") }
+                }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("继续观看", style = MaterialTheme.typography.titleLarge, color = colors.onBackground, modifier = Modifier.weight(1f))
+                    if (recent.isNotEmpty()) Text("${recent.size} 项", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                }
+                state.error?.let { message ->
+                    Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = colors.errorContainer, shape = RoundedCornerShape(10.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp)) { Text(message, color = colors.onErrorContainer); if (state.connected) TextButton(onClick = model::retry) { Text("重试") } }
+                    }
+                }
+                state.notice?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant) }
+                if (state.busy) {
+                    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(12.dp)); Text(state.stage, modifier = Modifier.weight(1f)); TextButton(onClick = model::cancel) { Text("取消") } }
+                }
+                LazyColumn(Modifier.weight(1f).semantics { contentDescription = "最近播放列表" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (recent.isEmpty() && !state.busy) item {
+                        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), color = colors.background) {
+                            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Icon(painterResource(R.drawable.ic_history), null, Modifier.size(24.dp), tint = colors.primary)
+                                Text("还没有播放记录", style = MaterialTheme.typography.titleMedium)
+                                Text("从文件页打开视频，观看进度会保存在这里。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                                TextButton(onClick = { model.tab("files") }) { Text("浏览文件") }
+                            }
+                        }
+                    }
+                    items(recent, key = { it.resourceKey }) { snapshot ->
+                        val file = ResourceRef(snapshot.path, snapshot.wirePath, snapshot.name, false, "video", 0)
+                        FileEntry(model, file, FileLayout.DETAIL, enabled = !state.busy,
+                            open = { model.openRecent(snapshot) }, details = { details = file }, metadata = { RecentProgress(snapshot) })
+                    }
                 }
             }
-            state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (state.busy) {
-                Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(12.dp)); Text(state.stage, modifier = Modifier.weight(1f)); TextButton(onClick = model::cancel) { Text("取消") } }
-            }
-            if (state.tab == "recent") {
-                if (recent.isEmpty()) Text("开始观看后，进度会保存在这里。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
-                    items(recent, key = { it.resourceKey }) { snapshot -> RecentRow(snapshot) { model.openRecent(snapshot) } }
-                }
-            }
+            details?.let { FileDetailsDialog(it, showSize = false, onDismiss = { details = null }) }
         }
     }
 }
 
-@Composable private fun RecentRow(snapshot: PlaybackSnapshot, open: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = open).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(snapshot.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text("${clock(snapshot.positionMs)} / ${clock(snapshot.durationMs)} · ${when (snapshot.sync) {
+@Composable private fun RecentProgress(snapshot: PlaybackSnapshot) {
+    val colors = MaterialTheme.colorScheme
+    Text("${if (snapshot.sync == ProgressSync.IDENTITY_CHANGED) "原记录 " else ""}${clock(snapshot.positionMs)} / ${if (snapshot.durationMs > 0) clock(snapshot.durationMs) else "时长待确认"}",
+        style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = colors.onSurfaceVariant)
+    Text(when (snapshot.sync) {
             ProgressSync.SYNCED -> "已同步"
             ProgressSync.PENDING -> "待同步"
             ProgressSync.IDENTITY_CHANGED -> "文件已变化"
             ProgressSync.UNSUPPORTED -> "仅本机保存"
-        }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (snapshot.durationMs > 0) LinearProgressIndicator(progress = { (snapshot.positionMs.toFloat() / snapshot.durationMs).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(3.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        }, style = MaterialTheme.typography.labelSmall, color = if (snapshot.sync == ProgressSync.IDENTITY_CHANGED) colors.error else colors.onSurfaceVariant)
+    if (snapshot.durationMs > 0 && snapshot.sync != ProgressSync.IDENTITY_CHANGED) {
+        LinearProgressIndicator(progress = { (snapshot.positionMs.toDouble() / snapshot.durationMs).toFloat().coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(3.dp), color = colors.primary,
+            trackColor = colors.outlineVariant, gapSize = 0.dp, drawStopIndicator = {})
     }
 }
 

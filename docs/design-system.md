@@ -37,7 +37,7 @@ Connection implementation: compact media-library introduction, two accessible ne
 
 ## Visual gate
 
-Inspect actual rendered Android screenshots for each main page, both themes, compact/landscape/≥600dp and 100/130/200% font scale. Capture controls visible/hidden, long filenames, all errors and track sheets. Fix clipping, weak hierarchy, density and inconsistent spacing before release. Emulator images validate UI only; hardware decoding/HDR needs devices.
+Inspect actual rendered Android screenshots for each main page, both themes, compact/landscape/≥600dp at default font scale. The user explicitly excluded further 130%/200% checks; historical enlarged-font results below remain historical evidence, not a requirement to repeat them. Capture controls visible/hidden, long filenames, all errors and track sheets. Fix clipping, weak hierarchy, density and inconsistent spacing before release. Emulator images validate UI only; hardware decoding/HDR needs devices.
 
 ## Player revision: Bilibili / Artplayer direction
 
@@ -68,3 +68,14 @@ Fullscreen correction: landscape no longer reserves the portrait transport strip
 Next preview priorities from the user's installed first-preview feedback: compact file header/navigation, aligned dense rows, switchable responsive grid and authenticated real image/video thumbnails. Those features are not completed by the fullscreen fix and must be validated independently before the next UI preview release. Formal hardware/media/network gates remain mandatory for the final release.
 
 File browser implementation: compact server/path/action rows replace stacked large headings; a 64dp-minimum list and adaptive 152dp-minimum grid share two-line names and long-press selectable details. Grid title slots use two scaled text line heights so metadata aligns regardless of wrapping. View-mode buttons stay paired during wrapping. White/charcoal surfaces and pink accents match the search/player direction. Current artwork is explicitly a type placeholder; authenticated thumbnails and durable view preferences are subsequent slices. Actual phone/API35 coverage includes normal list occupancy >=60% of screen height, grid/details/navigation/search regression, 130% light and 200% dark. File landscape, >=600dp, complete theme/font combinations and physical TalkBack remain open.
+
+
+## Recent playback cards
+
+Recent playback reuses FileEntry's detail-card composition and the existing authenticated NAS thumbnail/Coil capability path. Canvas, 10dp cards, 8dp spacing, 12dp content gutters, two-line titles and 16sp file names match the library. The header uses the normal 20sp title role. Long press reuses the same selectable full-name/path dialog as files; no unknown file size is fabricated.
+
+Each card shows its stored source position, known full duration and real synchronization status. Unknown duration is labelled pending confirmation and has no progress bar. A changed file labels the stored time as an old record and has no bar presented as current progress. Opening still uses the existing identity/progress verification; no new playback API or implicit conversion is added. Empty history offers actual file navigation. Account-scoped history and preview capabilities remain bound to the current session.
+
+The thin progress bar retains Material 3's existing implementation and semantics, with its [documented color, gap and stop-indicator parameters](https://developer.android.com/reference/kotlin/androidx/compose/material3/LinearProgressIndicator.composable) set to the library's pink/neutral continuous styling. This does not create another canvas-based progress component.
+
+TX5Pro debug build/test-APK/lint gates passed; the local unit task has no sources. Nine installed API35 tests passed in 95.142s (recent cards, three native preview gates, browser, three search interactions and theme recreation). After the progress styling correction, the affected recent-card gate passed again in 17.770s. Actual Room history drives these cards; generated owned PNG bytes pass authenticated JNI/HTTP into Coil and visible compositor pixels. Light/dark cards, details and account-isolated empty state were captured at default font scale. The real open action reaches the existing playback identity request and cancellation path. These are owned-fixture/emulator checks, not actual NAS media-thumbnail, physical TalkBack, hardware/HDR or signed-release acceptance. No enlarged-font checks were performed. Public 0.2.1-preview is unchanged; rollback source for this UI slice is `b7c876f`.

@@ -24,15 +24,8 @@ import java.util.concurrent.TimeUnit
 class NativePreviewTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
-    private fun png(): ByteArray {
-        val bitmap = Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888)
-        try {
-            bitmap.eraseColor(Color.rgb(30, 180, 220))
-            return ByteArrayOutputStream().also { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
-        } finally { bitmap.recycle() }
-    }
     @Test fun actualPreviewLeaseReturnsImageAndRevokes(): Unit = runBlocking {
-        val bytes = png()
+        val bytes = ownedPreviewPng()
         ClientSearchTest.Fixture(previewBody = bytes).use { source ->
             val session = NasSession.login(ServerProfile(name = "Preview fixture", address = source.url), "one", "fixture-only")
             try {
@@ -59,7 +52,7 @@ class NativePreviewTest {
     @Test fun actualAuthenticatedPreviewReachesComposedCard(): Unit = runBlocking { previewCard(false) }
     @Test fun actualSearchPreviewReachesComposedCard(): Unit = runBlocking { previewCard(true) }
     private suspend fun previewCard(search: Boolean) {
-        val source = ClientSearchTest.Fixture(if (search) emptyList() else listOf("A.mkv"), png())
+        val source = ClientSearchTest.Fixture(if (search) emptyList() else listOf("A.mkv"), ownedPreviewPng())
         val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Preview fixture", address = source.url))
         lateinit var model: ClientModel
@@ -87,4 +80,12 @@ class NativePreviewTest {
             }
         } finally { withContext(Dispatchers.Main) { model.disconnect() }; store.remove(profile); source.close() }
     }
+}
+
+internal fun ownedPreviewPng(): ByteArray {
+    val bitmap = Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888)
+    try {
+        bitmap.eraseColor(Color.rgb(30, 180, 220))
+        return ByteArrayOutputStream().also { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
+    } finally { bitmap.recycle() }
 }

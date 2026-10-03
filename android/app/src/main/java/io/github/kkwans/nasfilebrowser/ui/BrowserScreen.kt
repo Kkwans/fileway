@@ -120,17 +120,13 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 }
             }
         }
-        details?.let { file -> AlertDialog(onDismissRequest = { details = null }, title = { Text("文件详情") }, text = {
-            SelectionContainer { Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(file.name); Text(file.path); Text(if (file.directory) "文件夹" else readableSize(file.size))
-            } }
-        }, confirmButton = { TextButton(onClick = { details = null }) { Text("关闭") } }) }
+        details?.let { file -> FileDetailsDialog(file, onDismiss = { details = null }) }
     }
 }
 
 /** Shared file card for directory and verified search results. */
 @Composable internal fun FileEntry(model: ClientModel, file: ResourceRef, layout: FileLayout, enabled: Boolean,
-    open: () -> Unit, details: () -> Unit, location: String? = null) {
+    open: () -> Unit, details: () -> Unit, location: String? = null, metadata: @Composable (() -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
     val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open,
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
@@ -154,7 +150,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
                 }
             } else Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-            Text((if (file.directory) "文件夹" else readableSize(file.size)) + (location?.let { " · $it" } ?: ""),
+            if (metadata != null) metadata() else Text((if (file.directory) "文件夹" else readableSize(file.size)) + (location?.let { " · $it" } ?: ""),
                 style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -179,4 +175,13 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
             }
         }
     }
+}
+
+@Composable internal fun FileDetailsDialog(file: ResourceRef, showSize: Boolean = true, onDismiss: () -> Unit) {
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("文件详情") }, text = {
+        SelectionContainer { Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(file.name); Text(file.path)
+            if (showSize) Text(if (file.directory) "文件夹" else readableSize(file.size))
+        } }
+    }, confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
 }
