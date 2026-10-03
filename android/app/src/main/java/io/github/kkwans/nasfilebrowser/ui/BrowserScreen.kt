@@ -136,7 +136,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
 
 /** Shared file card for directory and verified search results. */
 @Composable internal fun FileEntry(model: ClientModel, file: ResourceRef, layout: FileLayout, enabled: Boolean,
-    open: () -> Unit, details: () -> Unit) {
+    open: () -> Unit, details: () -> Unit, location: String? = null) {
     val colors = MaterialTheme.colorScheme
     val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open,
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
@@ -160,7 +160,8 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
                 }
             } else Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-            Text(if (file.directory) "文件夹" else readableSize(file.size), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+            Text((if (file.directory) "文件夹" else readableSize(file.size)) + (location?.let { " · $it" } ?: ""),
+                style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
     when (layout) {

@@ -43,6 +43,7 @@ class SearchSessionTest {
         assertEquals(SearchEnding.LIMIT, updates.last().ending)
         assertTrue(updates.last().message!!.contains("上限"))
         val resource = updates.first().items.single().resource("/旧目录", "/%D6%D0")!!
+        assertEquals("2026-10-01T00:00:00Z", resource.modified)
         assertEquals("/旧目录/目录/片🎬 %2F?#.mkv", resource.path)
         assertEquals("/%D6%D0/%E7%9B%AE%E5%BD%95/%E7%89%87%F0%9F%8E%AC%20%252F%3F%23.mkv", resource.wirePath)
         val start = calls.first { it.getString("op") == "search_start" }

@@ -27,7 +27,7 @@ data class SearchResult(val relativePath: String, val name: String, val director
         val wireBase = baseWirePath.ifEmpty { encodePath(basePath) }
         require(wireBase.startsWith('/') && !wireBase.startsWith("//") && !wireBase.contains('?') && !wireBase.contains('#'))
         return ResourceRef(basePath.trimEnd('/') + "/" + relativePath,
-            wireBase.trimEnd('/') + "/" + encodePath(relativePath), name, directory, "", size)
+            wireBase.trimEnd('/') + "/" + encodePath(relativePath), name, directory, "", size, modified)
     }
     companion object {
         internal fun encodePath(path: String) = path.split('/').joinToString("/") { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }

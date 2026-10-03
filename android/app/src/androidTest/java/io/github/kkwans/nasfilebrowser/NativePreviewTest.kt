@@ -56,15 +56,21 @@ class NativePreviewTest {
             } finally { session.close() }
         }
     }
-    @Test fun actualAuthenticatedPreviewReachesComposedCard(): Unit = runBlocking {
-        val source = ClientSearchTest.Fixture(listOf("A.mkv"), png())
+    @Test fun actualAuthenticatedPreviewReachesComposedCard(): Unit = runBlocking { previewCard(false) }
+    @Test fun actualSearchPreviewReachesComposedCard(): Unit = runBlocking { previewCard(true) }
+    private suspend fun previewCard(search: Boolean) {
+        val source = ClientSearchTest.Fixture(if (search) emptyList() else listOf("A.mkv"), png())
         val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Preview fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         try {
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
-            withTimeout(10_000) { model.state.first { it.connected && !it.busy && it.files.size == 1 } }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            if (search) {
+                withContext(Dispatchers.Main) { model.openSearch(); model.search.query("A.mkv"); model.search.submit() }
+                withTimeout(10_000) { model.search.state.first { it.ending == SearchEnding.COMPLETED } }
+            } else assertEquals(1, model.state.value.files.size)
             assertTrue(withContext(Dispatchers.IO) { source.previewSeen.await(10, TimeUnit.SECONDS) })
             withTimeout(10_000) {
                 while (true) {

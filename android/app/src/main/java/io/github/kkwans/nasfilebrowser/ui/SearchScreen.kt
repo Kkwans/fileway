@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.R
+import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.data.SearchEnding
@@ -79,20 +80,18 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                         }
                         TextButton(onClick = ::submit, modifier = Modifier.heightIn(min = 48.dp), enabled = state.query.isNotBlank() && !client.busy) { Text("搜索") }
                     }
-                    LazyColumn(Modifier.fillMaxSize().semantics { contentDescription = "搜索结果" }, contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
+                    LazyColumn(Modifier.fillMaxSize().semantics { contentDescription = "搜索结果" }, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 16.dp)) {
                         item(key = "context") {
-                            Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(client.serverLabel, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                                Text(state.basePath, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-                            }
+                            Text("${client.serverLabel} · ${state.basePath}", modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         item(key = "scope") {
-                            Row(Modifier.fillMaxWidth().padding(top = 16.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(top = 4.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                                 SearchScope.entries.forEach { value ->
                                     val selected = state.scope == value
                                     Column(Modifier.weight(1f).selectable(selected = selected, role = Role.Tab, enabled = !client.busy,
                                         onClick = { if (!model.state.value.busy) model.search.scope(value) }).heightIn(min = 48.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                                        Text(if (value == SearchScope.CURRENT) "当前目录" else "包含子目录", modifier = Modifier.padding(vertical = 12.dp),
+                                        Text(if (value == SearchScope.CURRENT) "当前目录" else "包含子目录", modifier = Modifier.padding(vertical = 8.dp),
                                             color = if (selected) colors.primary else colors.onSurfaceVariant,
                                             style = MaterialTheme.typography.bodyLarge, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
                                         Box(Modifier.fillMaxWidth().height(2.dp).background(if (selected) colors.primary else Color.Transparent))
@@ -103,7 +102,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                         }
                         item(key = "status") {
                             val active = state.running || state.openingPath != null || client.busy
-                            Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 if (active) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.primary)
                                 val label = when {
                                     client.busy -> client.stage.ifBlank { "正在加载" }
@@ -129,7 +128,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                             }
                         }
                         items(state.items, key = { it.relativePath }) { result ->
-                            SearchResultRow(result, state.openingPath == result.relativePath, enabled = !client.busy,
+                            SearchResultRow(model, result, state.basePath, state.baseWirePath, state.openingPath == result.relativePath, enabled = !client.busy,
                                 open = { if (!model.state.value.busy) { focus.clearFocus(); model.search.openResult(result) } }, details = { details = result })
                         }
                     }
@@ -150,23 +149,23 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
     }
 }
 
-@Composable private fun SearchResultRow(result: SearchResult, opening: Boolean, enabled: Boolean, open: () -> Unit, details: () -> Unit) {
+@Composable private fun SearchResultRow(model: ClientModel, result: SearchResult, basePath: String, baseWirePath: String,
+    opening: Boolean, enabled: Boolean, open: () -> Unit, details: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth().combinedClickable(onClick = open, onLongClick = details, onLongClickLabel = "查看完整名称和位置", role = Role.Button, enabled = enabled)
-        .heightIn(min = 80.dp).padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Box(Modifier.size(48.dp).background(colors.surface, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-            if (result.directory) Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(24.dp), tint = colors.onSurfaceVariant)
-            else Text(result.name.substringAfterLast('.', "文件").uppercase().take(5), style = MaterialTheme.typography.labelSmall, color = colors.primary,
-                modifier = Modifier.padding(4.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val resource = remember(result, basePath, baseWirePath) { result.resource(basePath, baseWirePath) }
+    Column(Modifier.fillMaxWidth()) {
+        if (resource != null) FileEntry(model, resource, if (result.directory) FileLayout.LIST else FileLayout.DETAIL,
+            enabled, open, details, location = result.relativePath.substringBeforeLast('/', "当前目录"))
+        else Column(Modifier.fillMaxWidth().combinedClickable(onClick = open, onLongClick = details,
+            onLongClickLabel = "查看完整名称和位置", role = Role.Button, enabled = enabled).padding(vertical = 12.dp)) {
+            Text(result.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("文件名编码无法确认", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(result.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            val location = result.relativePath.substringBeforeLast('/', "当前目录")
-            Text(if (result.directory) "文件夹 · $location" else "${readableSize(result.size)} · $location",
-                style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (result.relativePath.contains('\uFFFD')) Text("文件名编码无法确认", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+        if (opening) Row(Modifier.padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            Text("正在确认文件", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
-        if (opening) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.7f))
     }
-    HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.7f))
 }
