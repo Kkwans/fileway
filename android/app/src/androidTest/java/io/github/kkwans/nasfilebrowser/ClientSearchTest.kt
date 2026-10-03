@@ -144,7 +144,7 @@ class ClientSearchTest {
         }
     }
 
-    internal class Fixture(private val directoryItems: List<String> = emptyList()) : Closeable {
+    internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -153,6 +153,7 @@ class ClientSearchTest {
         val metadataStarted = CountDownLatch(1); val releaseMetadata = CountDownLatch(1)
         val playbackStarted = CountDownLatch(1); val releasePlayback = CountDownLatch(1)
         val retryAttempts = AtomicInteger(); val metadataReads = AtomicInteger()
+        val previewSeen = CountDownLatch(1)
         private val acceptor = Thread({
             while (!server.isClosed) {
                 val socket = try { server.accept() } catch (_: Exception) { break }
@@ -179,6 +180,16 @@ class ClientSearchTest {
                 return
             }
             check(headers["x-auth"].orEmpty().count { it == '.' } == 2)
+            if (uri.path.startsWith("/api/preview/thumb/")) {
+                previewSeen.countDown()
+                val bytes = previewBody ?: byteArrayOf()
+                val status = if (previewBody == null) "404 Not Found" else "200 OK"
+                socket.getOutputStream().apply {
+                    write("HTTP/1.1 $status\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                    write(bytes); flush()
+                }
+                return
+            }
             if (uri.path.startsWith("/api/search")) {
                 val query = uri.rawQuery.split('&').first { it.startsWith("query=") }.substringAfter('=')
                     .let { URLDecoder.decode(it, "UTF-8") }

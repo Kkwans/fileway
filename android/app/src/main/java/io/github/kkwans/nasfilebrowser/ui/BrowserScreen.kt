@@ -96,11 +96,11 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 } else if (grid) LazyVerticalGrid(GridCells.Adaptive(152.dp), Modifier.weight(1f).semantics { contentDescription = "文件网格" }, state = gridState,
                     contentPadding = PaddingValues(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                        BrowserEntry(file, true, !state.busy, { model.open(file) }, { details = file })
+                        BrowserEntry(model, file, true, !state.busy, { model.open(file) }, { details = file })
                     }
                 } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = "文件列表" }, state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
                     items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                        BrowserEntry(file, false, !state.busy, { model.open(file) }, { details = file })
+                        BrowserEntry(model, file, false, !state.busy, { model.open(file) }, { details = file })
                         HorizontalDivider(color = colors.outlineVariant)
                     }
                 }
@@ -114,9 +114,13 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     }
 }
 
-@Composable private fun BrowserEntry(file: ResourceRef, grid: Boolean, enabled: Boolean, open: () -> Unit, details: () -> Unit) {
+@Composable private fun BrowserEntry(model: ClientModel, file: ResourceRef, grid: Boolean, enabled: Boolean, open: () -> Unit, details: () -> Unit) {
     val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open, onLongClick = details, onLongClickLabel = "查看完整名称与路径")
     @Composable fun artwork(modifier: Modifier) {
+        if (!file.directory && (file.type in setOf("image", "video") || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "jpg", "jpeg", "png", "webp"))) {
+            MediaThumbnail(model, file, modifier)
+            return
+        }
         Box(modifier.background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
             if (file.directory) Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(if (grid) 36.dp else 24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             else Text(file.name.substringAfterLast('.', "文件").uppercase().take(5), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

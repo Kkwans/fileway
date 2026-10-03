@@ -3,6 +3,8 @@ package io.github.kkwans.nasfilebrowser.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import coil3.ImageLoader
+import coil3.memory.MemoryCache
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
 import io.github.kkwans.nasfilebrowser.core.EmbeddedNetwork
 import io.github.kkwans.nasfilebrowser.core.NetworkState
@@ -27,7 +29,7 @@ import kotlinx.coroutines.flow.collect
 import org.json.JSONObject
 import java.net.URLEncoder
 
-data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long)
+data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
     val serverLabel: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
@@ -43,6 +45,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(ClientState())
     val state = mutable.asStateFlow()
     val player = NativePlayer(application)
+    val previewImageLoader = ImageLoader.Builder(application)
+        .memoryCache { MemoryCache.Builder().maxSizeBytes(16L * 1024 * 1024).build() }
+        .diskCache(null).build()
     private val store = ProfileStore(ClientDatabase.get(application), CredentialVault(application))
     private val history = PlaybackHistory(ClientDatabase.get(application))
     private val recentMutable = MutableStateFlow<List<PlaybackSnapshot>>(emptyList())
@@ -159,7 +164,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val items = data.optJSONArray("items") ?: error("服务器返回了不支持的目录格式")
         val files = (0 until items.length()).map { index ->
             val item = items.getJSONObject(index)
-            ResourceRef(item.optString("path"), item.optString("wirePath"), item.optString("name"), item.optBoolean("isDir"), item.optString("type"), item.optLong("size"))
+            ResourceRef(item.optString("path"), item.optString("wirePath"), item.optString("name"), item.optBoolean("isDir"), item.optString("type"), item.optLong("size"), item.optString("modified"))
         }.sortedWith(compareByDescending<ResourceRef> { it.directory }.thenBy { it.name.lowercase() })
         if (generation == bound.generation && context == bound) {
             store.saveDirectory(bound.account, path, wire)
@@ -334,6 +339,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun leavePlayer() { operation?.cancel(); endPlayback(); mutable.value = mutable.value.copy(selected = null, busy = false, stage = "") }
     private fun revokeLease() { val old = lease; lease = ""; if (old.isNotEmpty()) cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", old)) } }
     private fun closeSession() {
+        previewImageLoader.memoryCache?.clear()
         search.close()
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
@@ -375,5 +381,5 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         networkJob?.cancel(); networkPollJob?.cancel(); disconnect()
         networkJob = viewModelScope.launch { try { closing?.join(); mediaClosing?.join(); if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
     }
-    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); player.checkpoint = null; player.release(); super.onCleared() }
+    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); previewImageLoader.shutdown(); player.checkpoint = null; player.release(); super.onCleared() }
 }
