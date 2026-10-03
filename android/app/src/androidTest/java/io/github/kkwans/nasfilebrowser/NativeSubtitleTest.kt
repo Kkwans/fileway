@@ -33,6 +33,8 @@ class NativeSubtitleTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private var samples = 0
+    private var activeModel: ClientModel? = null
+    private val diagnostic = InstrumentationRegistry.getArguments().getString("nfbSubtitleDiagnostic") == "true"
 
     private suspend fun pixels(): IntArray? {
         var surface: SurfaceView? = null
@@ -103,13 +105,23 @@ class NativeSubtitleTest {
 
     private suspend fun rendered(label: String, nativeCheck: ((IntArray) -> Boolean)? = null,
                                  check: (IntArray) -> Boolean): IntArray = withTimeout(10_000) {
+        var attempts = 0
         while (true) {
             val frame = pixels()
             // A Surface buffer can arrive before presentation. Require the
             // same content in the actual compositor's visible video viewport.
-            if (frame != null && (nativeCheck ?: check)(frame)) {
+            val nativeMatches = frame != null && (nativeCheck ?: check)(frame)
+            if (nativeMatches || diagnostic) {
                 val composed = composedPixels()
-                if (composed != null && check(composed)) return@withTimeout composed
+                if (diagnostic && attempts++ % 5 == 0) {
+                    fun roi(values: IntArray?): String {
+                        if (values == null) return "missing"
+                        val region = (30 until 50).flatMap { y -> (200 until 240).map { x -> values[y * 320 + x] } }
+                        return "alpha=${region.map(Color::alpha).average()} rgb=${region.map(Color::red).average()},${region.map(Color::green).average()},${region.map(Color::blue).average()}"
+                    }
+                    android.util.Log.i("NfbSubtitleDiagnostic", "stage=$label position=${activeModel?.player?.state?.value?.positionMs} nativeMatches=$nativeMatches native=${roi(frame)} composed=${roi(composed)}")
+                }
+                if (nativeMatches && composed != null && check(composed)) return@withTimeout composed
             }
             delay(100)
         }
@@ -150,6 +162,7 @@ class NativeSubtitleTest {
             assertEquals(8, state.subtitles.count { it.id >= 0 })
             android.util.Log.i("NfbSubtitleAcceptance", "Tracks=${state.subtitles.map { "${it.id}:${it.title}:${it.codec}" }}")
             checking = label
+            activeModel = model
             verify(model)
             assertTrue(source.rawRequests.get() > 0)
             assertEquals("No HLS/transcode/other endpoint may be called", 0, source.unexpected.get())
@@ -157,7 +170,7 @@ class NativeSubtitleTest {
             capture("failure-${label}")
             android.util.Log.e("NfbSubtitleAcceptance", "Failure during $checking; state=${model.player.state.value}")
             throw AssertionError("Native subtitle failure during $checking", error)
-        } finally { onMain { model.disconnect() }; store.remove(profile); source.close() }
+        } finally { activeModel = null; onMain { model.disconnect() }; store.remove(profile); source.close() }
     }
 
     private suspend fun select(model: ClientModel, marker: String) {
