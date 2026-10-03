@@ -10,9 +10,9 @@ Implementation in progress. No hardware decoding, HDR or external-network accept
 
 ## Install the UI preview
 
-[Android 0.2.0 preview](https://github.com/Kkwans/nas-file-browser-client/releases/tag/android-preview-0.2.0-35489c3) includes rounded file/category cards, four layouts, NAS search/previews and settings. The APK uses the original dedicated signing certificate with versionCode 2; a signed covering upgrade retaining a synthetic profile was verified on the owned API35 emulator.
+[Android 0.2.1 preview](https://github.com/Kkwans/nas-file-browser-client/releases/tag/android-preview-0.2.1-3c7f9a5) includes rounded file/category cards, four layouts, NAS search/previews and settings. The APK uses the original dedicated signing certificate with versionCode 3; a signed covering upgrade retaining a synthetic profile was verified on the owned API35 emulator.
 
-This is a debug preview, not final release. Theme system-bar, ASS and Linux browser regressions remain open; real-device/HDR/external-tailnet gates are pending. See the release notes and [installation scope](docs/android-preview-0.2.md) before acceptance.
+This is a debug preview, not final release. The recreation/system-bar inset regression is fixed in source; ASS, initial decoding and Linux browser regressions remain open; real-device/HDR/external-tailnet gates are pending. See the release notes and [installation scope](docs/android-preview-0.2.md) before acceptance.
 
 ## Build
 
