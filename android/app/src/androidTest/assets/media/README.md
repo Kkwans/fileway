@@ -32,3 +32,16 @@ python3 scripts/verify-subtitle-fixture.py
 Generation used FFmpeg 7.1.1-Jellyfin. The pure-Python fontTools wheel SHA256 is `8bd0f759020e87bb5d323e6283914d9bf4ae35a7307dafb2cbd1e379e720ad37`; the generator checks its version and refuses an existing output directory. Rebuilding with a different FFmpeg configuration may change encoded bytes, so verify the generated stream manifest and record a new checksum instead of assuming byte identity.
 
 The PGS segment layout and BT.601 palette order were checked against [FFmpeg n7.1.1's decoder](https://github.com/FFmpeg/FFmpeg/blob/n7.1.1/libavcodec/pgssubdec.c). FFmpeg decoding verified all four tone frequencies, all six PGS colors, and the ASS bars/drawing. Those checks validate the fixture; Android rendering, audible track content, hardware/HDR, performance and the full-length NAS sample require separate evidence.
+
+## ASS animation fixture
+
+`ass-animation-fixture.mkv` reuses the owned video/audio/PGS/font generator and changes only the ASS content. It contains a rectangle changing red→blue, a white rectangle fading in/out, and the attached two-bar `I` moving horizontally. Two small white anchor shapes keep the complete subtitle bounding rectangle fixed throughout the animation, so bounds/order-based skipping cannot hide behind moving bounds. All dialogue events retain the same 0.5–11-second span.
+
+SHA256: `c3d217efa640d64599e94e9cb81ee474387b916b51b74c2fda5a650d09eb3327`. Sources/track metadata/checksums and effect timing are recorded in `ass-animation-fixture.json`. No system font, third-party artwork, movie or user data is included.
+
+```sh
+python3 scripts/generate-ass-animation-fixture.py /path/to/new/external-fixture-directory
+python3 scripts/verify-ass-animation-fixture.py
+```
+
+The independent FFmpeg/libass verifier reads the actual embedded ASS/font and checks red/blue pixels, half/full/half fade intensities, clearing, moving yellow-glyph centroid and unchanged overall bounds at five real media times. This establishes fixture correctness; Android animation, timing, performance and hardware acceptance are separate gates.
