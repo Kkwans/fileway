@@ -31,6 +31,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.videolan.libvlc.LibVLC
 import java.io.Closeable
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -71,6 +72,7 @@ class NativePlaybackTest {
             }
         }
         try {
+            arguments.getString("nfbVlcChangeset")?.let { expected -> assertEquals("Actual native SDK must match the trial", expected, LibVLC.changeset()) }
             onMain { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             waitUntil { model.state.value.connected && !model.state.value.busy }
             onMain { model.open(file) }
@@ -267,7 +269,7 @@ class NativePlaybackTest {
         }
     }
 
-    private class Fixture(private val media: ByteArray) : Closeable {
+    internal class Fixture(private val media: ByteArray) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val rawRequests = AtomicInteger()

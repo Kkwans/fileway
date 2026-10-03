@@ -57,3 +57,11 @@ The contrib rule applies the owned libass patch only to Android and copies this 
 The long-cue seek regression remains independent: both original and trial omit the earlier subtitle point during MKV seeking. No seek fix or rendering success is claimed by the font-provider source checkpoint. Pending gates include full native source build, fresh-data ASS initialization, attached font/drawing, system and fallback glyphs, six PGS streams, long-cue seeking, both ABIs, release performance and actual hardware/media acceptance.
 
 API source: [Android NDK font reference](https://developer.android.com/ndk/reference/group/font). Android matcher objects are local to each request and destroyed on that same thread; no shared matcher is passed across threads.
+
+### Linked build and first runtime result
+
+Linux x86_64 run 37044478832 at pushed 0fa078f completed successfully. Downloaded library hashes match provenance; each ELF LOAD segment passes the independent 16KiB/ABI verifier. Revision: `66455a98c8c5-sdk-c0cc8ce6443d-nfb-03f594b9a9ff`. libvlc SHA256: `22611fdb174521671ca9d62ae3ecfb6415acc398449243f35c5fff6db3f5760d`.
+
+A private x86_64-only repackaged test APK (SHA256 `37c5862fa71cfbee653fbd98be562839d2d4a42a9d5764b6e84924efceb42320`) passed STORED-native-entry, ZIP16KiB alignment and signing checks. Its arm64 libraries remain official; this mixed trial is not a distribution artifact.
+
+The first four independent API35 native subtitle tests took 65.458s and failed two gates. Text-at-cue-start and all six PGS/disable gates passed both native Surface PixelCopy and actual screen-compositor pixel checks. The long-cue test failed its prerequisite text-before-seek assertion on this cold run; the earlier original/trial mid-cue disappearance remains independently documented, but this particular run did not reach that seek assertion. ASS attachment/drawing timed out, with the playback clock advancing to about 9.6s. That is different evidence from the earlier frozen clock during initialization, but does not yet prove the font provider's runtime cause or full fidelity. Verbose diagnosis is pending; no normal dependency replacement or new public APK occurred.
