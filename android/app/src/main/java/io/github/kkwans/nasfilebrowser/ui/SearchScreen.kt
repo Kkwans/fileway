@@ -55,7 +55,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
     var details by remember(state.baseWirePath) { mutableStateOf<SearchResult?>(null) }
     fun submit() { if (!model.state.value.busy) { focus.clearFocus(); model.search.submit() } }
     MaterialTheme(colorScheme = colors) {
-        Scaffold(containerColor = colors.background) { insets ->
+        Scaffold(containerColor = colors.surface) { insets ->
             Box(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets), contentAlignment = Alignment.TopCenter) {
                 Column(Modifier.widthIn(max = 960.dp).fillMaxSize().imePadding()) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -166,6 +166,6 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             Text("正在确认文件", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
-        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.7f))
+        Spacer(Modifier.height(8.dp))
     }
 }

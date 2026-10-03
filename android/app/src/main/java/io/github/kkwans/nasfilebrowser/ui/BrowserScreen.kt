@@ -57,7 +57,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     val gridState = rememberLazyGridState()
     LaunchedEffect(state.wirePath) { listState.scrollToItem(0); gridState.scrollToItem(0) }
     MaterialTheme(colorScheme = colors) {
-        Scaffold(containerColor = colors.background, bottomBar = { ClientNavigation(model, "files") }) { insets ->
+        Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(state.serverLabel, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
@@ -101,11 +101,11 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 } else if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) {
                     val cover = layout == FileLayout.COVER
                     LazyVerticalGrid(GridCells.Adaptive(if (cover) 148.dp else 96.dp),
-                        Modifier.weight(1f).background(if (cover) colors.surface else colors.background).semantics {
+                        Modifier.weight(1f).background(colors.surface).semantics {
                             contentDescription = if (cover) "文件网格" else "紧凑文件网格"
-                        }, state = gridState, contentPadding = PaddingValues(if (cover) 6.dp else 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(if (cover) 6.dp else 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(if (cover) 6.dp else 12.dp)) {
+                        }, state = gridState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(state.files, key = { it.wirePath.ifEmpty { it.path } },
                             span = { if (cover && it.directory) GridItemSpan(maxLineSpan) else GridItemSpan(1) }) { file ->
                             FileEntry(model, file, if (cover && file.directory) FileLayout.LIST else layout,
@@ -113,10 +113,9 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                         }
                     }
                 } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = if (layout == FileLayout.LIST) "文件列表" else "大图文件列表" },
-                    state = listState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                    state = listState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
                         FileEntry(model, file, if (file.directory) FileLayout.LIST else layout, !state.busy, { model.open(file) }, { details = file })
-                        HorizontalDivider(color = colors.outlineVariant)
                     }
                 }
             }
@@ -137,7 +136,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
     @Composable fun artwork(modifier: Modifier) {
         val media = !file.directory && (file.type in setOf("image", "video") || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "jpg", "jpeg", "png", "webp"))
-        if (media && layout != FileLayout.COMPACT) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(4.dp)))
+        if (media && layout != FileLayout.COMPACT) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(6.dp)), showStatusText = layout != FileLayout.LIST)
         else Box(modifier.background(colors.surface, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
             if (file.directory) Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(26.dp), tint = colors.onSurfaceVariant)
             else Text(file.name.substringAfterLast('.', "文件").uppercase().take(5), style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
@@ -145,7 +144,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     }
     @Composable fun caption(modifier: Modifier) {
         Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val titleStyle = MaterialTheme.typography.bodyLarge
+            val titleStyle = if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge
             if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) {
                 val measurer = rememberTextMeasurer()
                 val density = LocalDensity.current
@@ -159,22 +158,25 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
-    when (layout) {
-        FileLayout.COVER -> Column(action.clip(RoundedCornerShape(5.dp)).background(colors.background).fillMaxWidth()) {
-            artwork(Modifier.fillMaxWidth().aspectRatio(4f / 3f))
-            caption(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp))
-        }
-        FileLayout.COMPACT -> Column(action.fillMaxWidth().padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            artwork(Modifier.size(56.dp)); caption(Modifier.fillMaxWidth())
-        }
-        FileLayout.DETAIL -> Row(action.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            artwork(Modifier.fillMaxWidth(.44f).aspectRatio(16f / 9f)); caption(Modifier.weight(1f))
-        }
-        FileLayout.LIST -> Row(action.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 4.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            artwork(Modifier.size(44.dp)); caption(Modifier.weight(1f))
+    Surface(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).then(action),
+        shape = RoundedCornerShape(10.dp), color = colors.background) {
+        when (layout) {
+            FileLayout.COVER -> Column(Modifier.fillMaxWidth()) {
+                artwork(Modifier.fillMaxWidth().aspectRatio(4f / 3f))
+                caption(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp))
+            }
+            FileLayout.COMPACT -> Column(Modifier.fillMaxWidth().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                artwork(Modifier.size(56.dp)); caption(Modifier.fillMaxWidth())
+            }
+            FileLayout.DETAIL -> Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                artwork(Modifier.fillMaxWidth(.44f).aspectRatio(16f / 9f)); caption(Modifier.weight(1f))
+            }
+            FileLayout.LIST -> Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                artwork(Modifier.size(44.dp)); caption(Modifier.weight(1f))
+            }
         }
     }
 }

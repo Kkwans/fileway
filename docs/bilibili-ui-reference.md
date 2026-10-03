@@ -71,3 +71,11 @@ Code gates and static type placeholders do not constitute visual acceptance.
 Deliver this UI in independently tested/pushed slices. The next preview includes
 the rebuilt browser with actual previews and full-screen correction; final
 release still requires the original hardware/media/network/upgrade gates.
+
+## User revision: grouped rounded cards
+
+The2026-10-03 follow-up explicitly requires restrained rounded cards for every
+file and one settings card per category, with one action per row. This overrides
+the earlier borderless regular/detail rows and flat settings sections. Reuse
+Material3 Surface/AlertDialog;10dp card corners,8dp file gutters and neutral
+canvas,without heavy shadows. Preserve four layouts and native functionality.

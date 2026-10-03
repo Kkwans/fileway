@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
@@ -25,7 +26,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 
 /** NAS generates the preview; Coil fetches/decodes only the local capability. */
-@Composable internal fun MediaThumbnail(model: ClientModel, file: ResourceRef, modifier: Modifier) {
+@Composable internal fun MediaThumbnail(model: ClientModel, file: ResourceRef, modifier: Modifier, showStatusText: Boolean = true) {
     val client by model.state.collectAsStateWithLifecycle()
     key(client.previewScope, file.wirePath, file.path, file.size, file.modified) {
         var asset by remember { mutableStateOf<PreviewLease?>(null) }
@@ -56,8 +57,8 @@ import kotlinx.coroutines.awaitCancellation
             }
             if (phase != "预览已加载") {
                 Icon(painterResource(R.drawable.art_play), null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (phase == "暂无预览") Text(phase, modifier = Modifier.align(Alignment.BottomCenter).padding(4.dp),
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (showStatusText && phase == "暂无预览") Text(phase, modifier = Modifier.align(Alignment.BottomCenter).padding(4.dp),
+                    style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
