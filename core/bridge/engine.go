@@ -15,6 +15,9 @@ import (
 )
 
 type Command struct {
+	CacheConfig     transport.CacheConfig   `json:"cacheConfig"`
+	CacheKey        string                  `json:"cacheKey"`
+	Clear           bool                    `json:"clear"`
 	Op              string                  `json:"op"`
 	RequestID       string                  `json:"requestId"`
 	Session         string                  `json:"session"`
@@ -240,10 +243,17 @@ func (e *Engine) execute(c Command) (any, error) {
 		return nil, b.CancelSearch(c.Session, c.Search)
 	case "token":
 		return b.Token(c.Session)
+	case "cache_configure":
+		return nil, b.ConfigureCache(c.CacheConfig)
+	case "cache_cleanup":
+		return b.CleanCache(c.Clear)
 	case "lease":
 		endpoint, err := transport.RawEndpoint(c.Path, c.WirePath)
 		if err != nil {
 			return nil, err
+		}
+		if c.CacheKey != "" {
+			return b.LeaseCached(c.Session, endpoint, c.CacheKey)
 		}
 		return b.Lease(c.Session, endpoint, true)
 	case "asset":

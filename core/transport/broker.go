@@ -36,6 +36,8 @@ type Session struct {
 }
 
 type Lease struct {
+	cacheKey string
+	prefetch chan struct{}
 	session  *Session
 	endpoint string
 	media    bool
@@ -46,6 +48,7 @@ type Lease struct {
 // Broker binds source credentials to immutable sessions. The public HTTP
 // surface consists solely of random, revocable loopback lease URLs.
 type Broker struct {
+	cache    *mediaCache
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	leases   map[string]*Lease
@@ -379,6 +382,9 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if l.media && res.StatusCode == http.StatusAccepted {
 		http.Error(w, "playback permission required", http.StatusForbidden)
+		return
+	}
+	if l.media && b.serveCached(ctx, w, r, res, l) {
 		return
 	}
 	for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
