@@ -25,7 +25,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -35,6 +34,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -45,6 +47,10 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.data.*
 
 @Composable internal fun ConnectionScreen(model: ClientModel, state: ClientState) {
+    LibraryTheme { ConnectionForm(model, state) }
+}
+
+@Composable private fun ConnectionForm(model: ClientModel, state: ClientState) {
     val network by model.networkState.collectAsStateWithLifecycle()
     val profiles by model.profiles.collectAsStateWithLifecycle()
     val focus = LocalFocusManager.current
@@ -93,24 +99,42 @@ import io.github.kkwans.nasfilebrowser.data.*
         }
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.background) { insets ->
-        BoxWithConstraints(Modifier.fillMaxSize().padding(insets).imePadding(), contentAlignment = Alignment.TopCenter) {
-            val wide = maxWidth >= 840.dp && LocalDensity.current.fontScale <= 1.3f
-            val page = Modifier.widthIn(max = if (wide) 1040.dp else 560.dp).fillMaxWidth()
-                .verticalScroll(rememberScrollState()).padding(horizontal = if (wide) 32.dp else 24.dp, vertical = 24.dp)
+    Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = {
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Column(Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    if (state.busy) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(state.stage.ifBlank { "正在加载" }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = model::cancel) { Text("取消") }
+                    }
+                    if (backend == BackendKind.NAS) Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("连接服务器", fontSize = 16.sp) }
+                    TextButton(onClick = { focus.clearFocus(); model.saveDraft(profileName, url.trim(), backend, mode) },
+                        enabled = canSave, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(10.dp)) {
+                        Text("保存服务器档案", fontSize = 14.sp)
+                    }
+                }
+            }
+        }
+    }) { insets ->
+        Box(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets), contentAlignment = Alignment.TopCenter) {
+            val page = Modifier.widthIn(max = 560.dp).fillMaxWidth()
+                .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 16.dp)
             val form: @Composable () -> Unit = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (profiles.isNotEmpty()) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("服务器档案", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                             TextButton(onClick = { model.selectProfile(null) }, enabled = !state.busy) { Text("新建") }
                         }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(profiles, key = { it.id }) { profile ->
-                                Surface(Modifier.width(248.dp), shape = RoundedCornerShape(14.dp), color = if (state.profile?.id == profile.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
-                                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Column(Modifier.fillMaxWidth().clickable(enabled = !state.busy) { model.selectProfile(profile) }.padding(vertical = 8.dp)) {
-                                            Text(profile.name, style = MaterialTheme.typography.titleMedium)
+                                Surface(Modifier.width(200.dp), shape = RoundedCornerShape(10.dp), color = if (state.profile?.id == profile.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
+                                    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                                        Column(Modifier.fillMaxWidth().clickable(enabled = !state.busy) { model.selectProfile(profile) }.heightIn(min = 48.dp).padding(vertical = 8.dp)) {
+                                            Text(profile.name, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                             Text(if (profile.backend == BackendKind.WINDOWS) "Windows · 暂不支持连接" else "NAS · ${if (profile.network == ConnectionMode.TAILNET) "Tailscale" else "直连"}", style = MaterialTheme.typography.bodySmall)
                                         }
                                         TextButton(onClick = { remove = profile }, enabled = !state.busy) { Text("移除档案") }
@@ -119,19 +143,26 @@ import io.github.kkwans.nasfilebrowser.data.*
                             }
                         }
                     }
-                    ConnectionField(name, { name = it }, "档案名称", R.drawable.ic_storage, enabled = !state.busy, placeholder = "例如：家里的 NAS")
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        FilterChip(selected = backend == BackendKind.NAS, onClick = { backend = BackendKind.NAS }, enabled = !state.busy, label = { Text("NAS") })
-                        FilterChip(selected = backend == BackendKind.WINDOWS, onClick = { backend = BackendKind.WINDOWS }, enabled = !state.busy, label = { Text("Windows") })
-                    }
-                    Text("连接方式", style = MaterialTheme.typography.titleMedium)
-                    Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ConnectionMode("本地网络", "IP 或域名", R.drawable.ic_storage, mode == "direct", Modifier.weight(1f), !state.busy) { mode = "direct" }
-                        ConnectionMode("Tailscale", "远程连接", R.drawable.ic_network, mode == "tailnet", Modifier.weight(1f), !state.busy) { mode = "tailnet" }
+                    ConnectionSection("服务器") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                            FilterChip(selected = backend == BackendKind.NAS, onClick = { backend = BackendKind.NAS }, enabled = !state.busy, colors = colors, label = { Text("NAS") })
+                            FilterChip(selected = backend == BackendKind.WINDOWS, onClick = { backend = BackendKind.WINDOWS }, enabled = !state.busy, colors = colors, label = { Text("Windows") })
+                        }
+                        ConnectionField(url, { url = it }, "服务器地址", R.drawable.ic_link, enabled = !state.busy,
+                            placeholder = "https://nas.example.com:8080", keyboardType = KeyboardType.Uri,
+                            supporting = "完整地址，支持 IP、端口和路径前缀")
+                        ConnectionField(name, { name = it }, "档案名称（选填）", R.drawable.ic_storage, enabled = !state.busy, placeholder = "留空时使用 IP 或域名")
+                        Text("连接方式", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ConnectionMode("本地网络", "IP 或域名", R.drawable.ic_storage, mode == "direct", Modifier.weight(1f), !state.busy) { mode = "direct" }
+                            ConnectionMode("Tailscale", "远程连接", R.drawable.ic_network, mode == "tailnet", Modifier.weight(1f), !state.busy) { mode = "tailnet" }
+                        }
                     }
                     if (mode == "tailnet") NetworkCard(model)
                     if (Build.VERSION.SDK_INT >= 37 && !localAccess) {
-                        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(14.dp)) {
+                        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
                             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("本地网络访问", style = MaterialTheme.typography.titleMedium)
                                 Text(if (accessDenied) "尚未允许访问局域网。连接本地 NAS 和本地节点会受限。" else "连接局域网 NAS 和本地节点时，需要允许本地网络访问。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -146,58 +177,39 @@ import io.github.kkwans.nasfilebrowser.data.*
                             }
                         }
                     }
-                    ConnectionField(url, { url = it }, "服务器地址", R.drawable.ic_link, enabled = !state.busy,
-                        placeholder = "https://nas.example.com", keyboardType = KeyboardType.Uri,
-                        supporting = "支持 IP、端口、域名和路径前缀")
-                    Spacer(Modifier.height(4.dp))
-                    Text("服务账号", style = MaterialTheme.typography.titleMedium)
-                    if (backend == BackendKind.WINDOWS) Text("可以保存这个档案。Windows 服务适配尚未完成，浏览与播放暂不支持。", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (backend == BackendKind.NAS && state.accounts.isNotEmpty()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("已保存的账号", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            state.accounts.forEach { account -> TextButton(onClick = {
-                                focus.clearFocus()
-                                val action = { model.restore(account) }
-                                if (Build.VERSION.SDK_INT >= 37 && mode == "direct" && !hasLocalAccess() && !accessDenied) { afterPermission = action; permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK) } else action()
-                            }, enabled = !state.busy && unchanged && (mode == "direct" || network.connected)) { Text("继续使用 ${account.username}") } }
-                        }
-                    }
-                    if (backend == BackendKind.NAS) {
-                    ConnectionField(username, { username = it }, "账号", R.drawable.ic_person, enabled = !state.busy)
-                    ConnectionField(password, { password = it }, "密码", R.drawable.ic_lock, enabled = !state.busy,
-                        keyboardType = KeyboardType.Password, imeAction = ImeAction.Done, onDone = connect,
-                        visualTransformation = if (visiblePassword) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailing = {
-                            IconButton(onClick = { visiblePassword = !visiblePassword }) {
-                                Icon(painterResource(if (visiblePassword) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
-                                    if (visiblePassword) "隐藏密码" else "显示密码")
+                    ConnectionSection("服务账号") {
+                        if (backend == BackendKind.WINDOWS) Text("可保存档案。Windows 服务暂不支持浏览与播放。", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (backend == BackendKind.NAS && state.accounts.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("已保存的账号", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                state.accounts.forEach { account -> TextButton(onClick = {
+                                    focus.clearFocus()
+                                    val action = { model.restore(account) }
+                                    if (Build.VERSION.SDK_INT >= 37 && mode == "direct" && !hasLocalAccess() && !accessDenied) { afterPermission = action; permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK) } else action()
+                                }, enabled = !state.busy && unchanged && (mode == "direct" || network.connected)) { Text("继续使用 ${account.username}") } }
                             }
-                        })
+                        }
+                        if (backend == BackendKind.NAS) {
+                        ConnectionField(username, { username = it }, "账号", R.drawable.ic_person, enabled = !state.busy)
+                        ConnectionField(password, { password = it }, "密码", R.drawable.ic_lock, enabled = !state.busy,
+                            keyboardType = KeyboardType.Password, imeAction = ImeAction.Done, onDone = connect,
+                            visualTransformation = if (visiblePassword) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailing = {
+                                IconButton(onClick = { visiblePassword = !visiblePassword }) {
+                                    Icon(painterResource(if (visiblePassword) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
+                                        if (visiblePassword) "隐藏密码" else "显示密码")
+                                }
+                            })
+                        }
                     }
                     state.error?.let { message ->
-                        Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(12.dp)) {
-                            Text(message, Modifier.fillMaxWidth().padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                        Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(10.dp)) {
+                            Text(message, Modifier.fillMaxWidth().padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer, fontSize = 14.sp)
                         }
                     }
-                    Spacer(Modifier.height(4.dp))
-                    if (backend == BackendKind.NAS) Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(14.dp),
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
-                        Text("连接服务器", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                        Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(20.dp))
-                    }
-                    OutlinedButton(onClick = { focus.clearFocus(); model.saveDraft(profileName, url.trim(), backend, mode) }, enabled = canSave, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(14.dp)) { Text("保存服务器档案") }
-                    if (state.busy) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text(state.stage.ifBlank { "正在加载" }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = model::cancel) { Text("取消") }
-                    }
-                    if (backend == BackendKind.NAS) Text("使用文件服务器的账号登录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (wide) Row(page, horizontalArrangement = Arrangement.spacedBy(64.dp), verticalAlignment = Alignment.Top) {
-                Column(Modifier.weight(0.85f).padding(top = 24.dp)) { ConnectionIntroduction() }
-                Column(Modifier.weight(1.15f)) { form() }
-            } else Column(page, verticalArrangement = Arrangement.spacedBy(32.dp)) {
+            Column(page, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 ConnectionIntroduction()
                 form()
             }
@@ -207,27 +219,30 @@ import io.github.kkwans.nasfilebrowser.data.*
 }
 
 @Composable private fun ConnectionIntroduction() {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(12.dp), modifier = Modifier.size(40.dp)) {
-                Box(contentAlignment = Alignment.Center) { Icon(painterResource(R.drawable.ic_storage), null, tint = MaterialTheme.colorScheme.onPrimaryContainer) }
-            }
-            Text("NAS File Browser", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("连接你的文件库", fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.Medium)
+        Text("添加服务器后，使用服务账号登录。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable private fun ConnectionSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            content()
         }
-        Text("连接你的文件库", style = MaterialTheme.typography.headlineLarge)
-        Text("浏览文件，继续观看。\n从添加一个服务器开始。", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable private fun ConnectionMode(title: String, detail: String, icon: Int, selected: Boolean, modifier: Modifier, enabled: Boolean, choose: () -> Unit) {
     Surface(modifier.selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = choose),
-        shape = RoundedCornerShape(14.dp), color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp), color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outlineVariant)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(painterResource(icon), null, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(painterResource(icon), null, Modifier.size(18.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -239,12 +254,13 @@ import io.github.kkwans.nasfilebrowser.data.*
     imeAction: ImeAction = ImeAction.Next, onDone: () -> Unit = {}, visualTransformation: VisualTransformation = VisualTransformation.None,
     trailing: (@Composable () -> Unit)? = null,
 ) {
-    OutlinedTextField(value, change, label = { Text(label) }, enabled = enabled, singleLine = true,
-        leadingIcon = { Icon(painterResource(icon), null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+    OutlinedTextField(value, change, label = { Text(label, fontSize = 13.sp) }, enabled = enabled, singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge,
+        leadingIcon = { Icon(painterResource(icon), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
         trailingIcon = trailing, placeholder = if (placeholder.isEmpty()) null else ({ Text(placeholder) }),
         supportingText = if (supporting == null) null else ({ Text(supporting) }),
         visualTransformation = visualTransformation, keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
-        keyboardActions = KeyboardActions(onDone = { onDone() }), shape = RoundedCornerShape(14.dp),
+        keyboardActions = KeyboardActions(onDone = { onDone() }), shape = RoundedCornerShape(8.dp),
         colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = MaterialTheme.colorScheme.surface, focusedContainerColor = MaterialTheme.colorScheme.surface,
             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth())
 }

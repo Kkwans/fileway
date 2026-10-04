@@ -32,7 +32,7 @@ import io.github.kkwans.nasfilebrowser.data.AppTheme
 import io.github.kkwans.nasfilebrowser.data.ConnectionMode
 import kotlinx.coroutines.launch
 
-/** Shared connected-library palette; native player and connection flow retain their own theme. */
+/** Shared library and connection palette; the native player retains its dark theme. */
 @Composable internal fun LibraryTheme(content: @Composable () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.luminance() < .5f
     val background = if (dark) Color(0xFF141416) else Color.White

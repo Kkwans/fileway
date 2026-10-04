@@ -8,20 +8,20 @@ A personal file and film library. Let actual covers and filenames lead. The sign
 
 Do not use generic dashboard statistics, oversized gradients, repeated card containers, fake media, or development terminology in product flows. Native Material components are primitives, not the finished visual design.
 
-## Tokens
+## Current library and connection tokens
 
 | Role | Light | Dark |
 | --- | --- | --- |
-| Canvas | #F5F7FA | #10141B |
-| Surface | #FFFFFF | #1B2230 |
-| Primary text | #172235 | #EEF3FA |
-| Secondary text | #536176 | #AAB8CE |
-| Accent | #235ED7 | #9AB9FF |
-| Divider | #DCE3EE | #344157 |
+| Canvas | #F5F5F7 | #202023 |
+| Surface | #FFFFFF | #141416 |
+| Primary text | #202023 | #F3F3F6 |
+| Secondary text | #63636D | #B5B5BE |
+| Accent | #C63262 | #FF80A6 |
+| Divider | #E9E9ED | #34343A |
 
-Native sans family with deliberate roles: 28sp semibold page title, 20sp medium section title, 16sp medium file title/body, 13sp metadata; tabular numerals for times and sizes. Respect system font scale. Normal text contrast ≥4.5:1.
+Native sans family with deliberate roles: 20sp page title, 22sp connection introduction, 16sp medium file title/body, 13sp metadata; tabular numerals for times and sizes. Respect system font scale. Normal text contrast ≥4.5:1.
 
-Spacing: 4/8/12/16/24/32dp. Phone page gutters 20dp; list items 16dp internal spacing. Corners: 12dp on media, 16dp on forms, restrained pill shapes for status only. Outline icons form a consistent family; controls ≥48dp.
+Spacing: 4/8/12/16/24/32dp. Connection page gutters and section padding 16dp; media page gutters 12–16dp. Corners: 10dp on category/form cards and 8dp on their inner controls. Outline icons form a consistent family; controls ≥48dp.
 
 ## Layout
 
@@ -33,7 +33,7 @@ Player: black video stage, unambiguous source title, restrained floating control
 
 Motion: 160–220ms focus/navigation transitions; respects system animation scale. No entrance spectacle. Light/dark, empty/error/loading/buffering and large-font layouts receive equal scrutiny.
 
-Connection implementation: compact media-library introduction, two accessible network choices, server-address group, service-account group and one primary connection action. At ≥840dp it uses a quiet introductory column beside the form; larger font scales retain the scrolling single-column form. Surface roles and their foreground colors are explicitly defined to keep the slate/blue palette throughout native components. Official Material outline vectors are pinned and attributed under `licenses/`.
+Connection implementation: one concise introduction, separate rounded server/account cards, complete address first, optional profile name and compact accessible network choices. The scrollable form is bounded to 560dp on larger screens; primary connect and secondary save actions stay in a bottom surface above the keyboard. Four fields fit the ordinary-scale portrait viewport on the owned API35 device. The same library pink/neutral palette applies to chips and embedded-network actions; no residual blue selection style. Tailscale presents one prominent official-login action when its URL exists, plus cancellation and sensitive-link copying. Official Material outline vectors are pinned and attributed under `licenses/`.
 
 ## Visual gate
 

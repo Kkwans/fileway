@@ -133,24 +133,25 @@ import java.util.Locale
     val context = LocalContext.current
     var actionMessage by remember(network.authUrl) { mutableStateOf<String?>(null) }
     var confirmLogout by remember { mutableStateOf(false) }
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
+    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("应用内 Tailscale · ${network.label}", style = MaterialTheme.typography.titleMedium)
+            Text("应用内 Tailscale · ${network.label}", style = MaterialTheme.typography.bodyMedium)
             if (network.ips.isNotEmpty()) Text(network.ips.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-            if (network.connected && network.acceptSubnets) Text("已接收批准的子网路由", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (network.connected && network.acceptSubnets) Text("已启用子网路由", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (network.state == "NeedsMachineAuth") Text("请在 Tailscale 管理页面批准这台设备。")
             network.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             actionMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (!network.connected) TextButton(onClick = model::connectNetwork, enabled = network.state != "Starting") { Text(if (network.state == "Starting") "正在连接" else "连接 Tailscale") }
-                if (network.authUrl.isNotEmpty()) TextButton(onClick = {
+                val actionColors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                if (!network.connected && network.authUrl.isEmpty() && network.state != "NeedsMachineAuth") FilledTonalButton(onClick = model::connectNetwork, enabled = network.state != "Starting", colors = actionColors, shape = RoundedCornerShape(8.dp)) { Text(if (network.state == "Starting") "正在连接" else "连接 Tailscale") }
+                if (network.authUrl.isNotEmpty()) FilledTonalButton(onClick = {
                     val uri = Uri.parse(network.authUrl)
                     val host = uri.host.orEmpty()
                     if (uri.scheme != "https" || (host != "tailscale.com" && !host.endsWith(".tailscale.com"))) {
                         actionMessage = "登录地址无法验证，请重新连接。"
                     } else try { context.startActivity(Intent(Intent.ACTION_VIEW, uri)); actionMessage = null }
                     catch (_: Exception) { actionMessage = "无法打开浏览器，可复制登录链接后手动打开。" }
-                }) { Text("打开登录页") }
+                }, colors = actionColors, shape = RoundedCornerShape(8.dp)) { Text("打开登录页") }
                 if (network.state in listOf("Starting", "NeedsLogin", "NeedsMachineAuth", "Running")) TextButton(onClick = { model.stopNetwork() }) { Text(if (network.connected) "断开" else "取消连接") }
             }
             if (network.authUrl.isNotEmpty()) TextButton(onClick = {
