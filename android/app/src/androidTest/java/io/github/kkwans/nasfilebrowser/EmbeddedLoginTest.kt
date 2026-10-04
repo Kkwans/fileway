@@ -9,7 +9,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
-import org.junit.Assume.assumeTrue
 import io.github.kkwans.nasfilebrowser.core.NetworkState
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,12 +18,16 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 
 /** Actual JNI/tsnet first-login smoke test. Does not authorize a node or use an auth key. */
+@Target(AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class ExternalNetworkAcceptance
+
 @RunWith(AndroidJUnit4::class)
 class EmbeddedLoginTest {
+    @ExternalNetworkAcceptance
     @Test fun freshNodeProvidesOfficialLoginWithoutClaimingAuthentication() = runBlocking {
         // This contacts official control servers but never approves a node.
         // Run separately on an owned fresh installation, not as an offline fixture.
-        assumeTrue(InstrumentationRegistry.getArguments().getString("embeddedLoginAcceptance") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val network = EmbeddedNetwork(context)
         try {
@@ -55,8 +58,8 @@ class EmbeddedLoginTest {
         }
     }
 
+    @ExternalNetworkAcceptance
     @Test fun connectAndCancelUiUseTheActualEmbeddedLoginFlow() {
-        assumeTrue(InstrumentationRegistry.getArguments().getString("embeddedLoginAcceptance") == "true")
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         ActivityScenario.launch(MainActivity::class.java).use {
             fun click(text: String) {

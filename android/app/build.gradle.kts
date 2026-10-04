@@ -15,6 +15,9 @@ android {
         versionCode = 3
         versionName = "0.2.1-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // External control-plane acceptance runs explicitly through adb.
+        // Filter at discovery: UTP reports runtime assumptions as failures.
+        testInstrumentationRunnerArguments["notAnnotation"] = "io.github.kkwans.nasfilebrowser.ExternalNetworkAcceptance"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
             cmake { arguments += "-DNFB_CORE_DIR=${rootProject.projectDir.parentFile}/core/generated" }
