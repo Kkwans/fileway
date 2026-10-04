@@ -15,26 +15,27 @@ import (
 )
 
 type Command struct {
-	Op         string          `json:"op"`
-	RequestID  string          `json:"requestId"`
-	Session    string          `json:"session"`
-	BaseURL    string          `json:"baseUrl"`
-	Token      string          `json:"token"`
-	Username   string          `json:"username"`
-	Password   string          `json:"password"`
-	Method     string          `json:"method"`
-	Endpoint   string          `json:"endpoint"`
-	Body       json.RawMessage `json:"body"`
-	Path       string          `json:"path"`
-	WirePath   string          `json:"wirePath"`
-	URL        string          `json:"url"`
-	Network    string          `json:"network"`
-	StateDir   string          `json:"stateDir"`
-	Hostname   string          `json:"hostname"`
-	StorageKey string          `json:"storageKey"`
-	Query      string          `json:"query"`
-	Scope      string          `json:"scope"`
-	Search     string          `json:"search"`
+	Op              string                  `json:"op"`
+	RequestID       string                  `json:"requestId"`
+	Session         string                  `json:"session"`
+	BaseURL         string                  `json:"baseUrl"`
+	Token           string                  `json:"token"`
+	Username        string                  `json:"username"`
+	Password        string                  `json:"password"`
+	Method          string                  `json:"method"`
+	Endpoint        string                  `json:"endpoint"`
+	Body            json.RawMessage         `json:"body"`
+	Path            string                  `json:"path"`
+	WirePath        string                  `json:"wirePath"`
+	URL             string                  `json:"url"`
+	Network         string                  `json:"network"`
+	StateDir        string                  `json:"stateDir"`
+	Hostname        string                  `json:"hostname"`
+	StorageKey      string                  `json:"storageKey"`
+	Query           string                  `json:"query"`
+	Scope           string                  `json:"scope"`
+	Search          string                  `json:"search"`
+	PlatformNetwork tailnet.PlatformNetwork `json:"platformNetwork"`
 }
 
 type Envelope struct {
@@ -138,6 +139,17 @@ func (e *Engine) execute(c Command) (any, error) {
 	switch c.Op {
 	case "init":
 		return map[string]int{"protocol": 1}, nil
+	case "network_platform":
+		if err := tailnet.UpdatePlatformNetwork(c.PlatformNetwork); err != nil {
+			return nil, err
+		}
+		e.mu.Lock()
+		n := e.node
+		e.mu.Unlock()
+		if n != nil {
+			n.PlatformNetworkChanged()
+		}
+		return nil, nil
 	case "open":
 		if c.Network == "" || c.Network == "direct" {
 			return b.Open(c.BaseURL, c.Token, nil)

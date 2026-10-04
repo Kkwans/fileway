@@ -11,8 +11,9 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-data class NetworkState(val state: String = "Unconfigured", val authUrl: String = "", val ips: List<String> = emptyList(), val acceptSubnets: Boolean = false, val health: List<String> = emptyList(), val error: String? = null) {
+data class NetworkState(val state: String = "Unconfigured", val authUrl: String = "", val ips: List<String> = emptyList(), val acceptSubnets: Boolean = false, val health: List<String> = emptyList(), val error: String? = null, val authenticated: Boolean = false) {
     val connected get() = state == "Running"
+    val canLogout get() = authenticated && state != "Starting"
     val label get() = when (state) {
         "Running" -> "已连接"
         "NeedsLogin" -> "等待登录"
@@ -28,6 +29,7 @@ class EmbeddedNetwork(context: Context) {
     private val application = context.applicationContext
     private val mutex = Mutex()
     private suspend fun ensureConfigured() = mutex.withLock {
+        AndroidNetworkPlatform.refresh(application)
         val status = NativeTransport.call(JSONObject().put("op", "network_status")) as JSONObject
         if (status.optString("state") != "Unconfigured") return@withLock
         val keyAndName = withContext(Dispatchers.IO) {
@@ -47,6 +49,6 @@ class EmbeddedNetwork(context: Context) {
     suspend fun logout() { NativeTransport.call(JSONObject().put("op", "network_logout")) }
     private fun parse(json: JSONObject): NetworkState {
         fun strings(key: String): List<String> { val values = json.optJSONArray(key) ?: return emptyList(); return (0 until values.length()).map { values.optString(it) } }
-        return NetworkState(json.optString("state"), json.optString("authUrl"), strings("ips"), json.optBoolean("acceptSubnets"), strings("health"))
+        return NetworkState(json.optString("state"), json.optString("authUrl"), strings("ips"), json.optBoolean("acceptSubnets"), strings("health"), authenticated = json.optBoolean("authenticated"))
     }
 }

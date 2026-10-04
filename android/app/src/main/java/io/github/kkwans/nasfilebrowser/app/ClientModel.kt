@@ -381,13 +381,23 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         networkPollJob?.cancel()
         networkJob = viewModelScope.launch {
             try {
-                networkMutable.value = NetworkState(state = "Starting")
+                networkMutable.value = networkMutable.value.copy(state = "Starting", authUrl = "", error = null)
                 networkMutable.value = embeddedNetwork.start()
                 observeNetwork()
             } catch (error: Exception) {
-                if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "内嵌网络连接失败，请重试")
+                if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", authUrl = "", error = networkError(error))
             }
         }
+    }
+    private fun networkError(error: Exception): String = when (error.message) {
+        "android network snapshot unavailable", "invalid android network snapshot", "invalid android network interface", "invalid android interface address" -> "无法读取系统网络信息，请重试。"
+        "cannot start embedded network" -> "内嵌节点启动失败，请重试（TS_START）。"
+        "cannot control embedded network" -> "无法控制内嵌节点，请重试（TS_CONTROL）。"
+        "cannot enable approved subnet routes" -> "无法设置子网路由，请重试（TS_ROUTES）。"
+        "cannot open embedded login flow" -> "无法发起官方登录，请重试（TS_LOGIN）。"
+        "cannot prepare embedded log storage", "cannot configure embedded log storage" -> "无法准备内嵌节点存储，请检查可用空间后重试（TS_STORAGE）。"
+        "cannot unlock node state; original identity preserved" -> "无法解锁保存的节点，原有身份已保留。"
+        else -> "内嵌网络暂不可用，请检查网络后重试（TS_NETWORK）。"
     }
     private fun observeNetwork() {
         networkPollJob?.cancel()
@@ -406,7 +416,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (networkActivated && networkJob?.isActive != true) observeNetwork()
     }
     fun stopNetwork(logout: Boolean = false) {
-        networkJob?.cancel(); networkPollJob?.cancel(); disconnect()
+        networkJob?.cancel(); networkPollJob?.cancel()
+        if (context?.profile?.network == ConnectionMode.TAILNET) disconnect()
         networkJob = viewModelScope.launch { try { closing?.join(); mediaClosing?.join(); if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
     }
     override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); previewImageLoader.shutdown(); player.checkpoint = null; player.release(); super.onCleared() }

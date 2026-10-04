@@ -149,7 +149,7 @@ import java.util.Locale
                     actionMessage = "登录链接已复制，请勿分享。"
                 } catch (_: Exception) { actionMessage = "无法复制链接，请检查系统权限后重试。" }
             }) { Text("复制登录链接") }
-            if (network.state !in listOf("Unconfigured", "Configured", "Closed", "Starting")) TextButton(onClick = { confirmLogout = true }) { Text("退出 Tailscale 账号") }
+            if (network.canLogout) TextButton(onClick = { confirmLogout = true }) { Text("退出 Tailscale 账号") }
         }
     }
     if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("退出 Tailscale？") }, text = { Text("将停止当前播放并退出内嵌节点，下次连接需要重新登录。") }, confirmButton = { TextButton(onClick = { confirmLogout = false; model.stopNetwork(logout = true) }) { Text("退出账号") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } })

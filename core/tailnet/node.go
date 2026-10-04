@@ -23,6 +23,7 @@ type Connection struct {
 }
 type Status struct {
 	State         string       `json:"state"`
+	Authenticated bool         `json:"authenticated"`
 	AuthURL       string       `json:"authUrl,omitempty"`
 	IPs           []string     `json:"ips,omitempty"`
 	AcceptSubnets bool         `json:"acceptSubnets"`
@@ -36,18 +37,25 @@ type Node struct {
 	local     *local.Client
 	attempted bool
 	closed    bool
+	newServer func() *tsnet.Server
 }
 
 func NewNode(dir, hostname string, key []byte) (*Node, error) {
 	if !filepath.IsAbs(dir) || hostname == "" {
 		return nil, errors.New("invalid embedded node configuration")
 	}
+	if err := preparePlatformNode(dir); err != nil {
+		return nil, err
+	}
 	store, err := NewEncryptedStore(filepath.Join(dir, "node.state"), key)
 	if err != nil {
 		return nil, err
 	}
 	quiet := func(string, ...any) {}
-	return &Node{server: &tsnet.Server{Dir: dir, Hostname: hostname, Store: store, Logf: quiet, UserLogf: quiet}}, nil
+	newServer := func() *tsnet.Server {
+		return &tsnet.Server{Dir: dir, Hostname: hostname, Store: store, Logf: quiet, UserLogf: quiet}
+	}
+	return &Node{server: newServer(), newServer: newServer}, nil
 }
 
 func (n *Node) Start(ctx context.Context) (Status, error) {
@@ -60,7 +68,16 @@ func (n *Node) Start(ctx context.Context) (Status, error) {
 		return Status{}, ctx.Err()
 	}
 	n.attempted = true
-	if err := n.server.Start(); err != nil {
+	if err := startEmbeddedServer(n.server); err != nil {
+		// tsnet caches init errors with sync.Once. Retrying that instance can
+		// never recover; retain the encrypted identity and create a new server.
+		// Upstream Close dereferences Sys; an early directory error has no
+		// system/resources yet and must not be passed to Close.
+		if n.server.Sys() != nil {
+			_ = n.server.Close()
+		}
+		n.server = n.newServer()
+		n.attempted = false
 		return Status{}, errors.New("cannot start embedded network")
 	}
 	lc, err := n.server.LocalClient()
@@ -84,6 +101,17 @@ func (n *Node) Start(ctx context.Context) (Status, error) {
 		return n.statusLocked(ctx)
 	}
 	return status, nil
+}
+
+// Keep upstream initialization panics recoverable at the node boundary. The
+// bridge's outer recovery alone would leave tsnet's initOnce irreversibly set.
+func startEmbeddedServer(server *tsnet.Server) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("embedded initialization failed")
+		}
+	}()
+	return server.Start()
 }
 
 func (n *Node) Status(ctx context.Context) (Status, error) {
@@ -110,6 +138,13 @@ func (n *Node) statusLocked(ctx context.Context) (Status, error) {
 		return Status{}, errors.New("cannot read subnet preferences")
 	}
 	result := Status{State: s.BackendState, AuthURL: s.AuthURL, AcceptSubnets: p.RouteAll, Health: s.Health}
+	result.Authenticated = p.Persist != nil && p.Persist.UserProfile.ID != 0
+	if !p.WantRunning {
+		result.State = "Stopped"
+	}
+	if result.State != "NeedsLogin" {
+		result.AuthURL = ""
+	}
 	for _, ip := range s.TailscaleIPs {
 		result.IPs = append(result.IPs, ip.String())
 	}
@@ -119,6 +154,20 @@ func (n *Node) statusLocked(ctx context.Context) (Status, error) {
 		}
 	}
 	return result, nil
+}
+
+// PlatformNetworkChanged wakes the userspace monitor after Android's callback.
+func (n *Node) PlatformNetworkChanged() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed || n.local == nil {
+		return
+	}
+	if sys := n.server.Sys(); sys != nil {
+		if monitor, ok := sys.NetMon.GetOK(); ok {
+			monitor.InjectEvent()
+		}
+	}
 }
 
 func connectionMode(peer *ipnstate.PeerStatus) string {
