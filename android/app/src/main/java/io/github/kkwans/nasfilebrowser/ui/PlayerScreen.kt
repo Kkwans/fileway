@@ -18,6 +18,12 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import io.github.kkwans.nasfilebrowser.data.HeldPlaybackRate
+import io.github.kkwans.nasfilebrowser.data.parsePlaybackRate
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -75,6 +81,13 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     val state by model.player.state.collectAsStateWithLifecycle()
     val client by model.state.collectAsStateWithLifecycle()
     val liveState by rememberUpdatedState(state)
+    val holdRate by model.playbackPreferences.holdRate.collectAsStateWithLifecycle()
+    val liveHoldRate by rememberUpdatedState(holdRate)
+    var holding by remember(file) { mutableStateOf(false) }
+    val uiScope = rememberCoroutineScope()
+    var customRate by remember { mutableStateOf("") }
+    var customHold by remember { mutableStateOf("") }
+    var speedError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val landscapeOrientation = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val view = LocalView.current
@@ -168,12 +181,30 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 contentDescription = "视频画面"
                                 onClick("显示播放控制") { touch(); true }
                             }.pointerInput(file, blocked, exploration) {
-                                detectTapGestures(onTap = { if (!blocked && !exploration) visible = !visible else touch(); interaction++ },
-                                    onDoubleTap = { offset ->
-                                        touch()
-                                        if (liveState.seekable) model.player.seek(liveState.positionMs + if (offset.x < size.width / 2) -10_000 else 10_000)
+                                detectTapGestures(
+                                    onTap = { if (!blocked && !exploration) visible = !visible else touch(); interaction++ },
+                                    onDoubleTap = { touch(); if (!model.state.value.busy) model.togglePlayback() },
+                                    onLongPress = {},
+                                    onPress = {
+                                        if (!exploration && model.state.value.selected == file && liveState.playing && !model.state.value.busy) coroutineScope {
+                                            val temporary = HeldPlaybackRate({ model.player.state.value.rate }, model.player::rate)
+                                            val hold = launch {
+                                                delay(viewConfiguration.longPressTimeoutMillis)
+                                                if (model.state.value.selected == file && liveState.playing && !model.state.value.busy) {
+                                                    temporary.start(liveHoldRate); holding = true
+                                                }
+                                            }
+                                            try { tryAwaitRelease() }
+                                            finally {
+                                                hold.cancel()
+                                                if (model.state.value.selected == file) temporary.release()
+                                                holding = false
+                                            }
+                                        }
                                     })
                             })
+                            if (holding) Text("${holdRate}× 倍速播放", Modifier.align(Alignment.TopCenter).padding(top = 20.dp)
+                                .clip(RoundedCornerShape(8.dp)).background(PlayerPanel).padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 13.sp)
                             val failure = state.error ?: client.error
                             if (failure != null) {
                                 Column(Modifier.align(Alignment.Center).widthIn(max = 360.dp).padding(20.dp)
@@ -239,7 +270,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         HorizontalDivider(color = Color(0xFF29292C))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             JumpAction(R.drawable.ic_replay_10, "后退十秒", state.seekable) { touch(); model.player.seek(state.positionMs - 10_000) }
-                            Text("双击画面快进 / 后退", color = PlayerSecondary, fontSize = 12.sp)
+                            Text("双击暂停 · 长按倍速", color = PlayerSecondary, fontSize = 12.sp)
                             JumpAction(R.drawable.ic_forward_10, "快进十秒", state.seekable) { touch(); model.player.seek(state.positionMs + 10_000) }
                         }
                         Column(Modifier.clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
@@ -262,7 +293,27 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                         }
                         PlayerSheet.SPEED -> LazyColumn(contentPadding = PaddingValues(bottom = 20.dp)) {
-                            itemsIndexed(listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)) { _, value ->
+                            item {
+                                Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedTextField(customRate, { customRate = it; speedError = null }, Modifier.weight(1f), label = { Text("自定义倍速") }, placeholder = { Text("0.1–5") },
+                                            singleLine = true, shape = RoundedCornerShape(8.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                                        TextButton(onClick = { val value = parsePlaybackRate(customRate); if (value == null) speedError = "请输入 0.1–5 之间的倍速" else { model.player.rate(value); sheet = null; touch() } }) { Text("应用") }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedTextField(customHold, { customHold = it; speedError = null }, Modifier.weight(1f), label = { Text("长按倍速 · 当前 ${holdRate}×") }, placeholder = { Text("默认 3，支持 0.1–5") },
+                                            singleLine = true, shape = RoundedCornerShape(8.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                                        TextButton(onClick = {
+                                            val value = parsePlaybackRate(customHold)
+                                            if (value == null) speedError = "请输入 0.1–5 之间的倍速"
+                                            else uiScope.launch { try { model.playbackPreferences.saveHoldRate(value); customHold = "" } catch (_: Exception) { speedError = "长按倍速未能保存，请重试" } }
+                                        }) { Text("保存") }
+                                    }
+                                    Text("松手立即恢复长按前的速度", fontSize = 12.sp, color = PlayerSecondary)
+                                    speedError?.let { Text(it, color = Color(0xFFFFA0AC), fontSize = 13.sp) }
+                                }
+                            }
+                            itemsIndexed(listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 4f, 5f)) { _, value ->
                                 Choice("${value}×", if (value == 1f) "正常速度" else "", state.rate == value) { model.player.rate(value); sheet = null; touch() }
                             }
                         }

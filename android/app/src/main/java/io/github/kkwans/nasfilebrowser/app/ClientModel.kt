@@ -51,6 +51,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(ClientState(startupPending = true))
     val state = mutable.asStateFlow()
     val player = NativePlayer(application)
+    val playbackPreferences = PlaybackPreferences(application)
     val previewImageLoader = ImageLoader.Builder(application)
         .memoryCache { MemoryCache.Builder().maxSizeBytes(16L * 1024 * 1024).build() }
         .diskCache(null).build()
