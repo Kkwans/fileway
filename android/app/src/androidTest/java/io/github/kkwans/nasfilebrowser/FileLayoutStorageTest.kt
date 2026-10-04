@@ -30,7 +30,8 @@ class FileLayoutStorageTest {
                 AccountRecord("a/0/1", "a", 0, 1, "one", "fixture-ref", 1),
                 AccountRecord("a/0/2", "a", 0, 2, "two", "fixture-ref", 1),
                 AccountRecord("b/0/1", "b", 0, 1, "one", "fixture-ref", 1),
-                AccountRecord("a/1/1", "a", 1, 1, "one", "fixture-ref", 1))
+                AccountRecord("a/1/1", "a", 1, 1, "one", "fixture-ref", 1),
+                AccountRecord("b/0/2", "b", 0, 2, "two", "fixture-ref", 1))
             try {
                 for (id in listOf("a", "b")) db.profiles().saveProfile(ServerProfile(id, id, "https://fixture.example.test/$id"))
                 accounts.forEach { db.profiles().saveAccount(it) }
@@ -41,12 +42,13 @@ class FileLayoutStorageTest {
                 store.saveFileLayout(accounts[1], FileLayout.LIST)
                 store.saveFileLayout(accounts[2], FileLayout.DETAIL)
                 store.saveDirectory(accounts[3], "/", "/")
+                store.saveFileLayout(accounts[4], FileLayout.UNBOUNDED)
                 assertEquals(FileLayout.COMPACT, store.directory(accounts[0])?.fileLayout)
                 assertEquals("/%E6%96%B0", store.directory(accounts[0])?.wirePath)
             } finally { db.close() }
             val reopened = open(file, backups)
             try {
-                assertEquals(listOf(FileLayout.COMPACT, FileLayout.LIST, FileLayout.DETAIL, FileLayout.COVER),
+                assertEquals(listOf(FileLayout.COMPACT, FileLayout.LIST, FileLayout.DETAIL, FileLayout.COVER, FileLayout.UNBOUNDED),
                     accounts.map { reopened.profiles().directory(it.key)?.fileLayout })
                 reopened.profiles().deleteProfile("a")
                 assertNull(reopened.profiles().directory(accounts[0].key))

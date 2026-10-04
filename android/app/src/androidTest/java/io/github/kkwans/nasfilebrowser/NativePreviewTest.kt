@@ -56,9 +56,12 @@ class NativePreviewTest {
     @Test fun actualAuthenticatedPreviewReachesComposedCard(): Unit = runBlocking { previewCard(false) }
     @Test fun actualSearchPreviewReachesComposedCard(): Unit = runBlocking { previewCard(true) }
     @Test fun compactGridDisplaysBothAuthenticatedImageAndVideoThumbnails(): Unit = runBlocking { previewCard(false, FileLayout.COMPACT) }
+    @Test fun unboundedGridPreservesImageAndVideoPreviewAspect(): Unit = runBlocking { previewCard(false, FileLayout.UNBOUNDED) }
     private suspend fun previewCard(search: Boolean, layout: FileLayout = FileLayout.COVER) {
         val compact = layout == FileLayout.COMPACT
-        val names = if (compact) listOf("A.mkv", "照片.png", "旅行") else listOf("A.mkv")
+        val unbounded = layout == FileLayout.UNBOUNDED
+        val gridPreview = compact || unbounded
+        val names = if (gridPreview) listOf("A.mkv", "照片.png", "旅行") else listOf("A.mkv")
         val source = ClientSearchTest.Fixture(if (search) emptyList() else names, ownedPreviewPng())
         val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Preview fixture", address = source.url))
@@ -72,11 +75,11 @@ class NativePreviewTest {
                 withTimeout(10_000) { model.search.state.first { it.ending == SearchEnding.COMPLETED } }
             } else {
                 assertEquals(names.size, model.state.value.files.size)
-                if (compact) {
+                if (gridPreview) {
                     withContext(Dispatchers.Main) { model.fileLayout(layout) }
                     withTimeout(5000) { model.state.first { it.fileLayout == layout } }
                     val device = UiDevice.getInstance(instrumentation)
-                    assertTrue(device.wait(Until.hasObject(By.desc("紧凑文件网格")), 5000))
+                    assertTrue(device.wait(Until.hasObject(By.desc(if (unbounded) "无界文件网格" else "紧凑文件网格")), 5000))
                 }
             }
             assertTrue(withContext(Dispatchers.IO) { source.previewSeen.await(10, TimeUnit.SECONDS) })
@@ -88,12 +91,18 @@ class NativePreviewTest {
                         val pixels = IntArray(bitmap.width * bitmap.height)
                         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
                         fun cyan(pixel: Int) = Color.red(pixel) in 25..35 && Color.green(pixel) in 175..185 && Color.blue(pixel) in 215..225
-                        if (compact) {
+                        if (gridPreview) {
                             val device = UiDevice.getInstance(instrumentation)
                             listOf("A.mkv", "照片.png").minOf { name ->
                                 val bounds = device.findObject(By.desc("$name 预览"))?.visibleBounds
-                                if (bounds == null) 0 else (bounds.top until bounds.bottom).sumOf { y ->
-                                    (bounds.left until bounds.right).count { x -> cyan(pixels[y * bitmap.width + x]) }
+                                if (bounds == null) 0 else {
+                                    var count = 0; var minX = bitmap.width; var maxX = -1; var minY = bitmap.height; var maxY = -1
+                                    for (y in bounds.top until bounds.bottom) for (x in bounds.left until bounds.right) if (cyan(pixels[y * bitmap.width + x])) {
+                                        count++; minX = minOf(minX, x); maxX = maxOf(maxX, x); minY = minOf(minY, y); maxY = maxOf(maxY, y)
+                                    }
+                                    if (unbounded && count > 400) assertEquals("Unbounded preview must fit the original 4:3 image instead of cropping",
+                                        4f / 3f, (maxX - minX + 1).toFloat() / (maxY - minY + 1), .03f)
+                                    count
                                 }
                             }
                         } else pixels.count(::cyan)
@@ -102,13 +111,14 @@ class NativePreviewTest {
                     delay(100)
                 }
             }
-            if (compact) {
+            if (gridPreview) {
                 assertTrue(source.previewPaths.contains("/api/preview/thumb/A.mkv"))
                 assertTrue(source.previewPaths.contains("/api/preview/thumb/照片.png"))
                 assertTrue(source.previewPaths.none { it.endsWith("/旅行") })
                 val device = UiDevice.getInstance(instrumentation)
                 device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
-                device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/compact-image-video-thumbnails.png")
+                val image = if (unbounded) "unbounded-image-video-thumbnails" else "compact-image-video-thumbnails"
+                device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$image.png")
             }
         } finally { withContext(Dispatchers.Main) { model.disconnect() }; store.remove(profile); source.close() }
     }

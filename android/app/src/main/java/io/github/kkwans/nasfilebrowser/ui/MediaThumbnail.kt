@@ -26,7 +26,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 
 /** NAS generates the preview; Coil fetches/decodes only the local capability. */
-@Composable internal fun MediaThumbnail(model: ClientModel, file: ResourceRef, modifier: Modifier, showStatusText: Boolean = true) {
+@Composable internal fun MediaThumbnail(model: ClientModel, file: ResourceRef, modifier: Modifier, showStatusText: Boolean = true,
+    contentScale: ContentScale = ContentScale.Crop) {
     val client by model.state.collectAsStateWithLifecycle()
     key(client.previewScope, file.wirePath, file.path, file.size, file.modified) {
         var asset by remember { mutableStateOf<PreviewLease?>(null) }
@@ -52,7 +53,7 @@ import kotlinx.coroutines.awaitCancellation
                 val request = remember(lease.url) { ImageRequest.Builder(context.applicationContext)
                     .data(lease.url).diskCachePolicy(CachePolicy.DISABLED).size(512, 512).build() }
                 AsyncImage(model = request, imageLoader = model.previewImageLoader, contentDescription = null,
-                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(), contentScale = contentScale,
                     onSuccess = { phase = "预览已加载" }, onError = { phase = "暂无预览" })
             }
             if (phase != "预览已加载") {

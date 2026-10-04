@@ -7,7 +7,7 @@ import java.util.UUID
 
 enum class BackendKind { NAS, WINDOWS }
 enum class ConnectionMode { DIRECT, TAILNET }
-enum class FileLayout(val label: String) { COVER("封面网格"), DETAIL("大图列表"), LIST("常规列表"), COMPACT("紧凑网格") }
+enum class FileLayout(val label: String) { COVER("封面网格"), DETAIL("大图列表"), LIST("常规列表"), COMPACT("紧凑网格"), UNBOUNDED("无界网格") }
 
 @Entity(tableName = "server_profiles")
 data class ServerProfile(
