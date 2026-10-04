@@ -25,7 +25,7 @@ Spacing: 4/8/12/16/24/32dp. Connection page gutters and section padding 16dp; me
 
 ## Layout
 
-Files: compact server switch → prominent directory name/breadcrumb → search/sort controls → content. Folders are quiet rows; videos receive covers. Grid cell size responds to width, retains readable titles and never stretches previews.
+Files: one compact toolbar with layout selection, refresh and right-side search icon → directory breadcrumb when below root → content. Server/account details and switching belong in settings. Search context shows only the root-based directory path. Folders are quiet rows; videos receive covers. Grid cell size responds to width, retains readable titles and never stretches previews.
 
 Recent: real resume entries, no fake hero. Server editor: a focused sheet/form with field examples, a visible connection mode and one primary action. Settings: grouped rows with clear current values.
 

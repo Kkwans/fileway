@@ -82,7 +82,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                     }
                     LazyColumn(Modifier.fillMaxSize().semantics { contentDescription = "搜索结果" }, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 16.dp)) {
                         item(key = "context") {
-                            Text("${client.serverLabel} · ${state.basePath}", modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            Text(state.basePath, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                 style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         item(key = "scope") {

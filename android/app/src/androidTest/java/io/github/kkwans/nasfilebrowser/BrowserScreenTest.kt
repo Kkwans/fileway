@@ -41,6 +41,10 @@ class BrowserScreenTest {
             var currentLayout = "封面网格"
             fun chooseLayout(next: String) { text(currentLayout).click(); text(next).click(); currentLayout = next }
             assertTrue(device.wait(Until.hasObject(By.desc("文件网格")), 5000))
+            assertFalse("Server identity belongs in settings", device.hasObject(By.text(model.state.value.serverLabel)))
+            assertFalse(device.hasObject(By.text("切换服务器")))
+            val search = device.wait(Until.findObject(By.desc("搜索文件")), 5000) ?: error("Header search icon missing")
+            assertTrue("Search belongs in the first toolbar on the right", search.visibleBounds.top < device.displayHeight * .12f && search.visibleBounds.centerX() > device.displayWidth * .8f)
             capture("cover-default")
             chooseLayout("常规列表")
             val list = device.wait(Until.findObject(By.desc("文件列表")), 5000) ?: error("File list missing")
@@ -75,7 +79,7 @@ class BrowserScreenTest {
             assertTrue(device.wait(Until.hasObject(By.desc("大图文件列表")), 5000))
             capture("detail-list")
             chooseLayout("常规列表")
-            text("刷新").click()
+            (device.wait(Until.findObject(By.desc("刷新")), 5000) ?: error("Refresh action missing")).click()
             withTimeout(5000) { model.state.first { !it.busy && it.files.size == 6 } }
             text("旅行").click()
             withTimeout(5000) { model.state.first { !it.busy && it.path == "/旅行" } }

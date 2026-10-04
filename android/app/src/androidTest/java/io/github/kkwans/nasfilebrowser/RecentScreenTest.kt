@@ -59,6 +59,8 @@ class RecentScreenTest {
             withTimeout(5000) { model.recent.first { it.size == 3 } }
             main { model.tab("recent") }
             text("继续观看"); text("3 项"); text("20:34 / 2:43:33"); text("已同步")
+            assertFalse(device.hasObject(By.text(model.state.value.serverLabel)))
+            assertFalse(device.hasObject(By.text("切换服务器")))
             text("文件已变化"); text("原记录 0:03 / 0:12"); text("0:03 / 时长待确认")
             assertFalse("Unknown file sizes must not be invented", device.hasObject(By.text("0 KB")) || device.hasObject(By.text("0.0 KB")))
             assertTrue(withContext(Dispatchers.IO) { source.previewSeen.await(5, TimeUnit.SECONDS) })

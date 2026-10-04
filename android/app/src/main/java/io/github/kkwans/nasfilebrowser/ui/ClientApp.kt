@@ -69,11 +69,6 @@ import java.util.Locale
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "recent") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Text(state.serverLabel, style = MaterialTheme.typography.titleMedium, color = colors.onBackground,
-                        modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    TextButton(onClick = model::disconnect) { Text("切换服务器") }
-                }
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("继续观看", style = MaterialTheme.typography.titleLarge, color = colors.onBackground, modifier = Modifier.weight(1f))
                     if (recent.isNotEmpty()) Text("${recent.size} 项", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)

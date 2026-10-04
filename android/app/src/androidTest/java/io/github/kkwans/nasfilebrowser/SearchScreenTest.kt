@@ -53,8 +53,9 @@ class SearchScreenTest {
         try {
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
-            objectWithText("搜索文件").click()
+            (device.wait(Until.findObject(By.desc("搜索文件")), 5000) ?: error("Header search action missing")).click()
             assertTrue(device.wait(Until.hasObject(By.desc("搜索文件名")), 5000))
+            assertFalse("Search paths must not include server/account metadata", device.hasObject(By.textContains(model.state.value.serverLabel)))
             action(model, source)
         } catch (error: Exception) { capture("search-failure"); throw error }
         catch (error: AssertionError) { capture("search-failure"); throw error }

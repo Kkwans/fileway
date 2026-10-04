@@ -1,7 +1,6 @@
 package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -59,23 +58,13 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(state.serverLabel, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-                    TextButton(onClick = model::disconnect) { Text("切换服务器") }
-                }
-                if (state.path != "/") Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { model.back() }, enabled = state.path != "/" && !state.busy) {
-                        Icon(painterResource(R.drawable.ic_arrow_back), "上一级", Modifier.size(22.dp))
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("文件", modifier = Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleLarge, color = colors.onBackground)
+                    IconButton(onClick = model::retry, enabled = !state.busy) {
+                        Icon(painterResource(R.drawable.ic_refresh), "刷新", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
                     }
-                    Text(state.path, modifier = Modifier.weight(1f).padding(end = 16.dp), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-                }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = model::openSearch, enabled = !state.busy,
-                        modifier = Modifier.weight(1f).border(1.dp, colors.outlineVariant, RoundedCornerShape(24.dp)),
-                        shape = RoundedCornerShape(24.dp)) { Text("搜索文件", color = colors.onSurfaceVariant) }
-                    TextButton(onClick = model::retry, enabled = !state.busy) { Text("刷新") }
                     Box {
-                        TextButton(onClick = { layoutMenu = true }) { Text(layout.label) }
+                        TextButton(onClick = { layoutMenu = true }, shape = RoundedCornerShape(8.dp)) { Text(layout.label, style = MaterialTheme.typography.bodySmall) }
                         DropdownMenu(expanded = layoutMenu, onDismissRequest = { layoutMenu = false }) {
                             FileLayout.entries.forEach { option ->
                                 DropdownMenuItem(text = { Text(option.label, color = if (layout == option) colors.primary else colors.onBackground) },
@@ -83,6 +72,15 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                             }
                         }
                     }
+                    IconButton(onClick = model::openSearch, enabled = !state.busy) {
+                        Icon(painterResource(R.drawable.ic_search), "搜索文件", Modifier.size(22.dp), tint = colors.onBackground)
+                    }
+                }
+                if (state.path != "/") Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { model.back() }, enabled = !state.busy) {
+                        Icon(painterResource(R.drawable.ic_arrow_back), "上一级", Modifier.size(22.dp))
+                    }
+                    Text(state.path, modifier = Modifier.weight(1f).padding(end = 16.dp), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
                 }
                 state.error?.let { message ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
