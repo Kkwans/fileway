@@ -36,6 +36,7 @@ typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
 
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
+    val startupPending: Boolean = false,
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
     val serverLabel: String = "", val accountName: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
     val error: String? = null, val selected: ResourceRef? = null,
@@ -43,11 +44,11 @@ data class ClientState(
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
 )
-data class SessionContext(val profile: ServerProfile, val account: AccountRecord, val api: NasSession, val generation: Int)
+data class SessionContext(val profile: ServerProfile, val account: AccountRecord, val api: NasSession, val generation: Int, val owner: String = java.util.UUID.randomUUID().toString())
 private data class PlaybackBinding(val context: SessionContext, val file: ResourceRef, val identity: String, val writer: PlaybackWriter)
 
 class ClientModel(application: Application) : AndroidViewModel(application) {
-    private val mutable = MutableStateFlow(ClientState())
+    private val mutable = MutableStateFlow(ClientState(startupPending = true))
     val state = mutable.asStateFlow()
     val player = NativePlayer(application)
     val previewImageLoader = ImageLoader.Builder(application)
@@ -72,6 +73,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var lease = ""
     private var generation = 0
     private var operation: Job? = null
+    private var startupJob: Job? = null
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val navigation = ArrayDeque<Pair<String, String>>()
     private var playback: PlaybackBinding? = null
@@ -84,7 +86,26 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val layoutWrites = Mutex()
     private var layoutRequest = 0L
     val search = SearchController(viewModelScope, { context == it && generation == it.generation }, ::open)
-    init { player.checkpoint = { saveProgress() } }
+    init {
+        player.checkpoint = { saveProgress() }
+        val expected = generation
+        startupJob = viewModelScope.launch {
+            try {
+                val active = store.active()
+                if (generation != expected) return@launch
+                if (active == null) { mutable.value = mutable.value.copy(startupPending = false); return@launch }
+                val (profile, account) = active
+                val accounts = store.accounts(profile)
+                if (generation != expected) return@launch
+                mutable.value = mutable.value.copy(profile = profile, accounts = accounts, accountName = account.username,
+                    editorVersion = mutable.value.editorVersion + 1)
+                connectTo(profile, account.username, "", account, automatic = true)
+            } catch (error: Exception) {
+                if (error !is CancellationException && generation == expected)
+                    mutable.value = mutable.value.copy(startupPending = false, error = "无法恢复本机登录记录，请重试。")
+            }
+        }
+    }
 
     fun connect(url: String, username: String, password: String, network: String = "direct") {
         val profile = mutable.value.profile
@@ -96,11 +117,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         connectTo(draft, username, password, null)
     }
     fun restore(account: AccountRecord) { mutable.value.profile?.let { connectTo(it, account.username, "", account) } }
-    private fun connectTo(draft: ServerProfile, username: String, password: String, restored: AccountRecord?) {
+    private fun connectTo(draft: ServerProfile, username: String, password: String, restored: AccountRecord?, automatic: Boolean = false) {
+        if (!automatic) startupJob?.cancel()
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
         val expected = generation
-        mutable.value = mutable.value.copy(busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, previewScope = "", fileLayout = FileLayout.COVER)
+        mutable.value = mutable.value.copy(startupPending = automatic, busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, previewScope = "", fileLayout = FileLayout.COVER)
         operation = viewModelScope.launch {
             var opened: NasSession? = null
             try {
@@ -108,7 +130,19 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 val profile = store.save(draft)
                 require(profile.backend == BackendKind.NAS) { "Windows 服务适配尚未完成，暂不支持连接" }
                 if (profile.network == ConnectionMode.TAILNET) {
-                    val status = embeddedNetwork.status(); networkMutable.value = status
+                    var status = if (restored == null) embeddedNetwork.status() else embeddedNetwork.start()
+                    if (restored != null) {
+                        networkActivated = true
+                        try {
+                            kotlinx.coroutines.withTimeout(20_000) {
+                                while (!status.connected && status.state !in setOf("NeedsLogin", "NeedsMachineAuth", "Error")) {
+                                    delay(250); status = embeddedNetwork.status()
+                                }
+                            }
+                        } catch (_: kotlinx.coroutines.TimeoutCancellationException) { throw IllegalStateException("内嵌节点尚未连接，请检查网络并重试。") }
+                        observeNetwork()
+                    }
+                    networkMutable.value = status
                     if (!status.connected) throw IllegalStateException("请先连接并登录 Tailscale")
                 }
                 opened = if (restored == null) NasSession.login(profile, username, password)
@@ -121,6 +155,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 val accounts = store.accounts(profile)
                 val directory = store.directory(account)
                 if (generation != expected) return@launch
+                store.activate(profile, account, bound.owner)
+                if (generation != expected) return@launch
                 context = bound
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
@@ -131,10 +167,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                     applyDirectory(root, "/", "/", bound)
                     if (generation == expected) mutable.value = mutable.value.copy(notice = "上次的目录已不可用，已打开根目录")
                 }
+                if (generation == expected && context == bound) {
+                    mutable.value = mutable.value.copy(startupPending = false)
+                }
             } catch (error: Exception) {
                 if (error !is CancellationException && generation == expected) {
                     closeSession()
-                    mutable.value = mutable.value.copy(connected = false, busy = false, stage = "", error = error.message ?: "无法连接服务器")
+                    mutable.value = mutable.value.copy(startupPending = false, connected = false, busy = false, stage = "", error = error.message ?: "无法连接服务器")
                 }
             } finally {
                 val release = opened
@@ -257,9 +296,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (!mutable.value.busy && mutable.value.selected == null) search.open(bound, mutable.value.path, mutable.value.wirePath)
     }
     fun cancel() {
+        startupJob?.cancel()
         operation?.cancel()
         resumeOperation?.cancel()
-        mutable.value = mutable.value.copy(busy = false, stage = "")
+        val startup = mutable.value.startupPending
+        if (startup) { generation++; closeSession() }
+        mutable.value = mutable.value.copy(startupPending = false, busy = false, stage = "",
+            connected = if (startup) false else mutable.value.connected,
+            previewScope = if (startup) "" else mutable.value.previewScope)
     }
     fun back(): Boolean {
         if (mutable.value.selected != null) { leavePlayer(); return true }
@@ -374,7 +418,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val previous = closing; val media = mediaClosing
         if (old != null) closing = cleanup.launch { previous?.join(); media?.join(); old.api.close() }
     }
-    fun disconnect() { operation?.cancel(); generation++; closeSession(); navigation.clear(); mutable.value = ClientState(editorVersion = mutable.value.editorVersion) }
+    fun disconnect() { startupJob?.cancel(); operation?.cancel(); generation++; closeSession(); navigation.clear(); mutable.value = ClientState(editorVersion = mutable.value.editorVersion) }
     fun connectNetwork() {
         networkActivated = true
         networkJob?.cancel()
@@ -417,8 +461,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun stopNetwork(logout: Boolean = false) {
         networkJob?.cancel(); networkPollJob?.cancel()
-        if (context?.profile?.network == ConnectionMode.TAILNET) disconnect()
-        networkJob = viewModelScope.launch { try { closing?.join(); mediaClosing?.join(); if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
+        val old = context?.takeIf { it.profile.network == ConnectionMode.TAILNET }
+        if (old != null) disconnect()
+        networkJob = viewModelScope.launch { try { closing?.join(); mediaClosing?.join(); old?.let { store.deactivate(it.account, it.owner) }; if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
     }
     override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); previewImageLoader.shutdown(); player.checkpoint = null; player.release(); super.onCleared() }
 }

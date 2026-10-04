@@ -19,7 +19,7 @@ class FileLayoutStorageTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private fun open(file: File, backups: File) = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath)
-        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups)).build()
+        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups), ActiveSessionMigration(backups)).build()
 
     @Test fun layoutSurvivesReopenAndDirectoryNavigationWithoutCrossingAccounts(): Unit = runBlocking {
         val folder = File(context.cacheDir, "layout-${UUID.randomUUID()}").apply { check(mkdirs()) }
@@ -67,7 +67,7 @@ class FileLayoutStorageTest {
                 assertEquals("/%D6%D0", directory.wirePath)
                 assertEquals(AppTheme.DARK, db.preferences().observe().first()?.theme)
                 assertEquals(12345L, db.playback().snapshot("account", "/movie", "identity")?.positionMs)
-                val backup = JSONObject(backups.listFiles()!!.single().readText())
+                val backup = JSONObject(backups.listFiles()!!.single { it.name.startsWith("schema3-before4-") }.readText())
                 assertEquals(3, backup.getInt("schemaVersion"))
                 assertEquals("DARK", backup.getJSONArray("app_preferences").getJSONObject(0).getString("theme"))
                 assertFalse(backup.getJSONArray("directory_state").getJSONObject(0).has("fileLayout"))

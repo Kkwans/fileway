@@ -39,6 +39,11 @@ data class AccountRecord(
 data class DirectoryState(@PrimaryKey val accountKey: String, val path: String, val wirePath: String,
     @ColumnInfo(defaultValue = "'COVER'") val fileLayout: FileLayout = FileLayout.COVER)
 
+@Entity(tableName = "active_session", foreignKeys = [ForeignKey(
+    entity = AccountRecord::class, parentColumns = ["key"], childColumns = ["accountKey"], onDelete = ForeignKey.CASCADE,
+)], indices = [Index(value = ["accountKey"])])
+data class ActiveSession(@PrimaryKey val id: Int = 1, val accountKey: String, val owner: String)
+
 enum class ProgressSync { PENDING, SYNCED, IDENTITY_CHANGED, UNSUPPORTED }
 
 @Entity(tableName = "playback_snapshots", primaryKeys = ["accountKey", "resourceKey", "identity"], foreignKeys = [ForeignKey(
@@ -72,11 +77,15 @@ data class PlaybackSnapshot(
     @Upsert suspend fun saveAccount(account: AccountRecord)
     @Query("SELECT * FROM directory_state WHERE accountKey = :key") suspend fun directory(key: String): DirectoryState?
     @Upsert suspend fun saveDirectory(directory: DirectoryState)
+    @Query("SELECT * FROM active_session WHERE id = 1") suspend fun activeSession(): ActiveSession?
+    @Upsert suspend fun saveActiveSession(session: ActiveSession)
+    @Query("DELETE FROM active_session WHERE id = 1 AND accountKey = :key") suspend fun clearActiveSession(key: String)
+    @Query("DELETE FROM active_session WHERE id = 1 AND accountKey = :key AND owner = :owner") suspend fun releaseActiveSession(key: String, owner: String)
     @Query("SELECT credentialRef FROM accounts WHERE profileId = :id") suspend fun credentialRefs(id: String): List<String>
     @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
 }
 
-@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class], version = 4, exportSchema = true)
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class], version = 5, exportSchema = true)
 abstract class ClientDatabase : RoomDatabase() {
     abstract fun profiles(): ProfileDao
     abstract fun playback(): PlaybackDao
@@ -88,7 +97,8 @@ abstract class ClientDatabase : RoomDatabase() {
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .addMigrations(HistoryMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
                     AppearanceMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
-                    FileLayoutMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
+                    FileLayoutMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
+                    ActiveSessionMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
                 // Never silently delete state when a future migration is missing.
                 .build().also { instance = it }
         }

@@ -29,6 +29,21 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
     }
 
     suspend fun profile(id: String) = dao.profile(id)
+    suspend fun active(): Pair<ServerProfile, AccountRecord>? = database.withTransaction {
+        val key = dao.activeSession()?.accountKey ?: return@withTransaction null
+        val account = dao.account(key) ?: return@withTransaction null
+        val profile = dao.profile(account.profileId) ?: return@withTransaction null
+        if (profile.backend != BackendKind.NAS || profile.sourceRevision != account.sourceRevision) {
+            dao.clearActiveSession(key)
+            return@withTransaction null
+        }
+        profile to account
+    }
+    suspend fun activate(profile: ServerProfile, account: AccountRecord, owner: String = UUID.randomUUID().toString()) = database.withTransaction {
+        check(dao.profile(profile.id) == profile && dao.account(account.key) == account) { "登录来源已变化，请重新连接" }
+        dao.saveActiveSession(ActiveSession(accountKey = account.key, owner = owner))
+    }
+    suspend fun deactivate(account: AccountRecord, owner: String) = dao.releaseActiveSession(account.key, owner)
     suspend fun accounts(profile: ServerProfile) = dao.accounts(profile.id, profile.sourceRevision)
     suspend fun directory(account: AccountRecord) = dao.directory(account.key)
     suspend fun saveDirectory(account: AccountRecord, path: String, wirePath: String) = database.withTransaction {
@@ -76,6 +91,7 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
 
     suspend fun signOut(account: AccountRecord) = withContext(Dispatchers.IO) {
         dao.account(account.key)?.let { vault.remove(it.credentialRef) }
+        dao.clearActiveSession(account.key)
     }
 
     suspend fun remove(profile: ServerProfile) = withContext(Dispatchers.IO) {

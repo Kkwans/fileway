@@ -20,7 +20,7 @@ class AppearanceStorageTest {
     private val context = instrumentation.targetContext
     private fun folder() = File(context.cacheDir, "appearance-${UUID.randomUUID()}").apply { check(mkdirs()) }
     private fun open(file: File, backups: File) = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath)
-        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups)).build()
+        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups), ActiveSessionMigration(backups)).build()
 
     @Test fun themesPersistAcrossDatabaseReopenAndPreserveProfiles(): Unit = runBlocking {
         val folder = folder(); val file = File(folder, "state.db")

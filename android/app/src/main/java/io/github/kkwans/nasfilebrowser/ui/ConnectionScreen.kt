@@ -71,7 +71,7 @@ import io.github.kkwans.nasfilebrowser.data.*
     var name by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.name.orEmpty()) }
     var backend by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.backend ?: BackendKind.NAS) }
     var url by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.address.orEmpty()) }
-    var username by rememberSaveable(state.editorVersion) { mutableStateOf("") }
+    var username by rememberSaveable(state.editorVersion) { mutableStateOf(state.accountName) }
     // Passwords never enter saved instance state or acceptance artifacts.
     var password by remember(state.editorVersion) { mutableStateOf("") }
     var visiblePassword by remember { mutableStateOf(false) }

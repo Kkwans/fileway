@@ -1,6 +1,7 @@
 package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,7 +38,19 @@ import java.util.Locale
     val state by model.state.collectAsStateWithLifecycle()
     val recent by model.recent.collectAsStateWithLifecycle()
     val search by model.search.state.collectAsStateWithLifecycle()
-    BackHandler(state.connected) { if (!model.back()) model.disconnect() }
+    val activity = LocalActivity.current
+    BackHandler(state.connected) { if (!model.back()) activity?.finish() }
+    BackHandler(state.startupPending) { model.cancel() }
+    if (state.startupPending) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                Text(state.stage.ifBlank { "正在打开文件库" }, style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = model::cancel) { Text("取消") }
+            }
+        }
+        return
+    }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
     LibraryTheme {

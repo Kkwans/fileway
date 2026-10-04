@@ -22,6 +22,7 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(AndroidJUnit4::class)
 class ClientSessionTest {
@@ -66,7 +67,9 @@ class ClientSessionTest {
         }
     }
 
-    private class Fixture(private val label: String) : Closeable {
+    internal class Fixture(private val label: String) : Closeable {
+        val logins = AtomicInteger()
+        @Volatile var rejectRequests = false
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         private val acceptor = Thread({
@@ -93,10 +96,15 @@ class ClientSessionTest {
             val body = CharArray(headers["content-length"]?.toIntOrNull() ?: 0)
             var read = 0
             while (read < body.size) { val count = reader.read(body, read, body.size - read); if (count < 0) return; read += count }
+            if (rejectRequests && endpoint != "/api/login") {
+                socket.getOutputStream().apply { write("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); flush() }
+                return
+            }
             val response: String
             val type: String
             when {
                 endpoint == "/api/login" -> {
+                    logins.incrementAndGet()
                     val username = JSONObject(String(body)).getString("username")
                     val payload = JSONObject().put("user", JSONObject().put("id", if (username == "two") 2 else 1).put("username", username))
                     response = "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
