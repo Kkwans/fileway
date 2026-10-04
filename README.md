@@ -12,9 +12,11 @@ See the [0.3 TODO and first-release gates](docs/android-0.3-todo.md) for the cur
 
 ## Install the UI preview
 
-[Android 0.2.1 preview](https://github.com/Kkwans/nas-file-browser-client/releases/tag/android-preview-0.2.1-3c7f9a5) includes rounded file/category cards, four layouts, NAS search/previews and settings. The APK uses the original dedicated signing certificate with versionCode 3; a signed covering upgrade retaining a synthetic profile was verified on the owned API35 emulator.
+[Android v0.3 preview — download APK](https://github.com/Kkwans/nas-file-browser-client/releases/download/android-preview-0.3.0-35eee1f/nas-file-browser-android-preview-35eee1f.apk)
 
-This is a debug preview, not final release. The recreation/system-bar inset regression and browser regression gates have passed in source. ASS and intermittent initial decoding remain open; first-login embedded networking and session restoration are user-reported blockers. Real-device/HDR/external-tailnet gates are pending. See the release notes and [installation scope](docs/android-preview-0.2.md) before acceptance.
+Includes embedded-network startup fixes, session restoration, grouped connection/settings cards, clickable breadcrumbs, five shared browser/search layouts, original-ratio waterfall thumbnails with complete filenames, playback gestures/custom rates, configurable disk caches and image viewing/cache management. VersionCode 4 uses the original dedicated certificate for covering upgrades. Source `35eee1f0a350a271fc7feaaa674798a6818b74e9`.
+
+This is a signed debug preview delivered for user acceptance. Linux build/cache race, local build/lint/logic tests and package signature/alignment checks passed; comprehensive acceptance of the new interactions/caches/UI and phone covering upgrades was not performed. Service-side search history, ASS/initial decode, real-device/HDR/external-tailnet and full-release gates remain open. See [release notes](https://github.com/Kkwans/nas-file-browser-client/releases/tag/android-preview-0.3.0-35eee1f) and [installation scope](docs/preview-0.3.md).
 
 ## Build
 
