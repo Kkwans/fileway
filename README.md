@@ -8,11 +8,13 @@ Android 10+ / arm64. Kotlin, Compose, libVLC and an embedded Go/tsnet transport.
 
 Implementation in progress. No hardware decoding, HDR or external-network acceptance has passed yet.
 
+See the [0.3 TODO and first-release gates](docs/android-0.3-todo.md) for the current user-reported blockers, implementation order and separate device acceptance requirements.
+
 ## Install the UI preview
 
 [Android 0.2.1 preview](https://github.com/Kkwans/nas-file-browser-client/releases/tag/android-preview-0.2.1-3c7f9a5) includes rounded file/category cards, four layouts, NAS search/previews and settings. The APK uses the original dedicated signing certificate with versionCode 3; a signed covering upgrade retaining a synthetic profile was verified on the owned API35 emulator.
 
-This is a debug preview, not final release. The recreation/system-bar inset regression is fixed in source; ASS, initial decoding and Linux browser regressions remain open; real-device/HDR/external-tailnet gates are pending. See the release notes and [installation scope](docs/android-preview-0.2.md) before acceptance.
+This is a debug preview, not final release. The recreation/system-bar inset regression and browser regression gates have passed in source. ASS and intermittent initial decoding remain open; first-login embedded networking and session restoration are user-reported blockers. Real-device/HDR/external-tailnet gates are pending. See the release notes and [installation scope](docs/android-preview-0.2.md) before acceptance.
 
 ## Build
 
