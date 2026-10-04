@@ -45,6 +45,9 @@ class BrowserScreenTest {
             assertFalse(device.hasObject(By.text("切换服务器")))
             val search = device.wait(Until.findObject(By.desc("搜索文件")), 5000) ?: error("Header search icon missing")
             assertTrue("Search belongs in the first toolbar on the right", search.visibleBounds.top < device.displayHeight * .12f && search.visibleBounds.centerX() > device.displayWidth * .8f)
+            val folders = listOf("旅行", "文档").map { text(it).visibleBounds }
+            assertTrue("Folders must share cover-grid columns instead of spanning full-width rows", folders[0].left != folders[1].left)
+            assertTrue("Folder titles must align in the same grid row", kotlin.math.abs(folders[0].top - folders[1].top) <= 2)
             capture("cover-default")
             chooseLayout("常规列表")
             val list = device.wait(Until.findObject(By.desc("文件列表")), 5000) ?: error("File list missing")

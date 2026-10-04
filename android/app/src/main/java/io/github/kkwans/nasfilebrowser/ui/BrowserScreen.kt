@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -99,16 +98,14 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                         }, state = gridState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(state.files, key = { it.wirePath.ifEmpty { it.path } },
-                            span = { if (cover && it.directory) GridItemSpan(maxLineSpan) else GridItemSpan(1) }) { file ->
-                            FileEntry(model, file, if (cover && file.directory) FileLayout.LIST else layout,
-                                !state.busy, { model.open(file) }, { details = file })
+                        items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
+                            FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
                         }
                     }
                 } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = if (layout == FileLayout.LIST) "文件列表" else "大图文件列表" },
                     state = listState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                        FileEntry(model, file, if (file.directory) FileLayout.LIST else layout, !state.busy, { model.open(file) }, { details = file })
+                        FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
                     }
                 }
             }
@@ -127,9 +124,12 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         val media = !file.directory && (file.type in setOf("image", "video") || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "jpg", "jpeg", "png", "webp"))
         if (media) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(6.dp)),
             showStatusText = layout != FileLayout.LIST && layout != FileLayout.COMPACT)
-        else Box(modifier.background(colors.surface, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
-            if (file.directory) Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(26.dp), tint = colors.onSurfaceVariant)
-            else Text(file.name.substringAfterLast('.', "文件").uppercase().take(5), style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+        else Box(modifier.background(if (file.directory) colors.primary.copy(alpha = .07f) else colors.surface, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+            if (file.directory) Icon(painterResource(R.drawable.ic_folder), null,
+                Modifier.size(when (layout) { FileLayout.COVER -> 56.dp; FileLayout.DETAIL -> 44.dp; else -> 26.dp }), tint = colors.primary)
+            else Text(file.name.substringAfterLast('.', "文件").uppercase().take(5),
+                style = if (layout == FileLayout.COVER || layout == FileLayout.DETAIL) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelMedium,
+                color = colors.onSurfaceVariant)
         }
     }
     @Composable fun caption(modifier: Modifier) {
@@ -144,8 +144,17 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
                 }
             } else Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-            if (metadata != null) metadata() else Text((if (file.directory) "文件夹" else readableSize(file.size)) + (location?.let { " · $it" } ?: ""),
-                style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (metadata != null) metadata() else {
+                val label = (if (file.directory) "文件夹" else readableSize(file.size)) + (location?.let { " · $it" } ?: "")
+                if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) {
+                    val measurer = rememberTextMeasurer()
+                    val density = LocalDensity.current
+                    val measured = measurer.measure("国Ag", style = MaterialTheme.typography.bodySmall).size.height
+                    Box(Modifier.fillMaxWidth().height(with(density) { measured.toDp() })) {
+                        Text(label, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else Text(label, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
     Surface(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).then(action),

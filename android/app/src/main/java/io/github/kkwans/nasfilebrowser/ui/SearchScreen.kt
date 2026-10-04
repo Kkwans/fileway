@@ -164,7 +164,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
     val colors = MaterialTheme.colorScheme
     val resource = remember(result, basePath, baseWirePath) { result.resource(basePath, baseWirePath) }
     Column(Modifier.fillMaxWidth()) {
-        if (resource != null) FileEntry(model, resource, if (result.directory) FileLayout.LIST else FileLayout.DETAIL,
+        if (resource != null) FileEntry(model, resource, FileLayout.DETAIL,
             enabled, open, details, location = resource.path.substringBeforeLast('/', "").ifEmpty { "/" })
         else Column(Modifier.fillMaxWidth().combinedClickable(onClick = open, onLongClick = details,
             onLongClickLabel = "查看完整名称和位置", role = Role.Button, enabled = enabled).padding(vertical = 12.dp)) {
