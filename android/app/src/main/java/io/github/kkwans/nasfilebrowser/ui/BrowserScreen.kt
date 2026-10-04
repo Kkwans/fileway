@@ -5,17 +5,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
-import androidx.compose.foundation.lazy.staggeredgrid.items
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -55,12 +44,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         outlineVariant = if (dark) Color(0xFF34343A) else Color(0xFFE9E9ED),
     )
     val layout = state.fileLayout
-    var layoutMenu by remember { mutableStateOf(false) }
     var details by remember(state.wirePath) { mutableStateOf<ResourceRef?>(null) }
-    val listState = rememberLazyListState()
-    val gridState = rememberLazyGridState()
-    val waterfallState = rememberLazyStaggeredGridState()
-    LaunchedEffect(state.wirePath) { listState.scrollToItem(0); gridState.scrollToItem(0); waterfallState.scrollToItem(0) }
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
@@ -69,15 +53,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     IconButton(onClick = model::retry, enabled = !state.busy) {
                         Icon(painterResource(R.drawable.ic_refresh), "刷新", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
                     }
-                    Box {
-                        TextButton(onClick = { layoutMenu = true }, shape = RoundedCornerShape(8.dp)) { Text(layout.label, style = MaterialTheme.typography.bodySmall) }
-                        DropdownMenu(expanded = layoutMenu, onDismissRequest = { layoutMenu = false }) {
-                            FileLayout.entries.forEach { option ->
-                                DropdownMenuItem(text = { Text(option.label, color = if (layout == option) colors.primary else colors.onBackground) },
-                                    onClick = { model.fileLayout(option); layoutMenu = false })
-                            }
-                        }
-                    }
+                    FileLayoutMenu(layout, select = model::fileLayout)
                     IconButton(onClick = model::openSearch, enabled = !state.busy) {
                         Icon(painterResource(R.drawable.ic_search), "搜索文件", Modifier.size(22.dp), tint = colors.onBackground)
                     }
@@ -97,35 +73,9 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 } else Text(if (state.path == "/") "全部文件 · ${state.files.size} 项" else "${state.files.size} 项", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                 if (!state.busy && state.files.isEmpty() && state.error == null) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("这个目录还没有文件。", color = colors.onSurfaceVariant)
-                } else if (layout == FileLayout.UNBOUNDED) {
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                    LazyVerticalStaggeredGrid(if (maxWidth < 600.dp) StaggeredGridCells.Fixed(2) else StaggeredGridCells.Adaptive(180.dp),
-                        Modifier.fillMaxSize().semantics { contentDescription = "无界文件网格" },
-                        state = waterfallState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        verticalItemSpacing = 8.dp, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                            FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
-                        }
-                    }
-                    }
-                } else if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) {
-                    val cover = layout == FileLayout.COVER
-                    val unbounded = layout == FileLayout.UNBOUNDED
-                    LazyVerticalGrid(GridCells.Adaptive(if (cover) 148.dp else if (unbounded) 112.dp else 96.dp),
-                        Modifier.weight(1f).background(colors.surface).semantics {
-                            contentDescription = if (cover) "文件网格" else if (unbounded) "无界文件网格" else "紧凑文件网格"
-                        }, state = gridState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                            FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
-                        }
-                    }
-                } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = if (layout == FileLayout.LIST) "文件列表" else "大图文件列表" },
-                    state = listState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
-                        FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
-                    }
+                } else FileCollection(state.files, layout, Modifier.weight(1f), layout.collectionDescription(),
+                    resetKey = state.previewScope to state.wirePath, keyOf = { it.wirePath.ifEmpty { it.path } }) { file ->
+                    FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
                 }
             }
         }

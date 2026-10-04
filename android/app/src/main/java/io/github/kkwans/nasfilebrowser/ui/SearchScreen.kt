@@ -6,8 +6,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -89,12 +87,15 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                             Icon(painterResource(R.drawable.ic_search), "执行搜索", Modifier.size(22.dp), tint = if (state.query.isNotBlank() && !client.busy) colors.primary else colors.onSurfaceVariant)
                         }
                     }
-                    LazyColumn(Modifier.fillMaxSize().semantics { contentDescription = "搜索结果" }, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 16.dp)) {
-                        item(key = "context") {
-                            Text(state.resultBasePath, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(state.resultBasePath, modifier = Modifier.weight(1f).padding(end = 8.dp),
                                 style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        item(key = "scope") {
+                            FileLayoutMenu(client.fileLayout, enabled = !client.busy, select = model::fileLayout)
+                    }
+                    FileCollection(state.items, client.fileLayout, Modifier.weight(1f), "搜索结果",
+                        resetKey = Triple(client.previewScope, state.resultBaseWirePath, state.query to state.scope), keyOf = { it.relativePath }, header = {
+                        Column {
+                        Column {
                             Row(Modifier.fillMaxWidth().padding(top = 4.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 SearchScope.entries.forEach { value ->
                                     val selected = state.scope == value
@@ -110,7 +111,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                             }
                             HorizontalDivider(color = colors.outlineVariant)
                         }
-                        item(key = "status") {
+                        Column {
                             val active = state.running || state.openingPath != null || client.busy
                             Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 if (active) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.primary)
@@ -137,10 +138,11 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                                     style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 16.dp))
                             }
                         }
-                        items(state.items, key = { it.relativePath }) { result ->
-                            SearchResultRow(model, result, state.resultBasePath, state.resultBaseWirePath, state.openingPath == result.relativePath, enabled = !client.busy,
-                                open = { if (!model.state.value.busy) { focus.clearFocus(); model.search.openResult(result) } }, details = { details = result })
                         }
+                    }) { result ->
+                        SearchResultRow(model, result, state.resultBasePath, state.resultBaseWirePath, client.fileLayout,
+                            state.openingPath == result.relativePath, enabled = !client.busy,
+                            open = { if (!model.state.value.busy) { focus.clearFocus(); model.search.openResult(result) } }, details = { details = result })
                     }
                 }
             }
@@ -164,11 +166,11 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
 }
 
 @Composable private fun SearchResultRow(model: ClientModel, result: SearchResult, basePath: String, baseWirePath: String,
-    opening: Boolean, enabled: Boolean, open: () -> Unit, details: () -> Unit) {
+    layout: FileLayout, opening: Boolean, enabled: Boolean, open: () -> Unit, details: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val resource = remember(result, basePath, baseWirePath) { result.resource(basePath, baseWirePath) }
     Column(Modifier.fillMaxWidth()) {
-        if (resource != null) FileEntry(model, resource, FileLayout.DETAIL,
+        if (resource != null) FileEntry(model, resource, layout,
             enabled, open, details, location = resource.path.substringBeforeLast('/', "").ifEmpty { "/" })
         else Column(Modifier.fillMaxWidth().combinedClickable(onClick = open, onLongClick = details,
             onLongClickLabel = "查看完整名称和位置", role = Role.Button, enabled = enabled).padding(vertical = 12.dp)) {
@@ -180,6 +182,5 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             Text("正在确认文件", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
-        Spacer(Modifier.height(8.dp))
     }
 }
