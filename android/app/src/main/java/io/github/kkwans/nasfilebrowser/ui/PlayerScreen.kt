@@ -84,6 +84,18 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var interaction by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf<PlayerSheet?>(null) }
     var seek by remember(file) { mutableStateOf<Float?>(null) }
+    var showRequest by remember(file) { mutableStateOf(false) }
+    val feedback = remember { SnackbarHostState() }
+    LaunchedEffect(client.busy, file) {
+        showRequest = false
+        if (client.busy) { delay(2000); showRequest = true }
+    }
+    LaunchedEffect(client.progressStatus) {
+        if (client.progressStatus == "续播保存失败，请重试" &&
+            feedback.showSnackbar("续播未能保存", actionLabel = "重试", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
+            model.retryProgress()
+        }
+    }
     val blocked = state.error != null || client.error != null || client.busy || !state.playing || state.phase != "正在播放"
     fun touch() { visible = true; interaction++ }
     DisposableEffect(accessibility) {
@@ -162,7 +174,24 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                         if (liveState.seekable) model.player.seek(liveState.positionMs + if (offset.x < size.width / 2) -10_000 else 10_000)
                                     })
                             })
-                            if (state.phase in setOf("正在打开视频", "正在缓冲", "正在跳转")) {
+                            val failure = state.error ?: client.error
+                            if (failure != null) {
+                                Column(Modifier.align(Alignment.Center).widthIn(max = 360.dp).padding(20.dp)
+                                    .clip(RoundedCornerShape(10.dp)).background(PlayerPanel).padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text(failure, fontSize = 14.sp, lineHeight = 20.sp, color = Color(0xFFFFA0AC))
+                                    PlayerLabel("重试", "重试播放") {
+                                        if (state.error != null) model.open(file) else model.togglePlayback()
+                                    }
+                                }
+                            } else if (showRequest) {
+                                Row(Modifier.align(Alignment.Center).clip(RoundedCornerShape(10.dp)).background(PlayerPanel).padding(start = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    CircularProgressIndicator(Modifier.size(18.dp), color = PlayerAccent, strokeWidth = 2.dp)
+                                    Text("正在加载", fontSize = 13.sp)
+                                    PlayerLabel("取消", "取消播放请求") { model.cancel() }
+                                }
+                            } else if (!client.busy && state.phase in setOf("正在打开视频", "正在缓冲", "正在跳转")) {
                                 Row(Modifier.align(Alignment.Center).clip(RoundedCornerShape(8.dp)).background(Color(0xCC151515)).padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     CircularProgressIndicator(Modifier.size(18.dp), color = PlayerAccent, strokeWidth = 2.dp)
                                     Text(if (state.phase == "正在缓冲") "缓冲 ${state.buffering.toInt()}%" else state.phase, fontSize = 13.sp)
@@ -220,17 +249,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
                             DetailAction(R.drawable.art_volume, "音量", "${state.volume}%", "播放器音量") { touch(); sheet = PlayerSheet.VOLUME }
                         }
-                        client.progressStatus?.let { Text(it, color = PlayerSecondary, fontSize = 12.sp) }
-                    }
-                    if (state.error != null || client.error != null || client.busy || client.progressStatus?.contains("失败") == true || client.progressStatus?.contains("待同步") == true) {
-                        Row(Modifier.fillMaxWidth().background(PlayerPanel).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(state.error ?: client.error ?: if (client.busy) client.stage else client.progressStatus.orEmpty(), color = if (state.error != null || client.error != null) Color(0xFFFFA0AC) else PlayerSecondary, modifier = Modifier.weight(1f), fontSize = 13.sp)
-                            PlayerLabel(if (client.busy) "取消" else "重试", "处理播放状态") {
-                                if (client.busy) model.cancel() else if (state.error != null) model.open(file) else model.retryProgress()
-                            }
-                        }
                     }
                 }
+                SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp))
                 if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
                         PlayerSheet.AUDIO, PlayerSheet.SUBTITLE -> {
