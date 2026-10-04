@@ -27,11 +27,12 @@ import kotlinx.coroutines.awaitCancellation
 
 /** NAS generates the preview; Coil fetches/decodes only the local capability. */
 @Composable internal fun MediaThumbnail(model: ClientModel, file: ResourceRef, modifier: Modifier, showStatusText: Boolean = true,
-    contentScale: ContentScale = ContentScale.Crop) {
+    contentScale: ContentScale = ContentScale.Crop, naturalAspect: Boolean = false) {
     val client by model.state.collectAsStateWithLifecycle()
     key(client.previewScope, file.wirePath, file.path, file.size, file.modified) {
         var asset by remember { mutableStateOf<PreviewLease?>(null) }
         var phase by remember { mutableStateOf("预览加载中") }
+        var aspect by remember { mutableFloatStateOf(1f) }
         val context = LocalContext.current
         LaunchedEffect(Unit) {
             var owned: PreviewLease? = null
@@ -44,7 +45,8 @@ import kotlinx.coroutines.awaitCancellation
             catch (_: Exception) { phase = "暂无预览" }
             finally { owned?.let { runCatching { it.release() } } }
         }
-        Box(modifier.background(MaterialTheme.colorScheme.surface).semantics {
+        val frame = if (naturalAspect) modifier.aspectRatio(aspect) else modifier
+        Box(frame.background(MaterialTheme.colorScheme.surface).semantics {
             contentDescription = "${file.name} 预览"
             stateDescription = phase
         }, contentAlignment = Alignment.Center) {
@@ -54,7 +56,11 @@ import kotlinx.coroutines.awaitCancellation
                     .data(lease.url).diskCachePolicy(CachePolicy.DISABLED).size(512, 512).build() }
                 AsyncImage(model = request, imageLoader = model.previewImageLoader, contentDescription = null,
                     modifier = Modifier.fillMaxSize(), contentScale = contentScale,
-                    onSuccess = { phase = "预览已加载" }, onError = { phase = "暂无预览" })
+                    onSuccess = { result ->
+                        val loaded = result.result.image
+                        if (loaded.width > 0 && loaded.height > 0) aspect = loaded.width.toFloat() / loaded.height
+                        phase = "预览已加载"
+                    }, onError = { phase = "暂无预览" })
             }
             if (phase != "预览已加载") {
                 Icon(painterResource(R.drawable.art_play), null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)

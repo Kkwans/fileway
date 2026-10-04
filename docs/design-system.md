@@ -25,7 +25,7 @@ Spacing: 4/8/12/16/24/32dp. Connection page gutters and section padding 16dp; me
 
 ## Layout
 
-Unbounded grid adapts the web Windows icon layout: adaptive 112dp cells, 84dp artwork, centered two-line names and existing 10dp cards. Thumbnail Fit preserves the entire source image instead of cropping; this mode omits size/time rows and keeps long-press complete details. Other layouts retain their established artwork scale and metadata. Account/source-scoped layout persistence includes the new stable UNBOUNDED value.
+Unbounded grid now follows the user's Xiaohongshu waterfall reference: two independent columns in compact windows, adaptive columns on larger windows, natural image height from the loaded preview's intrinsic ratio, and complete left-aligned filenames with no line clamp or ellipsis. Existing 10dp cards remain. Thumbnail Fit preserves the entire image; this mode omits size/time rows and keeps long-press details. The earlier fixed-slot/two-line prototype did not meet this requirement and is superseded. Account/source-scoped layout persistence retains the stable UNBOUNDED value.
 
 File metadata comes from the existing NAS `modified` field. Regular rows keep size and local modification time on one quiet metadata line; cover/detail cards provide a time line, while compact cards retain their density. Shared selectable details use 12dp corners, the normal page title, secondary field labels and primary-color values for complete name, root-based path, source type, known size and modification time. Missing dates remain explicitly unavailable; directories have no fabricated aggregate size. Search reuses the same details and retains its open/close actions.
 

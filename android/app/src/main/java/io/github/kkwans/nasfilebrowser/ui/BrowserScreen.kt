@@ -12,6 +12,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -55,7 +59,8 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     var details by remember(state.wirePath) { mutableStateOf<ResourceRef?>(null) }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
-    LaunchedEffect(state.wirePath) { listState.scrollToItem(0); gridState.scrollToItem(0) }
+    val waterfallState = rememberLazyStaggeredGridState()
+    LaunchedEffect(state.wirePath) { listState.scrollToItem(0); gridState.scrollToItem(0); waterfallState.scrollToItem(0) }
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
@@ -92,7 +97,18 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 } else Text(if (state.path == "/") "全部文件 · ${state.files.size} 项" else "${state.files.size} 项", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                 if (!state.busy && state.files.isEmpty() && state.error == null) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("这个目录还没有文件。", color = colors.onSurfaceVariant)
-                } else if (layout == FileLayout.COVER || layout == FileLayout.COMPACT || layout == FileLayout.UNBOUNDED) {
+                } else if (layout == FileLayout.UNBOUNDED) {
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    LazyVerticalStaggeredGrid(if (maxWidth < 600.dp) StaggeredGridCells.Fixed(2) else StaggeredGridCells.Adaptive(180.dp),
+                        Modifier.fillMaxSize().semantics { contentDescription = "无界文件网格" },
+                        state = waterfallState, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        verticalItemSpacing = 8.dp, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(state.files, key = { it.wirePath.ifEmpty { it.path } }) { file ->
+                            FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
+                        }
+                    }
+                    }
+                } else if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) {
                     val cover = layout == FileLayout.COVER
                     val unbounded = layout == FileLayout.UNBOUNDED
                     LazyVerticalGrid(GridCells.Adaptive(if (cover) 148.dp else if (unbounded) 112.dp else 96.dp),
@@ -127,8 +143,10 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         val media = !file.directory && (file.type in setOf("image", "video") || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "jpg", "jpeg", "png", "webp"))
         if (media) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(6.dp)),
             showStatusText = layout == FileLayout.COVER || layout == FileLayout.DETAIL,
-            contentScale = if (layout == FileLayout.UNBOUNDED) ContentScale.Fit else ContentScale.Crop)
-        else Box(modifier.background(if (file.directory) colors.primary.copy(alpha = .07f) else colors.surface, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+            contentScale = if (layout == FileLayout.UNBOUNDED) ContentScale.Fit else ContentScale.Crop,
+            naturalAspect = layout == FileLayout.UNBOUNDED)
+        else Box((if (layout == FileLayout.UNBOUNDED) modifier.height(84.dp) else modifier)
+            .background(if (file.directory) colors.primary.copy(alpha = .07f) else colors.surface, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
             if (file.directory) Icon(painterResource(R.drawable.ic_folder), null,
                 Modifier.size(when (layout) { FileLayout.COVER, FileLayout.UNBOUNDED -> 56.dp; FileLayout.DETAIL -> 44.dp; else -> 26.dp }), tint = colors.primary)
             else Text(file.name.substringAfterLast('.', "文件").uppercase().take(5),
@@ -140,7 +158,9 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val grid = layout == FileLayout.COVER || layout == FileLayout.COMPACT || layout == FileLayout.UNBOUNDED
             val titleStyle = if (grid) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge
-            if (grid) {
+            if (layout == FileLayout.UNBOUNDED) {
+                Text(file.name, modifier = Modifier.fillMaxWidth(), style = titleStyle, textAlign = TextAlign.Start, color = colors.onBackground)
+            } else if (grid) {
                 val measurer = rememberTextMeasurer()
                 val density = LocalDensity.current
                 // Include actual Latin/CJK fallback metrics, rather than multiplying declared lineHeight.
@@ -182,9 +202,8 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 artwork(Modifier.size(56.dp)); caption(Modifier.fillMaxWidth())
             }
-            FileLayout.UNBOUNDED -> Column(Modifier.fillMaxWidth().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                artwork(Modifier.fillMaxWidth().height(84.dp)); caption(Modifier.fillMaxWidth())
+            FileLayout.UNBOUNDED -> Column(Modifier.fillMaxWidth()) {
+                artwork(Modifier.fillMaxWidth()); caption(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp))
             }
             FileLayout.DETAIL -> Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
