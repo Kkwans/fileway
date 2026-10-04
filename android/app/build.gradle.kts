@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.kkwans.nasfilebrowser"
         minSdk = 29
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.2.1-preview"
+        versionCode = 4
+        versionName = "0.3.0-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // External control-plane acceptance runs explicitly through adb.
         // Filter at discovery: UTP reports runtime assumptions as failures.
