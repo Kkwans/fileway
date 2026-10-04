@@ -279,6 +279,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun retry() { browse(mutable.value.path, mutable.value.wirePath) }
+    fun jumpDirectory(crumb: DirectoryCrumb) {
+        if (mutable.value.busy || crumb.path == mutable.value.path || crumb.wirePath == null) return
+        if (directoryTrail(mutable.value.path, mutable.value.wirePath).none { it == crumb }) return
+        navigation.clear()
+        browse(crumb.path, crumb.wirePath)
+    }
     suspend fun preview(file: ResourceRef): PreviewLease {
         val bound = context ?: error("服务器尚未连接")
         val asset = bound.api.preview(file.path, file.wirePath)
@@ -311,8 +317,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (mutable.value.tab != "files") { tab("files"); return true }
         if (navigation.isNotEmpty()) { val previous = navigation.removeLast(); browse(previous.first, previous.second); return true }
         if (mutable.value.path != "/") {
-            fun parent(value: String) = value.trimEnd('/').substringBeforeLast('/', "").ifBlank { "/" }
-            browse(parent(mutable.value.path), parent(mutable.value.wirePath)); return true
+            val trail = directoryTrail(mutable.value.path, mutable.value.wirePath)
+            val parent = trail.dropLast(1).lastOrNull { it.wirePath != null } ?: trail.first()
+            browse(parent.path, parent.wirePath ?: "/"); return true
         }
         return false
     }

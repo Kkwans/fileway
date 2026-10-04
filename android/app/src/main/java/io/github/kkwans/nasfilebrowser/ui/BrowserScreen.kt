@@ -76,12 +76,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                         Icon(painterResource(R.drawable.ic_search), "搜索文件", Modifier.size(22.dp), tint = colors.onBackground)
                     }
                 }
-                if (state.path != "/") Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { model.back() }, enabled = !state.busy) {
-                        Icon(painterResource(R.drawable.ic_arrow_back), "上一级", Modifier.size(22.dp))
-                    }
-                    Text(state.path, modifier = Modifier.weight(1f).padding(end = 16.dp), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
-                }
+                if (state.path != "/") DirectoryBreadcrumbs(state.path, state.wirePath, state.busy, { model.back() }, model::jumpDirectory)
                 state.error?.let { message ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(message, modifier = Modifier.weight(1f), color = colors.error, style = MaterialTheme.typography.bodyMedium)
