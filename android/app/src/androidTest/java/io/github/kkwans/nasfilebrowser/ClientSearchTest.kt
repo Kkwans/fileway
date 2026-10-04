@@ -182,6 +182,7 @@ class ClientSearchTest {
         val playbackStarted = CountDownLatch(1); val releasePlayback = CountDownLatch(1)
         val retryAttempts = AtomicInteger(); val metadataReads = AtomicInteger()
         val previewSeen = CountDownLatch(1)
+        val previewPaths = ConcurrentHashMap.newKeySet<String>()
         private val acceptor = Thread({
             while (!server.isClosed) {
                 val socket = try { server.accept() } catch (_: Exception) { break }
@@ -209,6 +210,7 @@ class ClientSearchTest {
             }
             check(headers["x-auth"].orEmpty().count { it == '.' } == 2)
             if (uri.path.startsWith("/api/preview/thumb/")) {
+                previewPaths.add(uri.path)
                 previewSeen.countDown()
                 val bytes = previewBody ?: byteArrayOf()
                 val status = if (previewBody == null) "404 Not Found" else "200 OK"
@@ -247,8 +249,9 @@ class ClientSearchTest {
             } else {
                 val items = JSONArray()
                 if (uri.path == "/api/resources/") directoryItems.forEach { name ->
+                    val image = name.endsWith(".png")
                     items.put(JSONObject().put("name", name).put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
-                        .put("isDir", !name.endsWith(".mkv")).put("type", if (name.endsWith(".mkv")) "video" else "").put("size", 104857600))
+                        .put("isDir", !image && !name.endsWith(".mkv")).put("type", if (image) "image" else if (name.endsWith(".mkv")) "video" else "").put("size", 104857600))
                 }
                 reply(socket, JSONObject().put("items", items).toString())
             }

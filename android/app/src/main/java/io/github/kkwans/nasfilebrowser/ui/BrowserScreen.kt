@@ -125,7 +125,8 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
     @Composable fun artwork(modifier: Modifier) {
         val media = !file.directory && (file.type in setOf("image", "video") || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "jpg", "jpeg", "png", "webp"))
-        if (media && layout != FileLayout.COMPACT) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(6.dp)), showStatusText = layout != FileLayout.LIST)
+        if (media) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(6.dp)),
+            showStatusText = layout != FileLayout.LIST && layout != FileLayout.COMPACT)
         else Box(modifier.background(colors.surface, RoundedCornerShape(4.dp)), contentAlignment = Alignment.Center) {
             if (file.directory) Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(26.dp), tint = colors.onSurfaceVariant)
             else Text(file.name.substringAfterLast('.', "文件").uppercase().take(5), style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
