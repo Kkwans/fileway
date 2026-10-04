@@ -58,12 +58,17 @@ class BrowserScreenTest {
             val grid = device.wait(Until.findObject(By.desc("文件网格")), 5000) ?: error("File grid missing")
             if (instrumentation.targetContext.resources.configuration.fontScale <= 1.05f) {
                 instrumentation.waitForIdleSync()
-                val sizes = device.findObjects(By.text("100.0 MB")).map { it.visibleBounds }
                 val offsets = listOf("A.mkv", "B.mkv", "C.mkv", longName).map { name ->
-                    val title = text(name).visibleBounds
-                    val size = sizes.filter { kotlin.math.abs(it.left - title.left) <= 2 && it.top >= title.bottom }.minByOrNull { it.top }
-                        ?: error("Visible metadata missing for $name")
-                    size.top - title.top
+                    var offset: Int? = null
+                    for (attempt in 0 until 6) {
+                        val title = device.findObject(By.text(name))?.visibleBounds
+                        val size = if (title == null || title.height() == 0) null else device.findObjects(By.text("100.0 MB")).map { it.visibleBounds }
+                            .filter { it.height() > 0 && kotlin.math.abs(it.left - title.left) <= 2 && it.top >= title.bottom }.minByOrNull { it.top }
+                        if (title != null && size != null) { offset = size.top - title.top; break }
+                        grid.scroll(Direction.DOWN, .35f)
+                        instrumentation.waitForIdleSync()
+                    }
+                    offset ?: error("Visible metadata missing for $name")
                 }
                 assertTrue("Grid metadata must align despite one- and two-line filenames", offsets.max() - offsets.min() <= 2)
             }

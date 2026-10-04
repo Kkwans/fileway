@@ -146,7 +146,11 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
             }
         }
         details?.let { result ->
-            AlertDialog(onDismissRequest = { details = null }, containerColor = colors.surface, title = { Text("文件详情") },
+            val resource = result.resource(state.resultBasePath, state.resultBaseWirePath)
+            if (resource != null) FileDetailsDialog(resource, openEnabled = !client.busy,
+                onOpen = { if (!model.state.value.busy) { details = null; model.search.openResult(result) } }, onDismiss = { details = null })
+            else AlertDialog(onDismissRequest = { details = null }, shape = RoundedCornerShape(12.dp), containerColor = colors.background,
+                title = { Text("文件详情", style = MaterialTheme.typography.titleLarge) },
                 text = {
                     Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Text(result.name, style = MaterialTheme.typography.bodyLarge)

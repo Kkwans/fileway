@@ -120,7 +120,7 @@ class SearchController(private val scope: CoroutineScope, private val isCurrent:
                 val size = if (rawSize is Number) rawSize.toString().toLongOrNull() else null
                 require(size != null && size >= 0 && name.isNotEmpty()) { "文件信息格式无效" }
                 mutable.value = mutable.value.copy(openingPath = null)
-                selected(ResourceRef(path, wire, name, directory, data.optString("type"), size))
+                selected(ResourceRef(path, wire, name, directory, data.optString("type"), size, data.optString("modified")))
             } catch (error: Exception) {
                 if (error !is CancellationException && current(context, expected)) {
                     mutable.value = mutable.value.copy(openingPath = null, message = error.message ?: "无法确认文件，请重试打开。")

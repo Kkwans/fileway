@@ -25,6 +25,8 @@ Spacing: 4/8/12/16/24/32dp. Connection page gutters and section padding 16dp; me
 
 ## Layout
 
+File metadata comes from the existing NAS `modified` field. Regular rows keep size and local modification time on one quiet metadata line; cover/detail cards provide a time line, while compact cards retain their density. Shared selectable details use 12dp corners, the normal page title, secondary field labels and primary-color values for complete name, root-based path, source type, known size and modification time. Missing dates remain explicitly unavailable; directories have no fabricated aggregate size. Search reuses the same details and retains its open/close actions.
+
 Files: one compact toolbar with layout selection, refresh and right-side search icon → directory breadcrumb when below root → content. Server/account details and switching belong in settings. Search context shows only the root-based directory path. Folders share the selected grid/detail card geometry with media, using the pinned folder vector on a quiet accent surface; they do not request fake previews. Grid cell size responds to width, retains readable titles and never stretches previews. Grid caption slots include actual CJK/Latin font metrics so folder and file card bottoms align.
 
 Recent: real resume entries, no fake hero. Server editor: a focused sheet/form with field examples, a visible connection mode and one primary action. Settings: grouped rows with clear current values.

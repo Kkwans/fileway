@@ -172,7 +172,8 @@ class ClientSearchTest {
         }
     }
 
-    internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null) : Closeable {
+    internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null,
+        private val modified: String = "") : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -229,7 +230,7 @@ class ClientSearchTest {
                 val output = socket.getOutputStream()
                 output.write("HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n".toByteArray())
                 val path = if (query == "ambiguous") "bad\uFFFDname" else query
-                val item = JSONObject().put("path", path).put("name", query).put("dir", !query.endsWith(".mkv")).put("size", if (query.endsWith(".mkv")) 104857600 else 0).put("modified", "2026-10-01T00:00:00Z").put("riskLevel", "low")
+                val item = JSONObject().put("path", path).put("name", query).put("dir", !query.endsWith(".mkv")).put("size", if (query.endsWith(".mkv")) 104857600 else 0).put("modified", modified.ifEmpty { "2026-10-01T00:00:00Z" }).put("riskLevel", "low")
                 output.write((JSONObject().put("type", "result").put("item", item).toString() + "\n").toByteArray()); output.flush()
                 if (query == "slow") { if (socket.getInputStream().read() == -1) canceled.countDown(); return }
                 if (query == "retry" && retryAttempts.incrementAndGet() == 1) return
@@ -247,13 +248,13 @@ class ClientSearchTest {
                 if (uri.path.endsWith("/late-folder")) { metadataStarted.countDown(); releaseMetadata.await(10, TimeUnit.SECONDS) }
                 val path = uri.path.substringAfter("/api/resources")
                 val wire = if (path.endsWith("/moved")) "/library/another" else Regex("%[0-9A-Fa-f]{2}").replace(SearchResult.encodePath(path)) { it.value.lowercase() }
-                reply(socket, JSONObject().put("path", path).put("wirePath", wire).put("name", path.substringAfterLast('/')).put("isDir", !path.endsWith("/changed-type") && !path.endsWith(".mkv")).put("size", 0).put("type", "").toString())
+                reply(socket, JSONObject().put("path", path).put("wirePath", wire).put("name", path.substringAfterLast('/')).put("isDir", !path.endsWith("/changed-type") && !path.endsWith(".mkv")).put("size", 0).put("type", "").put("modified", modified).toString())
             } else {
                 val items = JSONArray()
                 if (uri.path == "/api/resources/") directoryItems.forEach { name ->
                     val image = name.endsWith(".png")
                     items.put(JSONObject().put("name", name).put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
-                        .put("isDir", !image && !name.endsWith(".mkv")).put("type", if (image) "image" else if (name.endsWith(".mkv")) "video" else "").put("size", 104857600))
+                        .put("isDir", !image && !name.endsWith(".mkv")).put("type", if (image) "image" else if (name.endsWith(".mkv")) "video" else "").put("size", 104857600).put("modified", modified))
                 }
                 reply(socket, JSONObject().put("items", items).toString())
             }

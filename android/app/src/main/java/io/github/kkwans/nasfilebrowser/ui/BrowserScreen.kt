@@ -146,6 +146,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
             } else Text(file.name, style = titleStyle, maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onBackground)
             if (metadata != null) metadata() else {
                 val label = (if (file.directory) "文件夹" else readableSize(file.size)) + (location?.let { " · $it" } ?: "")
+                val modified = displayModified(file.modified)
                 if (layout == FileLayout.COVER || layout == FileLayout.COMPACT) {
                     val measurer = rememberTextMeasurer()
                     val density = LocalDensity.current
@@ -153,7 +154,14 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     Box(Modifier.fillMaxWidth().height(with(density) { measured.toDp() })) {
                         Text(label, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                } else Text(label, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (layout == FileLayout.COVER) Box(Modifier.fillMaxWidth().height(with(density) { measured.toDp() })) {
+                        Text(modified ?: "时间未提供", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else {
+                    Text(if (layout == FileLayout.LIST && modified != null) "$label · $modified" else label,
+                        style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (layout == FileLayout.DETAIL && modified != null) Text(modified, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                }
             }
         }
     }
@@ -180,11 +188,23 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
     }
 }
 
-@Composable internal fun FileDetailsDialog(file: ResourceRef, showSize: Boolean = true, onDismiss: () -> Unit) {
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("文件详情") }, text = {
+@Composable internal fun FileDetailsDialog(file: ResourceRef, showSize: Boolean = true, onOpen: (() -> Unit)? = null,
+    openEnabled: Boolean = true, onDismiss: () -> Unit) {
+    @Composable fun field(label: String, value: String) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+        }
+    }
+    AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(12.dp), containerColor = MaterialTheme.colorScheme.background,
+        title = { Text("文件详情", style = MaterialTheme.typography.titleLarge) }, text = {
         SelectionContainer { Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(file.name); Text(file.path)
-            if (showSize) Text(if (file.directory) "文件夹" else readableSize(file.size))
+            field("名称", file.name); field("位置", file.path); field("类型", fileTypeLabel(file))
+            if (showSize && !file.directory) field("大小", readableSize(file.size))
+            field("修改时间", displayModified(file.modified) ?: "未提供")
         } }
-    }, confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } })
+    }, confirmButton = {
+        if (onOpen == null) TextButton(onClick = onDismiss) { Text("关闭") }
+        else TextButton(onClick = onOpen, enabled = openEnabled) { Text("打开") }
+    }, dismissButton = { if (onOpen != null) TextButton(onClick = onDismiss) { Text("关闭") } })
 }
