@@ -12,7 +12,9 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.net.URLEncoder
 
-enum class SearchScope(val wire: String) { CURRENT("current"), RECURSIVE("recursive") }
+enum class SearchScope(val wire: String, val label: String) {
+    CURRENT("current", "当前目录"), RECURSIVE("recursive", "包含子目录"), GLOBAL("recursive", "全部")
+}
 enum class SearchEnding { COMPLETED, LIMIT, TIMEOUT, CANCELED, FAILED }
 data class SearchResult(val relativePath: String, val name: String, val directory: Boolean, val size: Long,
     val modified: String, val riskLevel: String) {
@@ -55,7 +57,9 @@ internal fun searchFlow(path: String, wirePath: String, query: String, scope: Se
     var handle: String? = null
     try {
         identity()
-        handle = native(JSONObject().put("op", "search_start").put("path", path).put("wirePath", wirePath)
+        handle = native(JSONObject().put("op", "search_start")
+            .put("path", if (scope == SearchScope.GLOBAL) "/" else path)
+            .put("wirePath", if (scope == SearchScope.GLOBAL) "/" else wirePath)
             .put("query", query).put("scope", scope.wire)) as? String ?: error("无法启动搜索")
         require(handle.isNotBlank()) { "无法启动搜索" }
         while (true) {

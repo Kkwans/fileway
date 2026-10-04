@@ -10,6 +10,7 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
+import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -69,7 +70,40 @@ class SearchScreenTest {
         val input = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000)
             ?: throw AssertionError("Native editable search field missing")
         input.text = value
-        objectWithText("搜索").click()
+        (device.wait(Until.findObject(By.desc("执行搜索")), 5000) ?: error("Search submit action missing")).click()
+    }
+
+    @Test fun globalSearchUsesRootWhileScopeChangesPreserveEntryDirectory(): Unit = runBlocking {
+        fixture { model, source ->
+            withContext(Dispatchers.Main) { model.back(); model.open(ResourceRef("/library", "/library", "Library", true, "", 0)) }
+            withTimeout(5000) { model.state.first { !it.busy && it.path == "/library" } }
+            (device.wait(Until.findObject(By.desc("搜索文件")), 5000) ?: error("Search entry missing")).click()
+            val bounds = listOf("当前目录", "包含子目录", "全部").map { objectWithText(it).visibleBounds }
+            assertTrue("Scope controls need equal widths", bounds.maxOf { it.width() } - bounds.minOf { it.width() } <= 3)
+            val input = device.wait(Until.findObject(By.desc("搜索文件名")), 5000) ?: error("Search field missing")
+            assertTrue("Search field belongs at the top", input.visibleBounds.top < device.displayHeight * .15f)
+            capture("search-scopes-entry")
+            objectWithText("当前目录").click(); submit("current-only")
+            withTimeout(5000) { model.search.state.first { it.ending == SearchEnding.COMPLETED } }
+            assertTrue(source.searchRequests.any { it.startsWith("/api/search/library?") && it.contains("scope=current") })
+            objectWithText("全部").click()
+            assertEquals("/library", model.search.state.value.basePath)
+            assertEquals("/", model.search.state.value.resultBasePath)
+            assertEquals("/", model.search.state.value.resultBaseWirePath)
+            objectWithText("包含子目录").click()
+            assertEquals("/library", model.search.state.value.resultBasePath)
+            assertTrue(model.search.state.value.items.isEmpty())
+            objectWithText("全部").click(); submit("跨目录+100%")
+            withTimeout(5000) { model.search.state.first { it.ending == SearchEnding.COMPLETED } }
+            assertTrue(source.searchRequests.any { it.startsWith("/api/search/?") && it.contains("scope=recursive") })
+            assertEquals("/library", model.state.value.path)
+            objectWithText("文件夹 · /")
+            capture("search-global-results")
+            resultWithName("跨目录+100%").click()
+            val opened = withTimeout(5000) { model.state.first { !it.busy && it.path == "/跨目录+100%" } }
+            assertEquals("/%e8%b7%a8%e7%9b%ae%e5%bd%95%2b100%25", opened.wirePath)
+            assertFalse(model.search.state.value.open)
+        }
     }
 
     @Test fun actualSearchControlsCancelRetryScopeDetailsAndDirectoryNavigation(): Unit = runBlocking {

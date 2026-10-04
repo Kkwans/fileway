@@ -17,7 +17,11 @@ data class SearchState(
     val basePath: String = "/", val baseWirePath: String = "/",
     val items: List<SearchResult> = emptyList(), val running: Boolean = false,
     val ending: SearchEnding? = null, val message: String? = null, val openingPath: String? = null,
-)
+) {
+    // Keep the entry directory so changing scope never loses the browser context.
+    val resultBasePath: String get() = if (scope == SearchScope.GLOBAL) "/" else basePath
+    val resultBaseWirePath: String get() = if (scope == SearchScope.GLOBAL) "/" else baseWirePath
+}
 
 /** All entry points and state updates run on the owning ViewModel's main scope. */
 class SearchController(private val scope: CoroutineScope, private val isCurrent: (SessionContext) -> Boolean,
@@ -62,7 +66,7 @@ class SearchController(private val scope: CoroutineScope, private val isCurrent:
         searchJob = scope.launch {
             try {
                 val results = linkedMapOf<String, SearchResult>()
-                context.api.search(input.basePath, input.baseWirePath, input.query, input.scope).collect { update ->
+                context.api.search(input.resultBasePath, input.resultBaseWirePath, input.query, input.scope).collect { update ->
                     if (!current(context, expected)) return@collect
                     update.items.forEach { results[it.relativePath] = it }
                     mutable.value = mutable.value.copy(items = results.values.toList(), running = !update.done,
@@ -91,7 +95,7 @@ class SearchController(private val scope: CoroutineScope, private val isCurrent:
         val context = bound ?: return
         val input = mutable.value
         if (!input.open || !isCurrent(context) || result !in input.items) return
-        val candidate = result.resource(input.basePath, input.baseWirePath)
+        val candidate = result.resource(input.resultBasePath, input.resultBaseWirePath)
         if (candidate == null) {
             mutable.value = input.copy(message = "此结果的文件名编码无法确认，请从目录中打开。")
             return

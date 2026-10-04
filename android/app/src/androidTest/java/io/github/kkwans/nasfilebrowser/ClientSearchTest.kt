@@ -183,6 +183,7 @@ class ClientSearchTest {
         val retryAttempts = AtomicInteger(); val metadataReads = AtomicInteger()
         val previewSeen = CountDownLatch(1)
         val previewPaths = ConcurrentHashMap.newKeySet<String>()
+        val searchRequests = ConcurrentHashMap.newKeySet<String>()
         private val acceptor = Thread({
             while (!server.isClosed) {
                 val socket = try { server.accept() } catch (_: Exception) { break }
@@ -221,6 +222,7 @@ class ClientSearchTest {
                 return
             }
             if (uri.path.startsWith("/api/search")) {
+                searchRequests.add(uri.rawPath + "?" + uri.rawQuery)
                 val query = uri.rawQuery.split('&').first { it.startsWith("query=") }.substringAfter('=')
                     .let { URLDecoder.decode(it, "UTF-8") }
                 if (query == "late-search") { searchStarted.countDown(); releaseSearch.await(10, TimeUnit.SECONDS) }
