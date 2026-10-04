@@ -51,6 +51,7 @@ import java.util.Locale
         }
         return
     }
+    if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
     LibraryTheme {

@@ -29,7 +29,8 @@ import kotlinx.coroutines.awaitCancellation
 @Composable internal fun MediaThumbnail(model: ClientModel, file: ResourceRef, modifier: Modifier, showStatusText: Boolean = true,
     contentScale: ContentScale = ContentScale.Crop, naturalAspect: Boolean = false) {
     val client by model.state.collectAsStateWithLifecycle()
-    key(client.previewScope, file.wirePath, file.path, file.size, file.modified) {
+    val cache by model.cache.state.collectAsStateWithLifecycle()
+    key(naturalAspect, cache.revision, client.previewScope, file.wirePath, file.path, file.size, file.modified) {
         var asset by remember { mutableStateOf<PreviewLease?>(null) }
         var phase by remember { mutableStateOf("预览加载中") }
         var aspect by remember { mutableFloatStateOf(1f) }
@@ -38,7 +39,7 @@ import kotlinx.coroutines.awaitCancellation
             var owned: PreviewLease? = null
             try {
                 if (client.previewScope.isEmpty()) { phase = "暂无预览"; return@LaunchedEffect }
-                owned = model.preview(file)
+                owned = model.preview(file, contain = naturalAspect)
                 asset = owned
                 awaitCancellation()
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -53,7 +54,8 @@ import kotlinx.coroutines.awaitCancellation
             val lease = asset
             if (lease != null) {
                 val request = remember(lease.url) { ImageRequest.Builder(context.applicationContext)
-                    .data(lease.url).diskCachePolicy(CachePolicy.DISABLED).size(512, 512).build() }
+                    .data(lease.url).diskCacheKey(model.thumbnailKey(file) + (if (naturalAspect) "/contain" else "/crop")).memoryCacheKey(model.thumbnailKey(file) + (if (naturalAspect) "/contain" else "/crop"))
+                    .diskCachePolicy(if (cache.settings.thumbnailMB == 0L) CachePolicy.DISABLED else CachePolicy.ENABLED).size(512, 512).build() }
                 AsyncImage(model = request, imageLoader = model.previewImageLoader, contentDescription = null,
                     modifier = Modifier.fillMaxSize(), contentScale = contentScale,
                     onSuccess = { result ->

@@ -263,6 +263,9 @@ func (e *Engine) execute(c Command) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if c.Scope == "contain" {
+			endpoint += "?fit=contain"
+		}
 		return b.Lease(c.Session, endpoint, false)
 	case "revoke":
 		b.Revoke(c.URL)

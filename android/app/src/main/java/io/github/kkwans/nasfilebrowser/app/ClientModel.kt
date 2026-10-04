@@ -39,7 +39,7 @@ data class ClientState(
     val startupPending: Boolean = false,
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
     val serverLabel: String = "", val accountName: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
-    val error: String? = null, val selected: ResourceRef? = null,
+    val error: String? = null, val selected: ResourceRef? = null, val image: ResourceRef? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
@@ -52,9 +52,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val state = mutable.asStateFlow()
     val player = NativePlayer(application)
     val playbackPreferences = PlaybackPreferences(application)
-    val previewImageLoader = ImageLoader.Builder(application)
-        .memoryCache { MemoryCache.Builder().maxSizeBytes(16L * 1024 * 1024).build() }
-        .diskCache(null).build()
+    val cache = CacheController(application, viewModelScope)
+    val previewImageLoader get() = cache.thumbnailLoader.value
+    fun cacheAccount(): String = context?.account?.key.orEmpty()
+    fun thumbnailKey(file: ResourceRef): String = cache.key(cacheAccount(), file.wirePath.ifEmpty { file.path }, "${file.size}/${file.modified}")
     private val store = ProfileStore(ClientDatabase.get(application), CredentialVault(application))
     private val appearanceStore = AppearanceStore(ClientDatabase.get(application))
     val appearance = AppearanceController(viewModelScope, { appearanceStore.theme.first() }, appearanceStore::save)
@@ -123,7 +124,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
         val expected = generation
-        mutable.value = mutable.value.copy(startupPending = automatic, busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, previewScope = "", fileLayout = FileLayout.COVER)
+        mutable.value = mutable.value.copy(startupPending = automatic, busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, image = null, previewScope = "", fileLayout = FileLayout.COVER)
         operation = viewModelScope.launch {
             var opened: NasSession? = null
             try {
@@ -238,7 +239,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                     val key = file.wirePath.ifEmpty { file.path }
                     val local = history.local(bound.account, key, remote.identity)
                     val resume = PlaybackHistory.resume(local, remote)
-                    val url = bound.api.lease(file.path, file.wirePath)
+                    cache.awaitReady()
+                    val url = bound.api.lease(file.path, file.wirePath, bound.account.key + "/" + remote.identity)
                     if (generation != expected) { cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)) }; return@launch }
                     revokeLease(); lease = url
                     val writer = PlaybackWriter(history, bound.api) { snapshot, failure -> viewModelScope.launch {
@@ -266,7 +268,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                     if (error !is CancellationException && generation == expected) mutable.value = mutable.value.copy(busy = false, error = "无法打开视频，请重试")
                 }
             }
-        } else mutable.value = mutable.value.copy(error = "当前版本先支持视频播放")
+        } else if (file.type == "image" || file.name.substringAfterLast('.').lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif")) {
+            search.cancel(); operation?.cancel(); endPlayback()
+            mutable.value = mutable.value.copy(selected = null, image = file, busy = false, error = null)
+        } else mutable.value = mutable.value.copy(error = "这个文件类型暂不支持打开")
     }
     private fun browse(path: String, wire: String) {
         val bound = context ?: return
@@ -286,9 +291,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         navigation.clear()
         browse(crumb.path, crumb.wirePath)
     }
-    suspend fun preview(file: ResourceRef): PreviewLease {
+    suspend fun preview(file: ResourceRef, contain: Boolean = false): PreviewLease {
         val bound = context ?: error("服务器尚未连接")
-        val asset = bound.api.preview(file.path, file.wirePath)
+        val asset = bound.api.preview(file.path, file.wirePath, contain)
         try {
             currentCoroutineContext().ensureActive()
             check(context == bound && generation == bound.generation) { "服务器来源已切换" }
@@ -297,6 +302,18 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             runCatching { asset.release() }.onFailure { error.addSuppressed(it) }
             throw error
         }
+    }
+    fun closeImage() { mutable.value = mutable.value.copy(image = null) }
+    suspend fun image(file: ResourceRef, quality: ImageQuality): Pair<PreviewLease, ResourceRef> {
+        val bound = context ?: error("服务器尚未连接")
+        cache.awaitReady()
+        val wire = file.wirePath.ifEmpty { file.path.split('/').joinToString("/") { android.net.Uri.encode(it) } }
+        val data = bound.api.request("GET", "/api/resources$wire")
+        require(!data.optBoolean("isDir")) { "该文件已变化" }
+        val current = file.copy(size = data.optLong("size", file.size), modified = data.optString("modified", file.modified))
+        val asset = bound.api.image(current.path, current.wirePath, quality)
+        try { currentCoroutineContext().ensureActive(); check(context == bound && generation == bound.generation) { "服务器来源已切换" }; return asset to current }
+        catch (error: Throwable) { asset.release(); throw error }
     }
     fun openSearch() {
         val bound = context ?: return
@@ -313,6 +330,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             previewScope = if (startup) "" else mutable.value.previewScope)
     }
     fun back(): Boolean {
+        if (mutable.value.image != null) { closeImage(); return true }
         if (mutable.value.selected != null) { leavePlayer(); return true }
         if (search.state.value.open) { cancel(); search.close(); return true }
         if (mutable.value.tab != "files") { tab("files"); return true }
@@ -473,5 +491,5 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (old != null) disconnect()
         networkJob = viewModelScope.launch { try { closing?.join(); mediaClosing?.join(); old?.let { store.deactivate(it.account, it.owner) }; if (logout) embeddedNetwork.logout() else embeddedNetwork.stop(); networkMutable.value = embeddedNetwork.status(); observeNetwork() } catch (error: Exception) { if (error !is CancellationException) networkMutable.value = networkMutable.value.copy(state = "Error", error = "无法断开内嵌网络，请重试") } }
     }
-    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); previewImageLoader.shutdown(); player.checkpoint = null; player.release(); super.onCleared() }
+    override fun onCleared() { operation?.cancel(); networkJob?.cancel(); networkPollJob?.cancel(); closeSession(); cache.close(); player.checkpoint = null; player.release(); super.onCleared() }
 }

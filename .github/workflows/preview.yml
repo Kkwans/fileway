@@ -36,6 +36,11 @@ jobs:
           test -d "$ANDROID_HOME/ndk/28.2.13676358"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+      - name: Check playback cache control boundary
+        working-directory: core
+        run: |
+          go test -race ./transport
+          go vet ./transport ./bridge
       - name: Build native transport
         run: bash scripts/build-native.sh
       - name: Build preview APK

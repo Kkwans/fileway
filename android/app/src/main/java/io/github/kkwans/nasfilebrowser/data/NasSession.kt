@@ -35,13 +35,23 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
     suspend fun array(endpoint: String) = JSONArray(response("GET", endpoint))
     fun search(path: String, wirePath: String, query: String, scope: SearchScope): Flow<SearchUpdate> =
         searchFlow(path, wirePath, query, scope, identity = { token(); Unit }) { command -> native(command.put("session", id)) }
-    suspend fun lease(path: String, wirePath: String): String {
+    suspend fun lease(path: String, wirePath: String, cacheKey: String = ""): String {
         token()
-        return native(JSONObject().put("op", "lease").put("session", id).put("path", path).put("wirePath", wirePath)) as String
+        return native(JSONObject().put("op", "lease").put("cacheKey", cacheKey).put("session", id).put("path", path).put("wirePath", wirePath)) as String
     }
-    suspend fun preview(path: String, wirePath: String): PreviewLease {
+    suspend fun preview(path: String, wirePath: String, contain: Boolean = false): PreviewLease {
         token()
-        val url = native(JSONObject().put("op", "preview").put("session", id).put("path", path).put("wirePath", wirePath)) as String
+        val url = native(JSONObject().put("op", "preview").put("scope", if (contain) "contain" else "").put("session", id).put("path", path).put("wirePath", wirePath)) as String
+        return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
+    }
+    suspend fun image(path: String, wirePath: String, quality: ImageQuality): PreviewLease {
+        token()
+        val url = if (quality == ImageQuality.ORIGINAL || quality == ImageQuality.HIGH) lease(path, wirePath)
+        else {
+            val wire = wirePath.ifEmpty { path.split('/').joinToString("/") { android.net.Uri.encode(it) } }
+            val endpoint = if (quality == ImageQuality.MEDIUM) "/api/preview/big$wire" else "/api/preview/thumb$wire?fit=contain"
+            native(JSONObject().put("op", "asset").put("session", id).put("endpoint", endpoint)) as String
+        }
         return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
     }
     suspend fun close() { native(JSONObject().put("op", "close_session").put("session", id)) }

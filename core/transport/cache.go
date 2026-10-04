@@ -157,6 +157,11 @@ func (c *mediaCache) clean(active map[string]bool, clear, capacityOnly bool) (Ca
 	c.bytes = stats.Bytes
 	return stats, nil
 }
+func (c *mediaCache) chunkSize() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return min(cacheChunkSize, c.config.MaxBytes)
+}
 func (c *mediaCache) enabled() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.config.MaxBytes > 0 }
 func (c *mediaCache) read(group, key string, n int64) ([]byte, bool) {
 	c.mu.Lock()
@@ -218,8 +223,8 @@ func responseRange(res *http.Response) (start, end, total int64, ok bool) {
 	ok = err == nil && start >= 0 && end >= start && total > end && (res.ContentLength < 0 || res.ContentLength == end-start+1)
 	return
 }
-func cachedChunk(ctx context.Context, l *Lease, c *mediaCache, version string, start, total int64, validator string) ([]byte, error) {
-	end := min(start+cacheChunkSize, total) - 1
+func cachedChunk(ctx context.Context, l *Lease, c *mediaCache, version string, start, total int64, validator string, chunkSize int64) ([]byte, error) {
+	end := min(start+chunkSize, total) - 1
 	n := end - start + 1
 	key := version + "-" + strconv.FormatInt(start, 10)
 	if data, ok := c.read(l.cacheGroup(), key, n); ok {
@@ -273,8 +278,12 @@ func (b *Broker) serveCached(ctx context.Context, w http.ResponseWriter, r *http
 	if validator == "" || strings.HasPrefix(validator, "W/") {
 		validator = res.Header.Get("Last-Modified")
 	}
-	first := start / cacheChunkSize * cacheChunkSize
-	data, err := cachedChunk(ctx, l, c, version, first, total, validator)
+	chunkSize := c.chunkSize()
+	if chunkSize <= 0 {
+		return false
+	}
+	first := start / chunkSize * chunkSize
+	data, err := cachedChunk(ctx, l, c, version, first, total, validator, chunkSize)
 	if err != nil {
 		http.Error(w, "media cache source unavailable", http.StatusBadGateway)
 		return true
@@ -289,19 +298,19 @@ func (b *Broker) serveCached(ctx context.Context, w http.ResponseWriter, r *http
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(res.StatusCode)
-	for offset := first; offset <= end; offset += cacheChunkSize {
+	for offset := first; offset <= end; offset += chunkSize {
 		if ctx.Err() != nil {
 			return true
 		}
 		if offset != first {
-			data, err = cachedChunk(ctx, l, c, version, offset, total, validator)
+			data, err = cachedChunk(ctx, l, c, version, offset, total, validator, chunkSize)
 			if err != nil {
 				return true
 			}
 		}
 		// At most one extra chunk per lease; tied to lease cancellation, never a
 		// whole-file download and never video bytes across JNI.
-		next := offset + cacheChunkSize
+		next := offset + chunkSize
 		if next < total && l.prefetch != nil {
 			select {
 			case l.prefetch <- struct{}{}:
@@ -309,7 +318,7 @@ func (b *Broker) serveCached(ctx context.Context, w http.ResponseWriter, r *http
 					defer func() { <-l.prefetch }()
 					prefetchCtx, cancel := context.WithTimeout(l.ctx, 20*time.Second)
 					defer cancel()
-					_, _ = cachedChunk(prefetchCtx, l, c, version, pos, total, validator)
+					_, _ = cachedChunk(prefetchCtx, l, c, version, pos, total, validator, chunkSize)
 				}(next)
 			default:
 			}

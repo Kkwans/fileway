@@ -75,7 +75,6 @@ import kotlinx.coroutines.launch
     var networkDetails by remember { mutableStateOf(false) }
     val network by model.networkState.collectAsStateWithLifecycle()
     val appearance by model.appearance.state.collectAsStateWithLifecycle()
-    var cacheBytes by remember { mutableLongStateOf(model.previewImageLoader.memoryCache?.size ?: 0) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "settings") }, snackbarHost = { SnackbarHost(snackbar) }) { insets ->
@@ -126,14 +125,7 @@ import kotlinx.coroutines.launch
                         SettingsAction("应用内 Tailscale", network.label, R.drawable.ic_network) { networkDetails = true }
                     }
                 }
-                item {
-                    SettingsGroup("存储") {
-                        SettingsAction("清理缩略图缓存", "${readableSize(cacheBytes)} · 此设备的缩略图", R.drawable.ic_storage) {
-                            model.clearPreviewCache(); cacheBytes = model.previewImageLoader.memoryCache?.size ?: 0
-                            scope.launch { snackbar.showSnackbar("缩略图缓存已清理") }
-                        }
-                    }
-                }
+                item { CacheSettingsPanel(model) }
                 item {
                     SettingsGroup("应用") {
                         SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
@@ -172,7 +164,7 @@ import kotlinx.coroutines.launch
 }
 
 /** One category per card; its actions remain full-width selectable rows. */
-@Composable private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+@Composable internal fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, Modifier.padding(start = 4.dp), style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -191,7 +183,7 @@ import kotlinx.coroutines.launch
     }
 }
 
-@Composable private fun SettingsAction(title: String, subtitle: String, icon: Int, enabled: Boolean = true, action: () -> Unit) {
+@Composable internal fun SettingsAction(title: String, subtitle: String, icon: Int, enabled: Boolean = true, action: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = action).heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(painterResource(icon), null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
