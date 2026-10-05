@@ -226,6 +226,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 Row(Modifier.align(Alignment.Center).clip(RoundedCornerShape(8.dp)).background(Color(0xCC151515)).padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     CircularProgressIndicator(Modifier.size(18.dp), color = PlayerAccent, strokeWidth = 2.dp)
                                     Text(if (state.phase == "正在缓冲") "缓冲 ${state.buffering.toInt()}%" else state.phase, fontSize = 13.sp)
+                                    PlayerLabel("取消", "取消播放等待") { model.leavePlayer() }
                                 }
                             }
                         }
