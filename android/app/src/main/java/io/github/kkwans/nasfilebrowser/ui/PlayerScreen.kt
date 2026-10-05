@@ -69,7 +69,7 @@ import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import kotlinx.coroutines.delay
 import org.videolan.libvlc.util.VLCVideoLayout
 
-private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, SOURCE }
+private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, SOURCE, EXTERNAL }
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.activity()
@@ -249,7 +249,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     color = Color(0xFFDADADA), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
                                 if (landscape) {
                                     PlayerLabel("音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
-                                    PlayerLabel("字幕", "选择字幕", state.subtitles.isNotEmpty()) { touch(); sheet = PlayerSheet.SUBTITLE }
+                                    PlayerLabel("字幕", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
                                     PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
                                     PlayerIcon(R.drawable.art_volume, "播放器音量", { touch(); sheet = PlayerSheet.VOLUME })
                                 } else PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
@@ -276,22 +276,24 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         Column(Modifier.clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
                             DetailAction(R.drawable.ic_audio, "音轨", state.audio.firstOrNull { it.id == state.selectedAudio }?.title ?: "暂无音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
-                            DetailAction(R.drawable.ic_subtitles, "字幕", state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.title ?: "关闭", "选择字幕", state.subtitles.isNotEmpty()) { touch(); sheet = PlayerSheet.SUBTITLE }
+                            DetailAction(R.drawable.ic_subtitles, "字幕", state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.title ?: "关闭", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
                             DetailAction(R.drawable.art_volume, "音量", "${state.volume}%", "播放器音量") { touch(); sheet = PlayerSheet.VOLUME }
                         }
                     }
                 }
                 SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp))
-                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; else -> "播放来源" }, { sheet = null; touch() }) {
+                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; PlayerSheet.EXTERNAL -> "外挂字幕"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
                         PlayerSheet.AUDIO, PlayerSheet.SUBTITLE -> {
                             val audio = sheet == PlayerSheet.AUDIO
-                            TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle) {
+                            TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle,
+                                header = if (audio) null else { { DetailAction(R.drawable.ic_folder, "选择外挂字幕", "浏览当前服务器的字幕文件", "选择外挂字幕") { sheet = PlayerSheet.EXTERNAL; touch() } } }) {
                                 if (audio) model.player.audio(it) else model.player.subtitle(it)
                                 sheet = null; touch()
                             }
                         }
+                        PlayerSheet.EXTERNAL -> NasSubtitlePicker(model, file, chosen = { sheet = PlayerSheet.SUBTITLE; touch() })
                         PlayerSheet.SPEED -> LazyColumn(contentPadding = PaddingValues(bottom = 20.dp)) {
                             item {
                                 Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -419,8 +421,9 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
         }
     }
 }
-@Composable private fun TrackChoices(tracks: List<NativeTrack>, selected: Int, choose: (Int) -> Unit) {
+@Composable private fun TrackChoices(tracks: List<NativeTrack>, selected: Int, header: @Composable (() -> Unit)? = null, choose: (Int) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(bottom = 20.dp)) {
+        if (header != null) item { header() }
         itemsIndexed(tracks, key = { _, track -> track.id }) { index, track ->
             val duplicate = tracks.count { it.title == track.title } > 1
             Choice(track.title + if (duplicate) " · ${index + 1}" else "", listOf(track.language.takeUnless { it == "und" }.orEmpty(), track.codec).filter { it.isNotBlank() }.joinToString(" · "), selected == track.id) { choose(track.id) }

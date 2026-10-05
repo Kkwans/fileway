@@ -279,10 +279,11 @@ class NativePlaybackTest {
         }
     }
 
-    internal class Fixture(private val media: ByteArray) : Closeable {
+    internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap()) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val rawRequests = AtomicInteger()
+        val subtitleRequests = AtomicInteger()
         val unexpected = AtomicInteger()
         val stallNextRead = AtomicBoolean()
         @Volatile var resumeRead = CountDownLatch(1)
@@ -326,7 +327,15 @@ class NativePlaybackTest {
                     val token = "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
                     send(token.toByteArray(), "text/plain")
                 }
-                endpoint == "/api/resources/" -> send(JSONObject().put("items", JSONArray().put(JSONObject().put("path", "/fixture.mkv").put("wirePath", "/fixture.mkv").put("name", "Native playback fixture.mkv").put("type", "video").put("size", media.size))).toString().toByteArray())
+                endpoint == "/api/resources/" -> {
+                    val items = JSONArray().put(JSONObject().put("path", "/fixture.mkv").put("wirePath", "/fixture.mkv").put("name", "Native playback fixture.mkv").put("type", "video").put("size", media.size))
+                    subtitles.forEach { (name, bytes) -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name").put("name", name).put("size", bytes.size)) }
+                    send(JSONObject().put("items", items).toString().toByteArray())
+                }
+                endpoint.startsWith("/api/raw/") && subtitles.containsKey(endpoint.removePrefix("/api/raw/")) -> {
+                    subtitleRequests.incrementAndGet()
+                    send(subtitles.getValue(endpoint.removePrefix("/api/raw/")), "text/plain; charset=utf-8")
+                }
                 endpoint == "/api/preview/thumb/fixture.mkv" -> send(ByteArray(0), status = 404)
                 endpoint.startsWith("/api/media/playback") -> {
                     if (request[0] == "GET" && stallNextRead.compareAndSet(true, false)) { resumeRead.countDown(); releaseRead.await(10, TimeUnit.SECONDS) }

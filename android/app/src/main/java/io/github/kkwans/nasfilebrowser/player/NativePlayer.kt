@@ -30,6 +30,10 @@ class NativePlayer(context: Context) {
     private var released = false
     private var seekTarget: Long? = null
     private var resumeTarget: Long? = null
+    private val externalSubtitleLabels = mutableMapOf<Int, String>()
+    private var pendingSubtitle: Pair<String, Set<Int>>? = null
+    private var hasPlaybackClock = false
+    val canAddExternalSubtitle get() = !released && hasPlaybackClock
 
     init {
         // A portrait page embeds a landscape video viewport. libVLC's default
@@ -44,6 +48,7 @@ class NativePlayer(context: Context) {
                 MediaPlayer.Event.Playing -> old.copy(playing = true, phase = "正在播放", error = null)
                 MediaPlayer.Event.Paused -> old.copy(playing = false, phase = "已暂停")
                 MediaPlayer.Event.TimeChanged -> {
+                    if (event.timeChanged > 0) hasPlaybackClock = true
                     val reached = seekTarget?.let { kotlin.math.abs(event.timeChanged - it) <= 1500 } == true
                     if (reached) seekTarget = null
                     old.copy(positionMs = event.timeChanged.coerceAtLeast(0), phase = if (reached) { if (old.playing) "正在播放" else "已暂停" } else old.phase)
@@ -77,6 +82,7 @@ class NativePlayer(context: Context) {
     fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true) {
         if (released) return
         player.stop()
+        externalSubtitleLabels.clear(); pendingSubtitle = null; hasPlaybackClock = false
         seekTarget = null
         resumeTarget = positionMs.takeIf { it > 0 }
         mutable.value = PlayerState(phase = "正在打开视频", volume = player.volume.takeIf { it >= 0 }?.coerceAtMost(100) ?: mutable.value.volume)
@@ -107,19 +113,36 @@ class NativePlayer(context: Context) {
         else mutable.value = mutable.value.copy(volume = player.volume.coerceIn(0, 100))
     }
     fun audio(id: Int) { if (player.setAudioTrack(id)) refreshTracks() }
+    fun addSubtitle(url: String, name: String): Boolean {
+        if (!canAddExternalSubtitle) return false
+        val previous = pendingSubtitle
+        pendingSubtitle = name to player.spuTracks.orEmpty().filter { it.id >= 0 }.map { it.id }.toSet()
+        val accepted = player.addSlave(IMedia.Slave.Type.Subtitle, Uri.parse(url), true)
+        if (!accepted) pendingSubtitle = previous else refreshTracks()
+        return accepted
+    }
     fun subtitle(id: Int) { if (player.setSpuTrack(id)) refreshTracks() }
-    fun stop() { requested = false; resumeTarget = null; if (!released) player.stop(); mutable.value = PlayerState() }
+    fun stop() { externalSubtitleLabels.clear(); pendingSubtitle = null; hasPlaybackClock = false; requested = false; resumeTarget = null; if (!released) player.stop(); mutable.value = PlayerState() }
 
     private fun refreshTracks() {
         val media = player.media
         val tracks = try { if (media == null) emptyList() else (0 until media.trackCount).mapNotNull { media.getTrack(it) } } finally { media?.release() }
+        val subtitleDescriptions = player.spuTracks
+        val pending = pendingSubtitle
+        if (pending != null) {
+            val added = subtitleDescriptions.orEmpty().filter { it.id >= 0 && it.id !in pending.second }
+            // A single-file addition is named only when exactly one new engine ID is observed.
+            if (added.size == 1) { externalSubtitleLabels[added.single().id] = pending.first; pendingSubtitle = null }
+            else if (added.size > 1) pendingSubtitle = null
+        }
+        externalSubtitleLabels.keys.retainAll(subtitleDescriptions.orEmpty().map { it.id }.toSet())
         fun describe(items: Array<MediaPlayer.TrackDescription>?, type: Int) = items.orEmpty().map { item ->
             val track = tracks.firstOrNull { it.type == type && it.id == item.id }
-            NativeTrack(item.id, if (item.id == -1) "关闭" else item.name.orEmpty().ifBlank { "轨道 ${item.id}" }, track?.codec.orEmpty(), track?.language.orEmpty())
+            NativeTrack(item.id, if (item.id == -1) "关闭" else (if (type == IMedia.Track.Type.Text) externalSubtitleLabels[item.id] else null) ?: item.name.orEmpty().ifBlank { "轨道 ${item.id}" }, track?.codec.orEmpty(), track?.language.orEmpty())
         }
         val video = tracks.filterIsInstance<IMedia.VideoTrack>().firstOrNull()
         mutable.value = mutable.value.copy(
-            audio = describe(player.audioTracks, IMedia.Track.Type.Audio), subtitles = describe(player.spuTracks, IMedia.Track.Type.Text),
+            audio = describe(player.audioTracks, IMedia.Track.Type.Audio), subtitles = describe(subtitleDescriptions, IMedia.Track.Type.Text),
             selectedAudio = player.audioTrack, selectedSubtitle = player.spuTrack,
             width = video?.width ?: 0, height = video?.height ?: 0,
             volume = player.volume.takeIf { it >= 0 }?.coerceAtMost(100) ?: mutable.value.volume,

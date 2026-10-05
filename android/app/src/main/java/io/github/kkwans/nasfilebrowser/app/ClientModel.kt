@@ -73,6 +73,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var foreground = false
     private var context: SessionContext? = null
     private var lease = ""
+    private val subtitleLeases = mutableListOf<PreviewLease>()
     private var generation = 0
     private var operation: Job? = null
     private var startupJob: Job? = null
@@ -303,6 +304,30 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             throw error
         }
     }
+    suspend fun subtitleFiles(path: String, wirePath: String): List<ResourceRef> {
+        val binding = playback ?: error("视频尚未打开")
+        val wire = wirePath.ifEmpty { SearchResult.encodePath(path) }
+        val data = binding.context.api.request("GET", "/api/resources$wire")
+        check(playback === binding && context == binding.context) { "播放来源已切换" }
+        val items = data.optJSONArray("items") ?: error("不是可读取的目录")
+        return (0 until items.length()).map { i -> items.getJSONObject(i).let {
+            ResourceRef(it.optString("path"), it.optString("wirePath"), it.optString("name"), it.optBoolean("isDir"), it.optString("type"), it.optLong("size"), it.optString("modified"))
+        } }.filter { it.directory || isExternalSubtitle(it.name) }
+            .sortedWith(compareByDescending<ResourceRef> { it.directory }.thenBy { it.name.lowercase() })
+    }
+    suspend fun addExternalSubtitle(file: ResourceRef) {
+        require(!file.directory && isExternalSubtitle(file.name)) { "请选择支持的字幕文件" }
+        val binding = playback ?: error("视频尚未打开")
+        check(player.canAddExternalSubtitle) { "视频仍在加载，请稍后重试添加字幕" }
+        val url = binding.context.api.lease(file.path, file.wirePath)
+        val asset = PreviewLease(url, binding.context.api.id) { NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)); Unit }
+        try {
+            currentCoroutineContext().ensureActive()
+            check(playback === binding && context == binding.context) { "播放来源已切换" }
+            check(player.addSubtitle(url, file.name)) { "播放器未能加载字幕，请确认文件格式后重试" }
+            subtitleLeases.add(asset)
+        } catch (error: Throwable) { asset.release(); throw error }
+    }
     fun closeImage() { mutable.value = mutable.value.copy(image = null) }
     suspend fun image(file: ResourceRef, quality: ImageQuality): Pair<PreviewLease, ResourceRef> {
         val bound = context ?: error("服务器尚未连接")
@@ -419,6 +444,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         playback = null; lastSaved = null
         player.pause()
         val stored = if (old != null && value != null) old.writer.submit(value) else null
+        val subtitles = subtitleLeases.toList(); subtitleLeases.clear()
         val oldLease = lease; lease = ""
         val previous = mediaClosing
         if (old != null || oldLease.isNotEmpty()) mediaClosing = cleanup.launch {
@@ -430,7 +456,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 withContext(Dispatchers.Main) { player.stop() }
                 try { if (oldLease.isNotEmpty()) NativeTransport.call(JSONObject().put("op", "revoke").put("url", oldLease)) }
-                finally { old?.writer?.close() }
+                finally { subtitles.forEach { runCatching { it.release() } }; old?.writer?.close() }
             }
         } else player.stop()
     }
