@@ -6,7 +6,9 @@ Android 10+ / arm64. Kotlin, Compose, libVLC and an embedded Go/tsnet transport.
 
 ## Status
 
-Implementation in progress. No hardware decoding, HDR or external-network acceptance has passed yet.
+Implementation in progress. Actual hardware decoding and HDR output acceptance remain open.
+
+Update 2026-10-06: the user reports successful real-device external-network Tailscale testing. Preserve this as user-verified evidence for that scenario; the complete network regression matrix and long-play acceptance remain open. See [device/media acceptance](docs/device-media-acceptance.md) and [development workflow](docs/development-workflow.md).
 
 See the [0.3 TODO and first-release gates](docs/android-0.3-todo.md) for the current user-reported blockers, implementation order and separate device acceptance requirements.
 

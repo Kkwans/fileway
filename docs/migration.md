@@ -14,8 +14,8 @@ new build and publication paths are verified. No old history is force-pushed.
 
 ## Required gates before archiving old repositories
 
-- [ ] Byte-identical source import and reachable original history verified.
-- [ ] Local uncommitted documentation transferred; old playback experiments
+- [x] Byte-identical source import and reachable original history verified.
+- [x] Local uncommitted documentation transferred; old playback experiments
       privately preserved, not silently adopted as working production code.
 - [ ] Independent root workflows run for server Linux/Windows, Web and Android.
 - [ ] Source-to-artifact identity and Android upgrade signing continuity recorded.
@@ -39,3 +39,10 @@ acceptance remains incomplete independently of the repository migration.
 No server data migration or schema change is part of the source import. Preserve
 existing Android applicationId/certificate/version progression and old APK URLs.
 First consolidate safely; a new product label is not a reason to break upgrades.
+
+Current import layout intentionally retains two server trees until platform
+convergence passes. No old repository has been archived and no runtime checkout
+has been relocated. Old local generated assets and historical unreviewed CR
+documents are preserved privately/in place, not automatically published here.
+
+App development entry: [new-session instructions](app-next-session.md).
