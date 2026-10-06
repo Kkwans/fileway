@@ -1,0 +1,13 @@
+# Package a verified shared-server executable on a selected Linux runtime.
+# The base may be the ordinary runtime or the installed RK3588 profile.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG IMAGE_VERSION
+ARG IMAGE_REVISION
+ARG IMAGE_CREATED
+LABEL org.opencontainers.image.title="Fileway" \
+      org.opencontainers.image.source="https://github.com/Kkwans/fileway" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${IMAGE_REVISION}" \
+      org.opencontainers.image.created="${IMAGE_CREATED}"
+COPY --chmod=755 fileway-server /usr/local/bin/filebrowser
