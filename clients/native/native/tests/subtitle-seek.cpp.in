@@ -1,0 +1,81 @@
+// Controlled dependencies around actual VLC callbacks. No decoder simulation.
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
+#include <map>
+#include <memory>
+#include <vector>
+using vlc_tick_t = int64_t;
+enum { VIDEO_ES, AUDIO_ES, SPU_ES };
+#define vlc_assert_unreachable() assert(false)
+template<class I, class T> I greatest_lower_bound(I begin, I end, T value) {
+    auto it = std::upper_bound(begin, end, value);
+    return it == begin ? begin : --it;
+}
+struct mkv_track_t { struct { int i_cat; } fmt; };
+struct matroska_segment_c {
+    using tracks_map_t = std::map<unsigned, std::unique_ptr<mkv_track_t>>;
+    tracks_map_t tracks;
+    bool b_cues = true;
+};
+class SegmentSeeker {
+public:
+    using fptr_t = uint64_t;
+    struct Seekpoint {
+        enum TrustLevel { DISABLED, QUESTIONABLE, TRUSTED };
+        fptr_t fpos;
+        vlc_tick_t pts;
+        TrustLevel trust_level;
+        Seekpoint(fptr_t pos = std::numeric_limits<fptr_t>::max(), vlc_tick_t time = -1,
+                  TrustLevel trust = TRUSTED) : fpos(pos), pts(time), trust_level(trust) {}
+        bool operator<(const Seekpoint& other) const { return pts < other.pts; }
+    };
+    using track_ids_t = std::vector<unsigned>;
+    using seekpoints_t = std::vector<Seekpoint>;
+    using tracks_seekpoints_t = std::map<unsigned, seekpoints_t>;
+    using tracks_seekpoint_t = std::map<unsigned, Seekpoint>;
+    using seekpoint_pair_t = std::pair<Seekpoint, Seekpoint>;
+    struct Range { fptr_t start, end; Range(fptr_t a, fptr_t b) : start(a), end(b) {} };
+    tracks_seekpoints_t _tracks_seekpoints;
+    unsigned index_calls = 0;
+    // This controlled video range excludes a subtitle group at offset 100.
+    seekpoint_pair_t get_seekpoints_around(vlc_tick_t, const track_ids_t&) {
+        return {Seekpoint(1000, 2500), Seekpoint(2000, 5000)};
+    }
+    void index_range(matroska_segment_c&, Range, vlc_tick_t) { ++index_calls; }
+    Seekpoint get_first_seekpoint_around(vlc_tick_t, const seekpoints_t&,
+                                        Seekpoint::TrustLevel = Seekpoint::TRUSTED);
+    tracks_seekpoint_t find_greatest_seekpoints_in_range(fptr_t, vlc_tick_t, const track_ids_t&);
+    tracks_seekpoint_t get_seekpoints(matroska_segment_c&, vlc_tick_t, const track_ids_t&, const track_ids_t&);
+};
+/* NFB_ACTUAL_CALLBACKS */
+int main() {
+    matroska_segment_c segment;
+    for (auto item : std::vector<std::pair<unsigned, int>>{{1, VIDEO_ES}, {2, SPU_ES},
+            {3, AUDIO_ES}, {4, SPU_ES}, {5, SPU_ES}, {6, SPU_ES}, {7, SPU_ES}, {8, SPU_ES}})
+        segment.tracks[item.first] = std::unique_ptr<mkv_track_t>(new mkv_track_t{{item.second}});
+    SegmentSeeker seeker;
+    seeker._tracks_seekpoints = {{1, {{1000, 2500}}}, {2, {{100, 0}, {1500, 4000}}},
+        {3, {{200, 0}}}, {4, {{300, 0}}}, {5, {{400, 4000}}},
+        {7, {{500, 0, SegmentSeeker::Seekpoint::DISABLED}}},
+        {8, {{600, 0, SegmentSeeker::Seekpoint::QUESTIONABLE}}}};
+    auto points = seeker.get_seekpoints(segment, 3000, {1}, {1, 2, 3, 5, 6, 7, 8, 99});
+    if (points.count(2) != 1 || points.at(2).fpos != 100) {
+        std::puts("FAIL selected earlier subtitle excluded by video range"); return 1;
+    }
+    assert(points.at(1).fpos == 1000); // video unchanged
+    assert(points.count(3) == 0); // no audio rewind
+    assert(points.count(4) == 0); // unselected subtitle unchanged
+    assert(points.count(5) == 0); // future cue excluded
+    assert(points.count(6) == 0); // missing index excluded
+    assert(points.count(7) == 0); // disabled seekpoint excluded
+    assert(points.count(8) == 0); // unverified cue index excluded
+    assert(points.count(99) == 0); // unknown track excluded
+    assert(seeker.index_calls == 1); // no new whole-file index scan
+    seeker._tracks_seekpoints[2] = {{100, 0}, {1100, 2800}};
+    points = seeker.get_seekpoints(segment, 3000, {1}, {1, 2});
+    assert(points.at(2).fpos == 1100); // existing in-range point respected
+    std::puts("PASS subtitle seek range regression and isolation cases");
+}

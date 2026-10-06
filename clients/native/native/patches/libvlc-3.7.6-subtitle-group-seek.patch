@@ -1,0 +1,52 @@
+diff --git a/modules/demux/mkv/matroska_segment.cpp b/modules/demux/mkv/matroska_segment.cpp
+--- a/modules/demux/mkv/matroska_segment.cpp
++++ b/modules/demux/mkv/matroska_segment.cpp
+@@ -1309,7 +1309,7 @@
+             if( p_track != NULL && p_track->fmt.i_cat == SPU_ES )
+             {
+                 vars.obj->_seeker.add_seekpoint( kblock.TrackNum(),
+-                    SegmentSeeker::Seekpoint( kblock.GetElementPosition(), VLC_TICK_FROM_NS(kblock.GlobalTimecode()) ) );
++                    SegmentSeeker::Seekpoint( vars.obj->i_block_pos, VLC_TICK_FROM_NS(kblock.GlobalTimecode()) ) );
+             }
+ 
+             vars.ep->Keep ();
+diff --git a/modules/demux/mkv/matroska_segment_seeker.cpp b/modules/demux/mkv/matroska_segment_seeker.cpp
+--- a/modules/demux/mkv/matroska_segment_seeker.cpp
++++ b/modules/demux/mkv/matroska_segment_seeker.cpp
+@@ -320,6 +320,26 @@
+ 
+         tracks_seekpoint_t tpoints = find_greatest_seekpoints_in_range( start.fpos, target_pts, filter_tracks );
+ 
++        // Video keyframe ranges can start after a long-running subtitle.
++        // Recover only already indexed points for selected subtitle tracks;
++        // the decoder handles whether that cue still spans the target time.
++        for( track_ids_t::const_iterator it = filter_tracks.begin(); it != filter_tracks.end(); ++it )
++        {
++            matroska_segment_c::tracks_map_t::const_iterator track = ms.tracks.find( *it );
++            if( track == ms.tracks.end() || track->second->fmt.i_cat != SPU_ES ||
++                tpoints.find( *it ) != tpoints.end() )
++                continue;
++
++            tracks_seekpoints_t::const_iterator indexed = _tracks_seekpoints.find( *it );
++            if( indexed == _tracks_seekpoints.end() || indexed->second.empty() )
++                continue;
++
++            Seekpoint sp = get_first_seekpoint_around( target_pts, indexed->second );
++            if( sp.fpos != std::numeric_limits<fptr_t>::max() && sp.pts <= target_pts &&
++                sp.trust_level >= Seekpoint::TRUSTED )
++                tpoints.insert( tracks_seekpoint_t::value_type( *it, sp ) );
++        }
++
+         if( contains_all_of_t() ( tpoints, priority_tracks ) )
+             return tpoints;
+ 
+@@ -376,6 +396,8 @@
+             ? static_cast<KaxInternalBlock&>( *simpleblock )
+             : static_cast<KaxInternalBlock&>( *block );
+ 
+-        block_pos = internal_block.GetElementPosition();
++        // BlockDuration/Additions are siblings of KaxBlock within its group.
++        // Keep the same outer position as the normal subtitle parser.
++        block_pos = simpleblock ? internal_block.GetElementPosition() : ms.i_block_pos;
+         block_pts = VLC_TICK_FROM_NS(internal_block.GlobalTimecode());
+         track_id  = internal_block.TrackNum();

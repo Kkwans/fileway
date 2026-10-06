@@ -1,0 +1,362 @@
+package io.github.kkwans.nasfilebrowser
+
+import android.util.Base64
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
+import android.os.Bundle
+import android.view.PixelCopy
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.SurfaceView
+import android.view.View
+import android.view.ViewGroup
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelProvider
+import androidx.test.ext.junit.rules.ActivityScenarioRule
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Direction
+import androidx.test.uiautomator.Until
+import io.github.kkwans.nasfilebrowser.app.ClientModel
+import io.github.kkwans.nasfilebrowser.app.ResourceRef
+import io.github.kkwans.nasfilebrowser.data.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.videolan.libvlc.LibVLC
+import java.io.Closeable
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+/** Actual libVLC -> localhost Go lease -> HTTP fixture, not a player mock. */
+@RunWith(AndroidJUnit4::class)
+class NativePlaybackTest {
+    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+
+    @Test fun mkvResumeSeekPauseRecentAndReplacementUseRealNativePlayer() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val arguments = InstrumentationRegistry.getArguments()
+        arguments.getString("nfbFontScale")?.toFloat()?.let { expected ->
+            assertEquals("The actual app must use the requested font scale", expected, instrumentation.targetContext.resources.configuration.fontScale, 0.01f)
+        }
+        val visualVariant = arguments.getString("nfbVisualVariant").orEmpty()
+        require(visualVariant.matches(Regex("[a-z0-9-]{0,32}")))
+        val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
+        val source = Fixture(media)
+        val storage = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val profile = storage.save(ServerProfile(name = "Native playback fixture", address = source.url))
+        lateinit var model: ClientModel
+        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        val file = ResourceRef("/fixture.mkv", "/fixture.mkv", "Native playback fixture.mkv", false, "video", media.size.toLong())
+        var checking = "initial decode and resume"
+        suspend fun onMain(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
+        suspend fun waitUntil(predicate: () -> Boolean) {
+            try { withTimeout(25_000) { while (!predicate()) delay(100) } }
+            catch (error: TimeoutCancellationException) {
+                val state = model.player.state.value
+                throw AssertionError("Native timeout during $checking: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, duration=${state.durationMs}, seekable=${state.seekable}, video=${state.width}x${state.height}, error=${state.error}, clientBusy=${model.state.value.busy}, selected=${model.state.value.selected != null}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}", error)
+            }
+        }
+        try {
+            arguments.getString("nfbVlcChangeset")?.let { expected -> assertEquals("Actual native SDK must match the trial", expected, LibVLC.changeset()) }
+            onMain { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
+            waitUntil { model.state.value.connected && !model.state.value.busy }
+            onMain { model.open(file) }
+            waitUntil { model.player.state.value.let { it.playing && it.seekable && it.durationMs in 11_500..12_500 && it.positionMs >= 2800 && it.width == 320 } }
+            withTimeout(5000) {
+                var picture = false
+                while (!picture) {
+                    val surfaces = mutableListOf<SurfaceView>()
+                    activity.scenario.onActivity { owner ->
+                        fun collect(view: View) {
+                            if (view is SurfaceView && view.holder.surface.isValid) surfaces.add(view)
+                            if (view is ViewGroup) for (index in 0 until view.childCount) collect(view.getChildAt(index))
+                        }
+                        collect(owner.window.decorView)
+                    }
+                    for (surface in surfaces) {
+                        val bitmap = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
+                        val completed = AtomicBoolean()
+                        try {
+                            val copied = suspendCancellableCoroutine<Int> { continuation ->
+                                try {
+                                    PixelCopy.request(surface, bitmap, { result ->
+                                        completed.set(true)
+                                        if (continuation.isActive) continuation.resumeWith(Result.success(result)) else bitmap.recycle()
+                                    }, Handler(Looper.getMainLooper()))
+                                } catch (_: IllegalArgumentException) {
+                                    completed.set(true)
+                                    continuation.resumeWith(Result.success(PixelCopy.ERROR_SOURCE_INVALID))
+                                }
+                            }
+                            if (copied == PixelCopy.SUCCESS) {
+                                val pixels = IntArray(64 * 36)
+                                bitmap.getPixels(pixels, 0, 64, 0, 0, 64, 36)
+                                // The owned pattern is colorful. A black output,
+                                // subtitle-only surface or metadata cannot pass.
+                                picture = picture || pixels.count { pixel ->
+                                    val channels = listOf(Color.red(pixel), Color.green(pixel), Color.blue(pixel))
+                                    channels.max() - channels.min() > 30
+                                } > pixels.size / 5
+                                if (picture) {
+                                    activity.scenario.onActivity {
+                                        val viewport = surface.parent as View
+                                        assertTrue("The 16:9 fixture must fit the portrait viewport width", surface.width >= viewport.width * 0.95f)
+                                    }
+                                }
+                            }
+                        } finally { if (completed.get()) bitmap.recycle() }
+                    }
+                    if (!picture) delay(100)
+                }
+                assertTrue("The actual native Surface must contain the decoded pattern", picture)
+            }
+            assertTrue("Native audio track must be discovered", model.player.state.value.audio.any { it.id >= 0 })
+            val device = UiDevice.getInstance(instrumentation)
+            fun capture(name: String) {
+                val suffix = if (visualVariant.isEmpty()) "" else "-$visualVariant"
+                device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+                device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$name$suffix.png")
+            }
+            assertTrue("Playing controls must hide after inactivity", device.wait(Until.gone(By.desc("暂停播放")), 6000))
+            device.findObject(By.desc("视频画面")).click()
+            assertTrue("A tap restores explicit playback controls", device.wait(Until.hasObject(By.desc("暂停播放")), 3000))
+            onMain { model.player.seek(7000) }
+            checking = "explicit seek"
+            waitUntil { model.player.state.value.positionMs in 6500..9500 && model.player.state.value.phase != "正在跳转" }
+            onMain { model.pausePlayback() }
+            checking = "pause and remote checkpoint"
+            waitUntil { !model.player.state.value.playing && source.position >= 6.5 }
+            val account = storage.accounts(profile).single()
+            val history = PlaybackHistory(ClientDatabase.get(instrumentation.targetContext))
+            val saved = withTimeout(10_000) { history.recent(account).first { entries -> entries.any { it.positionMs >= 6500 && it.sync == ProgressSync.SYNCED } }.first() }
+            assertEquals("fixture-v1", saved.identity)
+            assertTrue(source.rawRequests.get() > 0)
+            assertEquals(0, source.unexpected.get())
+            device.findObject(By.desc("播放速度")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            device.findObject(By.text("1.25×")).click()
+            waitUntil { model.player.state.value.rate == 1.25f }
+            // At large font sizes this real action sits below the visible
+            // details area. Scroll the native page, never bypass its UI.
+            for (attempt in 0 until 4) {
+                val target = device.findObject(By.desc("播放器音量"))
+                if (target != null && target.visibleBounds.height() >= (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt()) break
+                device.findObject(By.desc("播放详情"))?.scroll(Direction.DOWN, 0.7f)
+            }
+            val volumeAction = device.findObject(By.desc("播放器音量"))
+            assertNotNull("Volume must be reachable after scrolling", volumeAction)
+            volumeAction.click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            fun adjustable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+                if (node.contentDescription?.toString() == "播放器音量" && node.rangeInfo != null) return node
+                for (index in 0 until node.childCount) node.getChild(index)?.let { child -> adjustable(child)?.let { return it } }
+                return null
+            }
+            var slider: AccessibilityNodeInfo? = null
+            val readyAt = android.os.SystemClock.uptimeMillis() + 5000
+            while (slider == null && android.os.SystemClock.uptimeMillis() < readyAt) {
+                instrumentation.uiAutomation.rootInActiveWindow?.let { slider = adjustable(it) }
+                if (slider == null) delay(100)
+            }
+            if (slider == null) {
+                fun inspect(node: AccessibilityNodeInfo) {
+                    android.util.Log.i("NfbAcceptance", "class=${node.className}, desc=${node.contentDescription}, range=${node.rangeInfo}, actions=${node.actionList.map { it.id }}")
+                    for (index in 0 until node.childCount) node.getChild(index)?.let(::inspect)
+                }
+                instrumentation.uiAutomation.rootInActiveWindow?.let(::inspect)
+            }
+            assertNotNull("The volume slider must expose an accessible range", slider)
+            val progress = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 35f) }
+            assertTrue(slider!!.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, progress))
+            waitUntil { model.player.state.value.volume == 35 }
+            assertEquals(35, model.player.state.value.volume)
+            assertEquals(1.25f, model.player.state.value.rate, 0.001f)
+            capture("player-volume-sheet")
+            device.findObject(By.desc("关闭播放设置")).click()
+            device.findObject(By.desc("选择音轨")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            capture("player-audio-sheet")
+            device.pressBack()
+            assertTrue(device.wait(Until.hasObject(By.desc("开始播放")), 3000))
+            capture("player-fixture")
+            device.findObject(By.desc("横屏全屏")).click()
+            // Android's first immersive entry presents its own onboarding. Do
+            // not mistake that system overlay for app controls or disable it.
+            if (device.wait(Until.hasObject(By.text("Got it")), 3000)) {
+                device.findObject(By.text("Got it")).click()
+                assertTrue("The system immersive prompt must be dismissed", device.wait(Until.gone(By.text("Got it")), 3000))
+            }
+            assertTrue("Fullscreen button must enter the actual landscape layout", device.wait(Until.hasObject(By.desc("退出全屏")), 5000))
+            assertTrue("Rotation must preserve the paused source", !model.player.state.value.playing && model.state.value.selected == file)
+            device.findObject(By.desc("选择音轨")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
+            capture("player-landscape-audio")
+            device.pressBack()
+            assertTrue(device.wait(Until.hasObject(By.desc("退出全屏")), 3000))
+            capture("player-landscape")
+            activity.scenario.onActivity { owner ->
+                var videoSurface: SurfaceView? = null
+                fun findVideo(view: View) {
+                    if (view is SurfaceView && runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull() == "surface_video") videoSurface = view
+                    if (view is ViewGroup) for (index in 0 until view.childCount) findVideo(view.getChildAt(index))
+                }
+                findVideo(owner.window.decorView)
+                val surface = requireNotNull(videoSurface)
+                assertTrue("Landscape video must use the full available height rather than reserve a black transport strip", surface.height >= owner.window.decorView.height * .95f)
+            }
+            device.findObject(By.desc("退出全屏")).click()
+            assertTrue("Exit fullscreen must restore portrait controls", device.wait(Until.hasObject(By.desc("横屏全屏")), 5000))
+            onMain { model.leavePlayer(); model.tab("recent") }
+            waitUntil { model.recent.value.any { it.resourceKey == file.wirePath } }
+            assertTrue("Recent capture must show the actual recent page", device.wait(Until.hasObject(By.text("继续观看")), 5000))
+            capture("recent-fixture")
+            onMain { model.openRecent(saved) }
+            checking = "recent reopen"
+            waitUntil { model.player.state.value.playing && model.player.state.value.positionMs >= saved.positionMs - 1500 }
+            onMain { model.pausePlayback() }
+            checking = "recent pause and sync"
+            waitUntil { !model.player.state.value.playing && model.state.value.progressStatus == "续播已同步" }
+            checking = "cancel source confirmation"
+            source.stallNextRead.set(true)
+            onMain { model.togglePlayback() }
+            assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
+            assertTrue(device.wait(Until.hasObject(By.desc("处理播放状态")), 3000))
+            device.findObject(By.desc("处理播放状态")).click()
+            assertFalse("Cancel must immediately leave the loading state", model.state.value.busy)
+            source.releaseRead.countDown()
+            delay(700)
+            assertFalse("A canceled confirmation must not resume playback when its response arrives", model.player.state.value.playing)
+            source.resumeRead = CountDownLatch(1)
+            source.releaseRead = CountDownLatch(1)
+            source.stallNextRead.set(true)
+            onMain { model.togglePlayback() }
+            assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
+            activity.scenario.moveToState(Lifecycle.State.CREATED)
+            source.releaseRead.countDown()
+            activity.scenario.moveToState(Lifecycle.State.RESUMED)
+            delay(500)
+            assertFalse("A late resume response must not play after backgrounding", model.player.state.value.playing)
+            assertFalse(model.state.value.busy)
+            source.identity = "fixture-v2"
+            onMain { model.togglePlayback() }
+            checking = "replacement rejection"
+            waitUntil { model.state.value.selected == null && model.state.value.error?.contains("文件已变化") == true }
+            assertFalse("Replacement must not resume an old media lease", model.player.state.value.playing)
+        } catch (error: Throwable) {
+            val device = UiDevice.getInstance(instrumentation)
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/native-playback-failure.png")
+            // This test only uses owned fixture credentials/media. Restrict
+            // diagnostics to this process rather than exporting system logs.
+            runCatching {
+                val output = java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "native-playback-failure-logcat.txt")
+                output.writeText(device.executeShellCommand("logcat -d --pid=${android.os.Process.myPid()} -t 2000"))
+                // UiAutomation runs argv directly. Copy before UTP removes the
+                // app-specific directory; do not rely on shell redirection.
+                device.executeShellCommand("cp ${output.absolutePath} /sdcard/Download/nfb-client-acceptance/native-playback-failure-logcat.txt")
+            }.onFailure { error.addSuppressed(it) }
+            throw error
+        } finally {
+            source.releaseRead.countDown()
+            onMain { model.disconnect() }
+            storage.remove(profile)
+            source.close()
+        }
+    }
+
+    internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap()) : Closeable {
+        private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+        private val sockets = ConcurrentHashMap.newKeySet<Socket>()
+        val rawRequests = AtomicInteger()
+        val subtitleRequests = AtomicInteger()
+        val unexpected = AtomicInteger()
+        val stallNextRead = AtomicBoolean()
+        @Volatile var resumeRead = CountDownLatch(1)
+        @Volatile var releaseRead = CountDownLatch(1)
+        @Volatile var position = 3.0
+        @Volatile var identity = "fixture-v1"
+        @Volatile private var updated = 1L
+        private val acceptor = Thread({
+            while (!server.isClosed) {
+                val socket = try { server.accept() } catch (_: Exception) { break }
+                sockets.add(socket)
+                Thread({ try { serve(socket) } catch (_: Exception) { /* canceled transport */ } finally { sockets.remove(socket); socket.close() } }, "nfb-native-media").apply { isDaemon = true; start() }
+            }
+        }, "nfb-native-source").apply { isDaemon = true; start() }
+        val url = "http://127.0.0.1:${server.localPort}"
+        private fun serve(socket: Socket) {
+            socket.soTimeout = 15_000
+            val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
+            val request = (reader.readLine() ?: return).split(' ')
+            val endpoint = request[1]
+            val headers = mutableMapOf<String, String>()
+            while (true) {
+                val line = reader.readLine() ?: return
+                if (line.isEmpty()) break
+                headers[line.substringBefore(':').lowercase()] = line.substringAfter(':').trim()
+            }
+            val body = CharArray(headers["content-length"]?.toIntOrNull() ?: 0)
+            var count = 0
+            while (count < body.size) { val size = reader.read(body, count, body.size - count); if (size < 0) return; count += size }
+            fun send(bytes: ByteArray, type: String = "application/json", status: Int = 200, extra: String = "") {
+                socket.getOutputStream().apply {
+                    write("HTTP/1.1 $status OK\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n$extra\r\n".toByteArray(Charsets.US_ASCII))
+                    if (request[0] != "HEAD") write(bytes)
+                    flush()
+                }
+            }
+            if (endpoint != "/api/login" && headers["x-auth"].isNullOrEmpty()) { send(ByteArray(0), status = 403); return }
+            when {
+                endpoint == "/api/login" -> {
+                    val payload = JSONObject().put("user", JSONObject().put("id", 71).put("username", "fixture"))
+                    val token = "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
+                    send(token.toByteArray(), "text/plain")
+                }
+                endpoint == "/api/resources/" -> {
+                    val items = JSONArray().put(JSONObject().put("path", "/fixture.mkv").put("wirePath", "/fixture.mkv").put("name", "Native playback fixture.mkv").put("type", "video").put("size", media.size))
+                    subtitles.forEach { (name, bytes) -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name").put("name", name).put("size", bytes.size)) }
+                    send(JSONObject().put("items", items).toString().toByteArray())
+                }
+                endpoint.startsWith("/api/raw/") && subtitles.containsKey(endpoint.removePrefix("/api/raw/")) -> {
+                    subtitleRequests.incrementAndGet()
+                    send(subtitles.getValue(endpoint.removePrefix("/api/raw/")), "text/plain; charset=utf-8")
+                }
+                endpoint == "/api/preview/thumb/fixture.mkv" -> send(ByteArray(0), status = 404)
+                endpoint.startsWith("/api/media/playback") -> {
+                    if (request[0] == "GET" && stallNextRead.compareAndSet(true, false)) { resumeRead.countDown(); releaseRead.await(10, TimeUnit.SECONDS) }
+                    if (request[0] == "PUT") { position = JSONObject(String(body)).getDouble("position"); updated = System.currentTimeMillis() }
+                    send(JSONObject().put("identity", identity).put("position", position).put("duration", 12.0).put("updatedAt", updated).put("exists", true).toString().toByteArray())
+                }
+                endpoint.startsWith("/api/raw/fixture.mkv") -> {
+                    check(!endpoint.contains("inline=true"))
+                    rawRequests.incrementAndGet()
+                    val range = headers["range"]?.removePrefix("bytes=")
+                    if (range == null) send(media, "video/x-matroska", extra = "Accept-Ranges: bytes\r\n")
+                    else {
+                        val start = range.substringBefore('-').toInt()
+                        val end = range.substringAfter('-').toIntOrNull()?.coerceAtMost(media.lastIndex) ?: media.lastIndex
+                        if (start > end) send(ByteArray(0), status = 416, extra = "Content-Range: bytes */${media.size}\r\n")
+                        else send(media.copyOfRange(start, end + 1), "video/x-matroska", 206, "Accept-Ranges: bytes\r\nContent-Range: bytes $start-$end/${media.size}\r\n")
+                    }
+                }
+                else -> { unexpected.incrementAndGet(); send(ByteArray(0), status = 404) }
+            }
+        }
+        override fun close() { server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
+    }
+}

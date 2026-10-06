@@ -1,0 +1,29 @@
+diff --git a/libass/ass_fontselect.c b/libass/ass_fontselect.c
+--- a/libass/ass_fontselect.c
++++ b/libass/ass_fontselect.c
+@@ -1040,6 +1040,10 @@
+     const char *name;
+ };
+ 
++#ifdef __ANDROID__
++#include "nfb_android_font_provider.h"
++#endif
++
+ struct font_constructors font_constructors[] = {
+ #ifdef CONFIG_CORETEXT
+     { ASS_FONTPROVIDER_CORETEXT,        &ass_coretext_add_provider,     "coretext"},
+@@ -1096,6 +1100,14 @@
+     }
+ 
+     if (dfp >= ASS_FONTPROVIDER_AUTODETECT) {
++#ifdef __ANDROID__
++        if (dfp == ASS_FONTPROVIDER_AUTODETECT) {
++            priv->default_provider = nfb_android_provider(library, priv, config, ftlibrary);
++            if (priv->default_provider)
++                ass_msg(library, MSGL_INFO, "Using font provider android-ndk");
++        }
++#endif
++        if (!priv->default_provider)
+         for (int i = 0; font_constructors[i].constructor; i++ )
+             if (dfp == font_constructors[i].id ||
+                 dfp == ASS_FONTPROVIDER_AUTODETECT) {

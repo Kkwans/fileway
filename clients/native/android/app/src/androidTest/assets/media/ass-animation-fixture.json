@@ -1,0 +1,176 @@
+{
+  "ownedFixture": true,
+  "notFullSampleAcceptance": true,
+  "fontTools": "4.59.2",
+  "ffmpeg": "ffmpeg version 7.1.1-Jellyfin Copyright (c) 2000-2025 the FFmpeg developers",
+  "tracks": [
+    {
+      "codec": "h264",
+      "title": null,
+      "default": 0
+    },
+    {
+      "codec": "truehd",
+      "title": "NFB TrueHD 220Hz",
+      "default": 1
+    },
+    {
+      "codec": "aac",
+      "title": "NFB AAC 440Hz",
+      "default": 0
+    },
+    {
+      "codec": "flac",
+      "title": "NFB FLAC 660Hz",
+      "default": 0
+    },
+    {
+      "codec": "opus",
+      "title": "NFB Opus 880Hz",
+      "default": 0
+    },
+    {
+      "codec": "subrip",
+      "title": "NFB Text",
+      "default": 0
+    },
+    {
+      "codec": "ass",
+      "title": "NFB ASS Attachment",
+      "default": 0
+    },
+    {
+      "codec": "hdmv_pgs_subtitle",
+      "title": "NFB PGS1",
+      "default": 0
+    },
+    {
+      "codec": "hdmv_pgs_subtitle",
+      "title": "NFB PGS2",
+      "default": 0
+    },
+    {
+      "codec": "hdmv_pgs_subtitle",
+      "title": "NFB PGS3",
+      "default": 0
+    },
+    {
+      "codec": "hdmv_pgs_subtitle",
+      "title": "NFB PGS4",
+      "default": 0
+    },
+    {
+      "codec": "hdmv_pgs_subtitle",
+      "title": "NFB PGS5",
+      "default": 0
+    },
+    {
+      "codec": "hdmv_pgs_subtitle",
+      "title": "NFB PGS6",
+      "default": 0
+    },
+    {
+      "codec": "ttf",
+      "title": null,
+      "default": 0
+    }
+  ],
+  "pgsRgb": [
+    [
+      255,
+      0,
+      0
+    ],
+    [
+      0,
+      255,
+      0
+    ],
+    [
+      0,
+      0,
+      255
+    ],
+    [
+      255,
+      255,
+      0
+    ],
+    [
+      0,
+      255,
+      255
+    ],
+    [
+      255,
+      0,
+      255
+    ]
+  ],
+  "sha256": {
+    "style.ass": "2c64a3fc5f74eb76c7fdc8e6fa1aba03655bae4709b1f817ba3d98e3db8271f3",
+    "NfbFixtureBars.ttf": "d4142d96504934781f44f4c99a301989324f31adb269c477de4ef5bd4774fe88",
+    "pgs4.sup": "da4515d2e073d65a6f24b8e1965eba84889bc42545b339672b4ce2d1e7b44db4",
+    "pgs2.sup": "e33b5435651e42dea783a3c4b855a462c0b3e7e0fc09b3b3466fae7dd347c1c3",
+    "text.srt": "8bc5bfa7d91d0139995a84c327b21ddb164c44904dbca51de5ac256b1eedf484",
+    "pgs5.sup": "d53878af5701eea321d9ce9514e6c3d2b23f986641b2f54ca184d051537560da",
+    "pgs3.sup": "468267eb0df42bf09410233bdd1a5413aaea7204fd93ecd8792f899e5070bf53",
+    "pgs1.sup": "e28acf48a68f5e16ca027ad322e17fbc2af6f81617f0bb7707532fdebebfc2ea",
+    "pgs6.sup": "3500774eb32d207f5599c458c0df0e3643b4325bf8ddc787ff86ab61526bcce4",
+    "ass-animation-fixture.mkv": "c3d217efa640d64599e94e9cb81ee474387b916b51b74c2fda5a650d09eb3327"
+  },
+  "assAnimation": {
+    "fixedBoundsAnchors": [
+      [
+        10,
+        10,
+        4,
+        4
+      ],
+      [
+        620,
+        330,
+        4,
+        4
+      ]
+    ],
+    "colour": {
+      "position": [
+        80,
+        40
+      ],
+      "size": [
+        80,
+        40
+      ],
+      "redBeforeSeconds": 1.5,
+      "blueAfterSeconds": 2.5
+    },
+    "fade": {
+      "position": [
+        400,
+        60
+      ],
+      "size": [
+        80,
+        40
+      ],
+      "fadeInMs": 1000,
+      "fadeOutMs": 2000,
+      "endSeconds": 11
+    },
+    "movement": {
+      "font": "NfbFixtureBars",
+      "glyph": "I",
+      "from": [
+        20,
+        180
+      ],
+      "to": [
+        200,
+        180
+      ],
+      "durationMs": 4000
+    }
+  }
+}
