@@ -237,7 +237,8 @@ func (f favoritesBackend) DeleteGroupAndUngroup(userID uint, id string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	// A successful Commit closes the transaction; deferred rollback is cleanup.
+	defer func() { _ = tx.Rollback() }()
 
 	var group FavoriteGroup
 	if err := tx.One("ID", id, &group); err != nil {

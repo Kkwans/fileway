@@ -107,10 +107,7 @@ func (broker *Broker) Subscribe(lastID uint64) ([]Event, <-chan Event, func(), b
 func (broker *Broker) SubscribeForUser(lastID uint64, audience uint) ([]Event, <-chan Event, func(), bool) {
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
-	gap := false
-	if len(broker.history) > 0 && lastID > 0 && (lastID < broker.history[0].ID-1 || lastID > broker.nextID) {
-		gap = true
-	}
+	gap := len(broker.history) > 0 && lastID > 0 && (lastID < broker.history[0].ID-1 || lastID > broker.nextID)
 	var replay []Event
 	for _, event := range broker.history {
 		if event.ID > lastID && (event.Audience == 0 || audience == 0 || event.Audience == audience) {

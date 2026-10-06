@@ -68,7 +68,8 @@ func copyDirContext(ctx context.Context, afs afero.Fs, src, dst string, fileMode
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	// The directory is read-only; preserve the operation's primary error.
+	defer func() { _ = dir.Close() }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

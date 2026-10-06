@@ -338,7 +338,7 @@ func TestBoundedVideoScaleFitsPortraitAndKeepsSmallLandscape(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			config, err := png.DecodeConfig(file)
 			if err != nil {
 				t.Fatal(err)

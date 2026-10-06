@@ -28,7 +28,8 @@ func CopyDir(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) e
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	// The directory is read-only; preserve traversal/copy errors below.
+	defer func() { _ = dir.Close() }()
 
 	var errs []error
 	for {

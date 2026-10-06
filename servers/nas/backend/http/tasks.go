@@ -83,7 +83,8 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		return nil, http.StatusConflict, fmt.Errorf("任务所有者已不可用: %w", err)
 	}
 	var retry *tasks.Task
-	if original.Type == tasks.TypeDuplicateCleanup {
+	switch original.Type {
+	case tasks.TypeDuplicateCleanup:
 		var args duplicateCleanupArgs
 		if err := json.Unmarshal(original.Args, &args); err != nil {
 			return nil, http.StatusBadRequest, err
@@ -91,7 +92,7 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		ownerData := *d
 		ownerData.user = owner
 		retry, _, err = enqueueDuplicateCleanup(runtime, &ownerData, args.ReportID, args.Groups, original.ID, true)
-	} else if original.Type == tasks.TypeTrashSize {
+	case tasks.TypeTrashSize:
 		var args trashSizeArgs
 		if err := json.Unmarshal(original.Args, &args); err != nil {
 			return nil, http.StatusBadRequest, err
@@ -99,7 +100,7 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		ownerData := *d
 		ownerData.user = owner
 		retry, err = enqueueTrashSizeTask(runtime, &ownerData, args.ID, original.ID)
-	} else if original.Type == tasks.TypeMediaTranscode {
+	case tasks.TypeMediaTranscode:
 		if len(hlsServices) == 0 || hlsServices[0] == nil {
 			return nil, http.StatusConflict, fmt.Errorf("视频转码服务不可用")
 		}
@@ -108,7 +109,7 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 			return nil, http.StatusConflict, err
 		}
 		retry, err = enqueueMediaTranscode(runtime, d, owner, hlsServices[0], args, original.ID)
-	} else if original.Type == tasks.TypeMediaHLS {
+	case tasks.TypeMediaHLS:
 		if len(hlsServices) == 0 || hlsServices[0] == nil {
 			return nil, http.StatusConflict, fmt.Errorf("兼容播放服务不可用")
 		}
@@ -154,7 +155,7 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 		if !created || retry == nil {
 			return nil, http.StatusConflict, fmt.Errorf("该视频已有可用或正在执行的兼容播放任务")
 		}
-	} else {
+	default:
 		args := original.Args
 		if original.Type == tasks.TypeFileCopy || original.Type == tasks.TypeFileMove {
 			args, err = resumeFileTransferArgs(original)

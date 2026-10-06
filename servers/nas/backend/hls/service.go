@@ -886,18 +886,6 @@ func (service *Service) setState(id string, state State, message string) {
 	}
 }
 
-func (service *Service) setProgress(id string, seconds float64) {
-	if seconds < 0 || seconds != seconds {
-		return
-	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if current := service.entries[id]; current != nil && seconds >= current.ProcessedSeconds {
-		current.ProcessedSeconds = seconds
-		current.UpdatedAt = time.Now().UnixMilli()
-	}
-}
-
 func (service *Service) finish(id string, state State, message string, size int64) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
