@@ -26,5 +26,8 @@ This repository contains separately licensed components. Preserve each component
 LICENSE and third-party notices: server projects currently use Apache-2.0, and
 the native client uses GPL-3.0. There is no blanket relicensing of imported code.
 
+Latest migration evidence and blockers are recorded in [migration gates](docs/migration.md).
+For the upcoming Android planning session, start with [App handoff](docs/app-next-session.md).
+
 Product branding is 栖卷 / Fileway. Existing package identifiers and protocol
 names are intentionally preserved for compatibility, not accidental rebranding gaps.

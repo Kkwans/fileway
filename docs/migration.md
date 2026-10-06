@@ -46,3 +46,63 @@ has been relocated. Old local generated assets and historical unreviewed CR
 documents are preserved privately/in place, not automatically published here.
 
 App development entry: [new-session instructions](app-next-session.md).
+
+## Execution checkpoint: 2026-10-06
+
+Fileway is created at https://github.com/Kkwans/fileway on main. Original source
+trees were verified byte-for-byte at import commits cd6e58c6 (NAS), 97b9239e
+(Windows server), and e01bfa17 (native clients). Original commit IDs remain
+reachable. Published historical tags are namespaced under legacy/nas and
+legacy/client; Windows artplayer-trial is retained under
+legacy/windows/branches/artplayer-trial. Local unpublished refs/patches are also
+backed up privately, not automatically published.
+
+All three source repositories had zero open issues in the queried API response.
+Existing Android release assets intentionally remain at their original public
+URLs; later archival retains downloads. There is no newly signed production APK
+or package-ID change. Root workflows upload migration build candidates, not an
+implicit formal app release.
+
+### Passed evidence
+
+- Native core: GitHub Actions run 37466193372 passed Go test/race/vet.
+- NAS server: Linux Web lint/tests/build, Go tests/vet/build passed in new root CI.
+- NAS backend lint: original seven failures fixed in 841dafcc; nas-lint passed
+  in runs 37466631141 and 37467421859, without disabling checks.
+- Windows Web: line-ending contract and stale unused code corrected in 7e2bb306.
+  Local lint/typecheck, 106 test files / 440 tests passed. A production build
+  passed during the same remediation cycle; latest Windows-runner Web gates
+  also passed before reaching backend tests.
+- Android API35 and API37/16KiB workflow reached instrumentation after the
+  build/check stage. Emulator/media acceptance is a separate, still pending
+  result; source import does not resolve historical playback failures.
+- New-root emulator script contract: nine scenarios passed; it now tests the
+  active root workflow, not the inert imported workflow copy.
+
+### Archive/cutover blockers
+
+Windows native-host Go tests in run 37467421859 fail in analysis, hls and trash:
+
+1. Duplicate-keeper identity and path/rule-filter assertions fail on Windows.
+   Distinguish actual DriveFs behavior from portable-test fixture assumptions
+   before changing a security/deletion decision.
+2. HLS tests execute a Unix fake-ffmpeg.sh as a process; Windows rejects it as
+   an invalid executable. Replace the test helper with a portable fixture,
+   not skipped tests or a claim that actual FFmpeg is broken.
+3. Directory-size callbacks attempt restore/delete while enumeration holds a
+   Windows directory handle. Tests fail with sharing violations; design and
+   verify cancellation/handle ownership before changing concurrent mutation.
+
+The old CI did not provide the same Windows-host test matrix. These are not
+evidence that simple import changed the product, but they prevent certifying
+the proposed cross-platform consolidation as fully verified.
+
+Production NAS still runs its original image (source e9acbdb6), original config
+and database mounts, and RK3588 device mappings. A private runtime-relocation
+configuration and rollback script are prepared but NOT applied. Windows service
+installation is separate from a Git checkout and has NOT been moved.
+
+No original GitHub repository is archived; no original local checkout is moved
+or deleted. Do not perform those steps until the unresolved Windows migration
+gates and active Android workflow evidence have been reviewed. Continued source
+work should use Fileway, not fork new changes back into old repositories.
