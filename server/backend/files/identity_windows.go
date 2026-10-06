@@ -23,11 +23,13 @@ func fileIdentity(filesystem afero.Fs, name string) *Identity {
 	}
 	defer func() { _ = windows.CloseHandle(handle) }()
 	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(handle, &info); err != nil || info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
 		return nil
 	}
 	mode := uint32(0o100000)
-	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		mode = 0o120000
+	} else if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		mode = 0o040000
 	}
 	return &Identity{DeviceMajor: info.VolumeSerialNumber,

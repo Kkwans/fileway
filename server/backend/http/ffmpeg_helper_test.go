@@ -1,4 +1,4 @@
-package hls
+package fbhttp
 
 import (
 	"os"

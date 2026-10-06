@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Kkwans/nas-file-browser/backend/internal/testutil"
 )
 
 func TestReserveMergesSameSourceAndRunCreatesReusableCache(t *testing.T) {
@@ -495,12 +497,7 @@ func TestCanCopyWebMMediaRequiresBrowserNativeCodecs(t *testing.T) {
 func newFakeService(t *testing.T, workers int, maxBytes int64, delay time.Duration) *Service {
 	t.Helper()
 	directory := t.TempDir()
-	script, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("FILEWAY_TEST_FFMPEG_HELPER", "1")
-	t.Setenv("FILEWAY_TEST_FFMPEG_DELAY", delay.String())
+	script := testutil.FFmpegExecutable(t, delay)
 	service, err := New(Config{
 		CacheDir: filepath.Join(directory, "cache"), MaxBytes: maxBytes,
 		Workers: workers, FFmpegPath: script,

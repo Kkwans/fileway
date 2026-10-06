@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"github.com/spf13/afero"
 
 	"github.com/Kkwans/nas-file-browser/backend/hls"
+	"github.com/Kkwans/nas-file-browser/backend/internal/testutil"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
 	"github.com/Kkwans/nas-file-browser/backend/users"
 )
@@ -236,14 +236,11 @@ func TestMediaHLSStatusResponseMarksMP4RemuxProfile(t *testing.T) {
 func newHTTPHLSService(t *testing.T, slow bool) *hls.Service {
 	t.Helper()
 	directory := t.TempDir()
-	script := filepath.Join(directory, "fake-ffmpeg.sh")
-	contents := "#!/bin/sh\nfor last do :; done\noutdir=$(dirname \"$last\")\nprintf 'segment-data' > \"$outdir/segment-000000.ts.tmp\"\nmv \"$outdir/segment-000000.ts.tmp\" \"$outdir/segment-000000.ts\"\nprintf '#EXTM3U\\n#EXTINF:4,\\nsegment-000000.ts\\n#EXT-X-ENDLIST\\n' > \"$last.tmp\"\nmv \"$last.tmp\" \"$last\"\n"
+	delay := time.Duration(0)
 	if slow {
-		contents += "exec sleep 5\n"
+		delay = 5 * time.Second
 	}
-	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	script := testutil.FFmpegExecutable(t, delay)
 	service, err := hls.New(hls.Config{
 		CacheDir: filepath.Join(directory, "cache"), MaxBytes: hls.DefaultMaxBytes,
 		Workers: 1, FFmpegPath: script,
