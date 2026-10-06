@@ -1,0 +1,11 @@
+# Optional vendor shared-folder discovery. Ordinary Linux does not use this.
+services:
+  filebrowser:
+    environment:
+      UGREEN_SMB_SHARE_CONFIG: /run/ugreen/smbshare.conf
+    volumes:
+      - type: bind
+        source: ${FILEWAY_SMB_CONFIG:-/etc/samba/smbshare.conf}
+        target: /run/ugreen/smbshare.conf
+        read_only: true
+        bind: {create_host_path: false}

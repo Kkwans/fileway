@@ -1,0 +1,37 @@
+name: fileway
+services:
+  filebrowser:
+    image: ${FILEWAY_IMAGE_NAME:-fileway-linux}:${IMAGE_TAG:?Set an explicit tested image tag}
+    container_name: fileway-linux
+    restart: unless-stopped
+    ports:
+      - "${FILEWAY_BIND:-127.0.0.1}:${FILEWAY_PORT:-8888}:80"
+    volumes:
+      - type: bind
+        source: ${FILEWAY_ROOT:?Set the directory to serve}
+        target: /srv
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FILEWAY_RUNTIME_DIR:?Set runtime storage outside the source checkout}/config
+        target: /config
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${FILEWAY_RUNTIME_DIR:?Set runtime storage outside the source checkout}/database
+        target: /database
+        bind: {create_host_path: false}
+      - preview-cache:/cache/previews
+      - hls-cache:/cache/hls
+    tmpfs: [/cache]
+    environment:
+      FB_ROOT: /srv
+      FB_DATABASE: /database/filebrowser.db
+      FB_CACHE_DIR: /cache/previews
+      FB_CACHE_MAX_BYTES: "10737418240"
+      FB_HLS_CACHE_DIR: /cache/hls
+      FB_HLS_CACHE_MAX_BYTES: "10737418240"
+      FB_HLS_PROCESSORS: "1"
+volumes:
+  preview-cache:
+    name: ${FILEWAY_PREVIEW_VOLUME:-fileway-preview-cache}
+  hls-cache:
+    name: ${FILEWAY_HLS_VOLUME:-fileway-hls-cache}

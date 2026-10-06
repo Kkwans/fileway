@@ -2,7 +2,7 @@ name: Unified server and Web
 on:
   push:
     branches: [main]
-    paths: ['server/**', '.gitattributes', '.github/workflows/servers.yml']
+    paths: ['server/**', 'deploy/linux/**', '.dockerignore', '.gitattributes', '.github/workflows/servers.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,6 +23,12 @@ jobs:
       - run: corepack pnpm run lint
       - run: corepack pnpm run test
       - run: corepack pnpm run build
+      - name: Build and packaging contracts
+        working-directory: .
+        run: |
+          node --test server/scripts/embed-web.test.mjs
+          python3 deploy/linux/test-image-policy.py
+          bash -n deploy/linux/build.sh deploy/linux/check-image-tag.sh deploy/linux/push.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fileway-web-${{ github.sha }}

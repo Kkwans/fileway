@@ -20,7 +20,9 @@ const pnpmWorkspaceSource = readFileSync(
   "utf8"
 );
 const customDockerfileSource = readFileSync(
-  fileURLToPath(new URL("../../../../Dockerfile.custom", import.meta.url)),
+  fileURLToPath(
+    new URL("../../../../../deploy/linux/Dockerfile", import.meta.url)
+  ),
   "utf8"
 );
 
@@ -75,10 +77,10 @@ describe("视频兼容播放依赖契约", () => {
     );
     expect(customDockerfileSource).toContain("frontend/pnpm-workspace.yaml");
     expect(customDockerfileSource).toContain(
-      "COPY frontend/patches/ ./patches/"
+      "COPY server/frontend/patches/ ./patches/"
     );
     expect(
-      customDockerfileSource.indexOf("COPY frontend/patches/")
+      customDockerfileSource.indexOf("COPY server/frontend/patches/")
     ).toBeLessThan(
       customDockerfileSource.indexOf("pnpm install --frozen-lockfile")
     );

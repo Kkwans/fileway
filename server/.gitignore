@@ -26,7 +26,7 @@ frontend/test-results/
 /backend/.go-cache/
 /.pw-tmp/
 /.tmp/
-/docker-compose.custom.sync-conflict-*.yml
+/deploy-local/
 
 # Log files
 npm-debug.log*

@@ -17,7 +17,7 @@ if [[ "$repo" == "$ref" || -z "$repo" || -z "$tag" ]]; then
 fi
 
 if [[ ! "$repo" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*$ ]]; then
-  echo "镜像仓库名不符合 NAS 规范：$repo" >&2
+  echo "镜像仓库名称不合法：$repo" >&2
   exit 1
 fi
 

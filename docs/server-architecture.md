@@ -51,4 +51,7 @@ executables. Platform deployment metadata is recorded separately; user databases
 credentials, mounts and signing material are runtime state outside this repository.
 Standalone Go builds must first embed the freshly built Web assets into
 `server/backend/frontend/dist`; an old embedded build is not the current UI.
-The root server workflow and Linux multi-stage Dockerfiles perform this step.
+The root server workflow and the Linux multi-stage Dockerfile perform this step.
+Linux packaging is centralized in `deploy/linux/Dockerfile` and `compose.yml`.
+`profiles/rockchip.yml` and `profiles/ugreen.yml` add only optional hardware/vendor
+capabilities; there are no separate `custom` or RK3588 server build trees.
