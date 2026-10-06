@@ -5,20 +5,19 @@ NAS File Browser, its Windows server adaptation, and the native clients.
 
 ## Migration status
 
-Integration is in progress. Existing deployments and published application IDs,
+Deployment verification is in progress. Existing published application IDs,
 signing identities, database paths and release URLs remain unchanged until their
 respective migration checks pass. Do not assume repository import is deployment.
 
 | Component | Path | Status |
 | --- | --- | --- |
-| NAS server and Web | `servers/nas` | Original source imported without runtime data |
-| Windows server and Web | `servers/windows` | Original Windows adaptation; not the desktop client |
+| Linux/Windows server core and Web | `server` | One backend, one frontend; native platform adapters |
 | Android and shared native core | `clients/native` | Existing Android application and Go transport |
 | Windows native client | Not scaffolded | Later planned delivery; no placeholder app |
 
-The two server source trees are a temporary lossless migration boundary, not the
-final architecture. Shared server/Web convergence requires a verified platform
-diff and Windows/Linux regression checks. See [migration gates](docs/migration.md).
+Linux and Windows use the same API routes, core and Web build. macOS reuses them
+when its native adapters and packaging are added. See [architecture](docs/server-architecture.md)
+and [migration gates](docs/migration.md). There is no separate NAS or Windows UI tree.
 
 ## Licenses
 

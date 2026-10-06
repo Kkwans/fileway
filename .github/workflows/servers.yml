@@ -1,64 +1,78 @@
-name: Server platform migration gates
+name: Unified server and Web
 on:
   push:
     branches: [main]
-    paths: ['servers/**', '.github/workflows/servers.yml']
+    paths: ['server/**', '.gitattributes', '.github/workflows/servers.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: server/frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm run lint
+      - run: corepack pnpm run test
+      - run: corepack pnpm run build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fileway-web-${{ github.sha }}
+          path: server/frontend/dist/
+          if-no-files-found: error
   server:
+    needs: web
     strategy:
       fail-fast: false
       matrix:
         include:
-          - component: nas
-            os: ubuntu-24.04
-          - component: windows
-            os: windows-2025
+          - os: ubuntu-24.04
+            artifact: linux
+          - os: windows-2025
+            artifact: windows
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 25
     defaults:
       run:
         shell: bash
-        working-directory: servers/${{ matrix.component }}
+        working-directory: server/backend
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.25.x'
-          cache-dependency-path: servers/${{ matrix.component }}/backend/go.sum
-      - uses: actions/setup-node@v6
+          cache-dependency-path: server/backend/go.sum
+      - name: Prepare embedded assets directory
+        run: |
+          test -d frontend/dist
+          rm -r frontend/dist
+          mkdir -p frontend/dist
+      - uses: actions/download-artifact@v5
         with:
-          node-version: '24.x'
-      - run: corepack enable
-      - name: Web dependencies and gates
-        working-directory: servers/${{ matrix.component }}/frontend
-        run: |
-          corepack pnpm install --frozen-lockfile
-          corepack pnpm run lint
-          corepack pnpm run test
-          corepack pnpm run build
-      - name: Stage exact generated frontend
-        run: |
-          test -f frontend/dist/index.html
-          test -d backend/frontend/dist
-          # Only the runner-owned imported build-output directory is replaced.
-          rm -r backend/frontend/dist
-          cp -R frontend/dist backend/frontend/dist
-      - name: Backend tests and build
-        working-directory: servers/${{ matrix.component }}/backend
+          name: fileway-web-${{ github.sha }}
+          path: server/backend/frontend/dist/
+      - name: Same API and core tests on native OS
         run: |
           go test ./...
           go vet ./...
-          mkdir -p ../artifacts
-          go build -o ../artifacts/fileway-server${{ runner.os == 'Windows' && '.exe' || '' }} .
+      - name: Build exact source
+        run: |
+          mkdir -p ../../artifacts
+          go build -ldflags="-s -w -X github.com/Kkwans/nas-file-browser/backend/version.CommitSHA=${{ github.sha }} -X github.com/Kkwans/nas-file-browser/backend/version.Version=Fileway-${{ github.run_number }}" -o ../../artifacts/fileway-server${{ runner.os == 'Windows' && '.exe' || '' }} .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: fileway-server-${{ matrix.component }}-${{ github.sha }}
-          path: servers/${{ matrix.component }}/artifacts/
+          name: fileway-server-${{ matrix.artifact }}-${{ github.sha }}
+          path: artifacts/
           if-no-files-found: error
-  nas-lint:
+  lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -66,8 +80,8 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.25.x'
-          cache-dependency-path: servers/nas/backend/go.sum
+          cache-dependency-path: server/backend/go.sum
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          working-directory: servers/nas/backend
+          working-directory: server/backend
