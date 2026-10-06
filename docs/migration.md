@@ -74,8 +74,11 @@ implicit formal app release.
   passed during the same remediation cycle; latest Windows-runner Web gates
   also passed before reaching backend tests.
 - Android API35 and API37/16KiB workflow reached instrumentation after the
-  build/check stage. Emulator/media acceptance is a separate, still pending
-  result; source import does not resolve historical playback failures.
+  build/check stage and both preview-candidate APK artifacts were uploaded.
+  API35 subsequently failed connectedDebugAndroidTest in run 37466332586
+  (job 112278180095); its diagnostic artifact was retained. API37 was still
+  running at this checkpoint. Do not assume failure matches an old issue without
+  reading the test report; source import does not resolve playback failures.
 - New-root emulator script contract: nine scenarios passed; it now tests the
   active root workflow, not the inert imported workflow copy.
 
