@@ -1,0 +1,84 @@
+import { fetchURL, removePrefix, createURL } from "./utils";
+import { baseURL } from "@/utils/constants";
+import type { Resource, ResourceItem, DownloadFormat } from "@/types/file";
+
+export async function fetch(url: string, password: string = "") {
+  url = removePrefix(url);
+
+  const res = await fetchURL(
+    `/api/public/share${url}`,
+    {
+      headers: { "X-SHARE-PASSWORD": encodeURIComponent(password) },
+    },
+    false
+  );
+
+  const data = (await res.json()) as Resource;
+  data.url = `/share${data.wirePath ?? url}`;
+
+  if (data.isDir) {
+    if (!data.url.endsWith("/")) data.url += "/";
+    data.items = data.items.map((item: ResourceItem, index: number) => {
+      item.index = index;
+      item.url = item.wirePath
+        ? `${data.url.replace(/\/+$/, "")}/${item.wirePath.replace(/^\/+/, "")}`
+        : `${data.url}${encodeURIComponent(item.name)}`;
+
+      if (item.isDir) {
+        item.url += "/";
+      }
+
+      return item;
+    });
+  }
+
+  return data;
+}
+
+export function download(
+  format: DownloadFormat,
+  hash: string,
+  token: string,
+  ...files: string[]
+) {
+  let url = `${baseURL}/api/public/dl/${hash}`;
+
+  if (files.length === 1) {
+    url += files[0] + "?";
+  } else {
+    let arg = "";
+
+    for (const file of files) {
+      arg += file + ",";
+    }
+
+    arg = arg.substring(0, arg.length - 1);
+    arg = encodeURIComponent(arg);
+    url += `/?files=${arg}&`;
+  }
+
+  if (format) {
+    url += `algo=${format}&`;
+  }
+
+  if (token) {
+    url += `token=${token}&`;
+  }
+
+  // Use a temporary <a> element to trigger download without popup blocker issues
+  const a = document.createElement("a");
+  a.href = url;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+export function getDownloadURL(res: Resource, inline = false) {
+  const params = {
+    ...(inline && { inline: "true" }),
+    ...(res.token && { token: res.token }),
+  };
+
+  return createURL("api/public/dl/" + res.hash + res.path, params);
+}

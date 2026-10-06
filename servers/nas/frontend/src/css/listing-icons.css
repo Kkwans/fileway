@@ -1,0 +1,98 @@
+/* Colors */
+
+/* General */
+
+.file-icons [data-type="audio"] .file-type-icon {
+  color: var(--icon-yellow);
+}
+.file-icons [data-type="image"] .file-type-icon {
+  color: var(--icon-orange);
+}
+.file-icons [data-type="video"] .file-type-icon {
+  color: var(--icon-violet);
+}
+.file-icons [data-type="invalid_link"] .file-type-icon {
+  color: var(--icon-red);
+}
+
+/* #f00 - Adobe/Oracle */
+
+.file-icons [data-ext=".ai"] .file-type-icon,
+.file-icons [data-ext=".java"] .file-type-icon,
+.file-icons [data-ext=".jar"] .file-type-icon,
+.file-icons [data-ext=".psd"] .file-type-icon,
+.file-icons [data-ext=".rb"] .file-type-icon,
+.file-icons [data-ext=".pdf"] .file-type-icon {
+  color: var(--icon-red);
+}
+
+/* #f90 - Image/Presentation */
+
+.file-icons [data-ext=".html"] .file-type-icon,
+.file-icons [data-ext=".odg"] .file-type-icon,
+.file-icons [data-ext=".odp"] .file-type-icon,
+.file-icons [data-ext=".ppt"] .file-type-icon,
+.file-icons [data-ext=".pptx"] .file-type-icon,
+.file-icons [data-ext=".vue"] .file-type-icon,
+.file-icons [data-ext=".xcf"] .file-type-icon {
+  color: var(--icon-orange);
+}
+
+/* #ff0 - Various */
+
+.file-icons [data-ext=".css"] .file-type-icon,
+.file-icons [data-ext=".js"] .file-type-icon,
+.file-icons [data-ext=".json"] .file-type-icon,
+.file-icons [data-ext=".zip"] .file-type-icon {
+  color: var(--icon-yellow);
+}
+
+/* #0f0 - Spreadsheet/Google */
+
+.file-icons [data-ext=".apk"] .file-type-icon,
+.file-icons [data-ext=".dex"] .file-type-icon,
+.file-icons [data-ext=".go"] .file-type-icon,
+.file-icons [data-ext=".ods"] .file-type-icon,
+.file-icons [data-ext=".xls"] .file-type-icon,
+.file-icons [data-ext=".xlsx"] .file-type-icon {
+  color: var(--icon-green);
+}
+
+/* #00f - Document/Microsoft/Apple/Closed */
+
+.file-icons [data-ext=".aac"] .file-type-icon,
+.file-icons [data-ext=".bat"] .file-type-icon,
+.file-icons [data-ext=".cab"] .file-type-icon,
+.file-icons [data-ext=".cs"] .file-type-icon,
+.file-icons [data-ext=".dmg"] .file-type-icon,
+.file-icons [data-ext=".doc"] .file-type-icon,
+.file-icons [data-ext=".docx"] .file-type-icon,
+.file-icons [data-ext=".emf"] .file-type-icon,
+.file-icons [data-ext=".exe"] .file-type-icon,
+.file-icons [data-ext=".ico"] .file-type-icon,
+.file-icons [data-ext=".mp2"] .file-type-icon,
+.file-icons [data-ext=".mp3"] .file-type-icon,
+.file-icons [data-ext=".mp4"] .file-type-icon,
+.file-icons [data-ext=".mpg"] .file-type-icon,
+.file-icons [data-ext=".msi"] .file-type-icon,
+.file-icons [data-ext=".odt"] .file-type-icon,
+.file-icons [data-ext=".ps1"] .file-type-icon,
+.file-icons [data-ext=".rtf"] .file-type-icon,
+.file-icons [data-ext=".vob"] .file-type-icon,
+.file-icons [data-ext=".wim"] .file-type-icon {
+  color: var(--icon-blue);
+}
+
+/* #60f - Various */
+
+.file-icons [data-ext=".iso"] .file-type-icon,
+.file-icons [data-ext=".php"] .file-type-icon,
+.file-icons [data-ext=".rar"] .file-type-icon {
+  color: var(--icon-violet);
+}
+
+/* Overrides */
+
+.file-icons [data-dir="true"] .file-type-icon {
+  color: var(--icon-blue);
+}

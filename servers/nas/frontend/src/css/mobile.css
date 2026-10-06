@@ -1,0 +1,200 @@
+/* 全局移动端壳层。文件列表和 Markdown 各自拥有独立的响应式布局文件。 */
+
+@media (max-width: 899px) {
+  .app-main {
+    width: calc(100% - 1rem);
+    margin: 0 0.5rem;
+  }
+
+  html[dir="rtl"] .app-main {
+    margin-right: 0.5rem;
+    margin-left: 0;
+  }
+
+  .shell__divider {
+    height: 12px;
+  }
+
+  .dashboard {
+    max-width: 100%;
+    padding: 1rem 0.5rem;
+  }
+
+  .dashboard .row {
+    margin-right: 0;
+  }
+
+  .dashboard.editor {
+    padding: 0;
+  }
+
+  .dashboard.editor .editor {
+    min-height: calc(100dvh - 9rem);
+  }
+
+  .action,
+  .item,
+  button {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  html[dir="rtl"] .breadcrumbs {
+    transform: translateX(0);
+  }
+
+  html[dir="rtl"] #nav .wrapper {
+    margin-right: 0;
+  }
+}
+
+@media (max-width: 736px) {
+  body {
+    padding-top: 3rem;
+    padding-bottom: 5rem;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .app-main {
+    width: calc(100% - 1.5rem);
+    margin: 0 0.75rem;
+  }
+
+  html[dir="rtl"] .app-main {
+    margin-right: 0.75rem;
+  }
+
+  #search {
+    display: none;
+  }
+
+  #search.active {
+    position: fixed;
+    inset: 0;
+    z-index: 99998;
+    display: block;
+    background: var(--surfacePrimary, #fff);
+    animation: fadeIn 0.2s ease;
+  }
+
+  #search.active input {
+    padding: 0.875rem 1rem;
+    border: 0;
+    border-bottom: 2px solid var(--blue);
+    border-radius: 0;
+    font-size: 16px;
+  }
+
+  #search.active .result {
+    min-height: 3rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  #more {
+    display: inherit;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Skeleton and generic loading states. */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton {
+  display: inline-block;
+  border-radius: 0.3rem;
+  background: linear-gradient(
+    90deg,
+    var(--surfaceSecondary, #f0f0f0) 25%,
+    var(--hover, #e8e8e8) 50%,
+    var(--surfaceSecondary, #f0f0f0) 75%
+  );
+  background-size: 200px 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+:root.dark .skeleton {
+  background: linear-gradient(
+    90deg,
+    rgb(255 255 255 / 4%) 25%,
+    rgb(255 255 255 / 8%) 50%,
+    rgb(255 255 255 / 4%) 75%
+  );
+  background-size: 200px 100%;
+}
+
+.skeleton-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.4rem;
+}
+
+.skeleton-text {
+  height: 0.85rem;
+  border-radius: 0.25rem;
+}
+
+.skeleton-text.short {
+  width: 60%;
+}
+
+.skeleton-text.medium {
+  width: 80%;
+}
+
+.message.delayed {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.loading-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.loading-dots span {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--textSecondary, #888);
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+
+.loading-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.loading-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes loading-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

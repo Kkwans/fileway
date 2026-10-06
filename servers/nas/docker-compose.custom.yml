@@ -1,0 +1,48 @@
+# NAS File Browser - Custom Build
+# Build and run: docker-compose -f docker-compose.custom.yml up -d --build
+
+services:
+  filebrowser:
+    image: nas-file-browser:${IMAGE_TAG:-2026.9.5-v1}
+    build:
+      context: .
+      dockerfile: Dockerfile.custom
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-2026.9.5-v1}
+        IMAGE_REVISION: ${IMAGE_REVISION:-unknown}
+        IMAGE_CREATED: ${IMAGE_CREATED:-unknown}
+    container_name: nas-file-browser
+    restart: unless-stopped
+    ports:
+      - "8888:80"
+    volumes:
+      - type: bind
+        source: /
+        target: /srv
+      - /volume1:/volume1
+      - /volume2:/volume2
+      - /mnt:/mnt
+      - /home:/home
+      - /root:/root
+      - /etc/samba/smbshare.conf:/run/ugreen/smbshare.conf:ro
+      - ./config:/config
+      - ./database:/database
+      - nas-file-browser-preview-cache:/cache/previews
+      - nas-file-browser-hls-cache:/cache/hls
+    environment:
+      - FB_INSTANCE_HOSTNAME=DH4300Plus
+      - UGREEN_SMB_SHARE_CONFIG=/run/ugreen/smbshare.conf
+      - FB_DATABASE=/database/filebrowser.db
+      - FB_ROOT=/srv
+      - FB_LOGLEVEL=info
+      - FB_CACHE_DIR=/cache/previews
+      - FB_CACHE_MAX_BYTES=10737418240
+      - FB_HLS_CACHE_DIR=/cache/hls
+      - FB_HLS_CACHE_MAX_BYTES=10737418240
+      - FB_HLS_PROCESSORS=1
+
+volumes:
+  nas-file-browser-preview-cache:
+    name: nas-file-browser-preview-cache
+  nas-file-browser-hls-cache:
+    name: nas-file-browser-hls-cache
