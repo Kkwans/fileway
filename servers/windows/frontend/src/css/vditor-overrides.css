@@ -1,0 +1,213 @@
+/* Vditor 边界适配。只在第三方组件的内联/高优先级规则无法配置时使用 !important。 */
+
+#vditor-mount .vditor {
+  height: 100% !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: var(--surfacePrimary, #ffffff) !important;
+}
+
+#vditor-mount .vditor-toolbar {
+  min-height: 2.7rem;
+  padding: 0.2rem 0.55rem;
+  border: 0;
+  border-bottom: 1px solid var(--borderSecondary, #d0d7de);
+  border-radius: 0;
+  background: var(--surfacePrimary, #ffffff);
+}
+
+#vditor-mount .vditor-content,
+#vditor-mount .vditor-wysiwyg,
+#vditor-mount .vditor-ir,
+#vditor-mount .vditor-sv,
+#vditor-mount .vditor-preview {
+  min-height: 0;
+  background: var(--surfacePrimary, #ffffff);
+}
+
+#vditor-mount .vditor-content {
+  overflow: hidden;
+}
+
+#vditor-mount .vditor-wysiwyg,
+#vditor-mount .vditor-ir,
+#vditor-mount .vditor-sv {
+  min-width: 0;
+  min-height: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The mount is a shell; Vditor's own panes are the only scroll owners. */
+#vditor-mount .vditor-ir,
+#vditor-mount .vditor-wysiwyg,
+#vditor-mount .vditor-sv,
+#vditor-mount .vditor-preview {
+  overflow-y: auto;
+}
+
+/*
+ * IR keeps an editable source <pre> beside its rendered preview.  When a
+ * block receives focus Vditor expands both surfaces by design, which makes
+ * one code block look duplicated.  Keep the source as the single editing
+ * surface while focused; the syntax-coloured preview remains the single
+ * surface when the block is idle.
+ */
+#vditor-mount
+  .vditor-ir__node:not(.vditor-ir__node--expand)
+  > .vditor-ir__marker--pre {
+  display: none !important;
+}
+
+#vditor-mount .vditor-ir__node--expand > .vditor-ir__preview {
+  display: none;
+}
+
+#vditor-mount .vditor-outline {
+  border-left: 1px solid var(--borderSecondary, #d0d7de);
+  background: var(--surfacePrimary, #ffffff);
+}
+
+.markdown-preview-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surfacePrimary, #ffffff);
+}
+
+.markdown-preview-shell.has-outline {
+  grid-template-columns: minmax(0, 1fr) 15rem;
+}
+
+.markdown-preview-shell > .vditor-preview--content {
+  min-height: 0;
+  width: min(100%, 96ch);
+  height: 100%;
+  margin-inline: auto;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Reading mode keeps a readable measure by default; wide mode is an explicit
+ * preference for documents whose tables and diagrams benefit from more room. */
+.markdown-preview-shell.is-wide > .vditor-preview--content {
+  width: min(100%, 1200px);
+}
+
+.markdown-preview-outline {
+  min-width: 0;
+  overflow: auto;
+  padding: 0.75rem 0.65rem 1.25rem;
+  border-left: 1px solid var(--borderSecondary, #d0d7de);
+  background: var(--surfaceSecondary, #f8fafc);
+}
+
+.markdown-preview-outline-title {
+  display: block;
+  margin: 0 0 0.55rem;
+  padding: 0 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--borderSecondary, #d0d7de);
+  color: var(--textSecondary, #475569);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.markdown-preview-outline-list {
+  display: grid;
+  gap: 2px;
+}
+
+.markdown-preview-outline-list a {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.38rem 0.45rem;
+  border-radius: 6px;
+  color: var(--textSecondary, #475569);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-preview-outline-list a:hover,
+.markdown-preview-outline-list a:focus-visible {
+  color: var(--blue, #1677ff);
+  background: var(--surfaceSecondary, #f6f8fa);
+}
+
+.markdown-preview-outline-list a:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--blue, #1677ff));
+  outline-offset: 1px;
+}
+
+.markdown-preview-outline-list .outline-level-2 {
+  padding-left: 1rem;
+}
+
+.markdown-preview-outline-list .outline-level-3 {
+  padding-left: 1.5rem;
+}
+
+.markdown-preview-outline-list .outline-level-4,
+.markdown-preview-outline-list .outline-level-5,
+.markdown-preview-outline-list .outline-level-6 {
+  padding-left: 2rem;
+}
+
+#vditor-mount .vditor-toolbar__item button:hover,
+#vditor-mount .vditor-toolbar__item button:focus-visible {
+  border-radius: 6px;
+  background: var(--surfaceSecondary, #f6f8fa);
+}
+
+#vditor-mount .vditor-toolbar__item button:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--blue, #1677ff));
+  outline-offset: 1px;
+}
+
+:root.dark #vditor-mount .vditor,
+:root.dark #vditor-mount .vditor-toolbar,
+:root.dark #vditor-mount .vditor-content,
+:root.dark #vditor-mount .vditor-wysiwyg,
+:root.dark #vditor-mount .vditor-ir,
+:root.dark #vditor-mount .vditor-sv,
+:root.dark #vditor-mount .vditor-preview,
+:root.dark #vditor-mount .vditor-outline,
+:root.dark .markdown-preview-shell,
+:root.dark .markdown-preview-outline {
+  background: var(--surfacePrimary, #0d1117);
+}
+
+@media (max-width: 899px) {
+  #vditor-mount .vditor-toolbar {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  #vditor-mount .vditor-outline {
+    width: min(18rem, 82vw);
+  }
+
+  .markdown-preview-shell {
+    position: relative;
+    display: block;
+    min-height: 0;
+  }
+
+  .markdown-preview-shell.has-outline {
+    display: block;
+  }
+
+  .markdown-preview-outline {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    width: min(18rem, 82vw);
+    box-shadow: -12px 0 32px rgb(15 23 42 / 14%);
+  }
+}

@@ -1,0 +1,49 @@
+*.db
+*.bak
+_old
+rice-box.go
+.idea/
+/filebrowser
+/filebrowser.exe
+/dist
+/data/
+/logs/
+.venv
+.codex-go-cache/
+.codex-go-mod-cache/
+.codex-go-tmp/
+
+.DS_Store
+node_modules
+frontend/test-results/
+
+# local env files
+.env.local
+.env.*.local
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw*
+bin/
+build/
+
+# Vue distributable files
+/frontend/dist/*
+!/frontend/dist/.gitkeep
+/backend/frontend/dist/*
+!/backend/frontend/dist/.gitkeep
+backend/dist/
+backend/backend/
+
+default.nix
+Dockerfile.dev

@@ -1,0 +1,1 @@
+function e(e){let t=e.replace(/\uFFFD+/gu,`（原始名称不可用）`);if(!e.includes(`%`))return t;try{let n=e.split(`/`).map(e=>decodeURIComponent(e)).join(`/`);return n!==e&&/[^\u0000-\u007f]/u.test(n)?n.replace(/\uFFFD+/gu,`（原始名称不可用）`):t}catch{return t}}export{e as t};

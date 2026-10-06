@@ -1,0 +1,1439 @@
+/* ============================================================
+ *  PROMPTS.CSS — 批量操作对话框全面现代化
+ *  覆盖: .card.floating / .overlay / .card-action / .file-list
+ *  兼容: 亮色 / 暗色 / 移动端
+ * ============================================================ */
+
+/* ── Overlay 遮罩 ─────────────────────────────────────────── */
+
+.overlay {
+  background-color: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  transition: opacity 0.2s ease;
+}
+
+/* ── Floating Card 容器 ───────────────────────────────────── */
+
+.card.floating {
+  border-radius: 0.75em;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--borderSecondary, rgba(0, 0, 0, 0.08));
+  animation: prompt-enter 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  overflow: visible;
+  max-width: 28em;
+}
+
+@keyframes prompt-enter {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+/* ── Card Title ───────────────────────────────────────────── */
+
+.card .card-title {
+  padding: 1.25em 1.25em 0.75em;
+  border-bottom: 1px solid var(--divider, rgba(0, 0, 0, 0.06));
+}
+
+.card .card-title h2 {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: var(--textPrimary, #1a1a2e);
+  letter-spacing: -0.01em;
+}
+
+/* ── Card Content ─────────────────────────────────────────── */
+
+.card .card-content {
+  padding: 1.25em;
+  line-height: 1.65;
+  color: var(--textSecondary, #555);
+}
+
+.card .card-content p {
+  margin: 0 0 0.75em;
+}
+
+.card .card-content p:last-child {
+  margin-bottom: 0;
+}
+
+.card .card-content strong {
+  color: var(--textPrimary, #1a1a2e);
+  font-weight: 600;
+}
+
+.card .card-content code {
+  background: var(--surfaceSecondary, #f0f0f5);
+  padding: 0.15em 0.45em;
+  border-radius: 0.35em;
+  font-size: 0.88em;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+  color: var(--textPrimary, #1a1a2e);
+  word-break: break-all;
+}
+
+.card .card-content input[type="text"] {
+  width: 100%;
+  padding: 0.6em 0.85em;
+  border: 1.5px solid var(--borderPrimary, #d0d0dd);
+  border-radius: 0.5em;
+  background: var(--surfacePrimary, #fff);
+  color: var(--textPrimary, #1a1a2e);
+  font-size: 0.95em;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+  margin-top: 0.5em;
+  box-sizing: border-box;
+}
+
+.card .card-content input[type="text"]:focus {
+  outline: none;
+  border-color: var(--blue, #44a6f5);
+  box-shadow: 0 0 0 3px rgba(68, 166, 245, 0.15);
+}
+
+/* ── Card Action (按钮区) ─────────────────────────────────── */
+
+.card .card-action {
+  padding: 0.75em 1.25em 1.25em;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5em;
+}
+
+.card .card-action .button--flat {
+  padding: 0.55em 1.25em;
+  border-radius: 0.5em;
+  font-size: 0.88em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    transform 0.1s;
+}
+
+.card .card-action .button--flat:hover {
+  background: var(--surfaceSecondary, #f0f0f5);
+  transform: translateY(-1px);
+}
+
+.card .card-action .button--flat:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.card .card-action .button--flat.button--grey {
+  color: var(--textSecondary, #888);
+}
+
+.card .card-action .button--flat.button--grey:hover {
+  background: var(--surfaceSecondary, #f0f0f5);
+  color: var(--textPrimary, #555);
+}
+
+/* 删除按钮 - 红色危险样式 */
+.card .card-action .button--flat.button--red,
+.card .card-action .button--red {
+  color: #e53935;
+  background: rgba(229, 57, 53, 0.06);
+}
+
+.card .card-action .button--flat.button--red:hover,
+.card .card-action .button--red:hover {
+  background: rgba(229, 57, 53, 0.12);
+  color: #c62828;
+}
+
+/* 确认/主按钮 - 蓝色高亮 */
+.card .card-action .button--flat:not(.button--grey):not(.button--red) {
+  color: var(--blue, #44a6f5);
+}
+
+.card .card-action .button--flat:not(.button--grey):not(.button--red):hover {
+  background: rgba(68, 166, 245, 0.08);
+}
+
+/* Destructive file actions use AppDialog rather than the legacy floating
+ * card. Keep the common move-to-trash action on the right and preserve a
+ * red semantic hover state for the permanent action. */
+.delete-dialog-copy,
+.delete-dialog-note {
+  margin: 0;
+  color: var(--textPrimary, #1f2937);
+  line-height: 1.6;
+}
+
+.delete-dialog-note {
+  margin-top: 8px;
+  color: var(--textSecondary, #64748b);
+  font-size: 13px;
+}
+
+.delete-dialog-actions {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.delete-dialog-actions button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--borderPrimary, #dbe3ec);
+  border-radius: 9px;
+  color: var(--textSecondary, #475569);
+  background: var(--surfacePrimary, #fff);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.delete-dialog-actions button:hover:not(:disabled),
+.delete-dialog-actions button:focus-visible {
+  border-color: var(--borderSecondary, #c6d0dc);
+  background: var(--surfaceSecondary, #f6f8fb);
+}
+
+.delete-dialog-actions__permanent {
+  border-color: color-mix(in srgb, var(--icon-red, #dc3545) 42%, #fff) !important;
+  color: #fff !important;
+  background: var(--icon-red, #dc3545) !important;
+}
+
+.delete-dialog-actions__permanent:hover:not(:disabled),
+.delete-dialog-actions__permanent:focus-visible {
+  border-color: color-mix(in srgb, var(--icon-red, #dc3545) 88%, #7f1d1d) !important;
+  color: #fff !important;
+  background: color-mix(in srgb, var(--icon-red, #dc3545) 84%, #7f1d1d) !important;
+}
+
+.delete-dialog-actions__trash {
+  border-color: color-mix(in srgb, var(--blue, #1677ff) 34%, #fff) !important;
+  color: #fff !important;
+  background: var(--blue, #1677ff) !important;
+}
+
+.delete-dialog-actions__trash:hover:not(:disabled),
+.delete-dialog-actions__trash:focus-visible {
+  border-color: color-mix(in srgb, var(--blue, #1677ff) 88%, #0f4c9c) !important;
+  color: #fff !important;
+  background: color-mix(in srgb, var(--blue, #1677ff) 86%, #0f4c9c) !important;
+}
+
+.delete-dialog-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+/* 左侧操作按钮（如新建文件夹） */
+.card .card-action .button--flat:first-child {
+  margin-right: auto;
+}
+
+/* ── File List (Copy/Move 文件夹选择器) ───────────────────── */
+
+.file-list {
+  max-height: 45vh;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0.5em 0 0;
+  padding: 0.25em;
+  border: 1.5px solid var(--borderPrimary, #d0d0dd);
+  border-radius: 0.6em;
+  background: var(--surfacePrimary, #fff);
+}
+
+.file-list li {
+  width: 100%;
+  user-select: none;
+  border-radius: 0.45em;
+  padding: 0.55em 0.75em;
+  transition:
+    background 0.12s,
+    transform 0.1s;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-size: 0.92em;
+  color: var(--textPrimary, #1a1a2e);
+  box-sizing: border-box;
+}
+
+.file-list li:hover {
+  background: var(--surfaceSecondary, #f0f0f5);
+}
+
+.file-list li:active {
+  transform: scale(0.985);
+}
+
+.file-list li[aria-selected="true"] {
+  background: var(--blue, #44a6f5);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(68, 166, 245, 0.25);
+}
+
+.file-list li[aria-selected="true"]:hover {
+  background: var(--dark-blue, #3a8fd4);
+}
+
+.file-list li > .file-list-icon {
+  flex: 0 0 auto;
+  color: var(--textSecondary, #888);
+}
+
+.file-list li[aria-selected="true"] > .file-list-icon {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* ── Delete 确认对话框特殊样式 ────────────────────────────── */
+
+.card .card-content .delete-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5em;
+  height: 2.5em;
+  border-radius: 50%;
+  background: rgba(229, 57, 53, 0.08);
+  color: #e53935;
+  margin-bottom: 0.75em;
+}
+
+/* ── Share 对话框优化 ─────────────────────────────────────── */
+
+.card#share {
+  max-width: 30em;
+}
+
+.card#share ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.5em 0 0;
+}
+
+.card#share ul li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5em 0;
+  border-bottom: 1px solid var(--divider, rgba(0, 0, 0, 0.04));
+}
+
+.card#share ul li:last-child {
+  border-bottom: none;
+}
+
+.card#share ul li a {
+  color: var(--blue, #44a6f5);
+  cursor: pointer;
+  margin-right: auto;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.card#share ul li a:hover {
+  text-decoration: underline;
+}
+
+.card#share ul li input,
+.card#share ul li select {
+  padding: 0.35em 0.5em;
+  margin-right: 0.5em;
+  border: 1.5px solid var(--borderPrimary, #d0d0dd);
+  border-radius: 0.4em;
+  background: var(--surfacePrimary, #fff);
+  color: var(--textPrimary, #1a1a2e);
+  font-size: 0.88em;
+  transition: border-color 0.2s;
+}
+
+.card#share ul li input:focus,
+.card#share ul li select:focus {
+  outline: none;
+  border-color: var(--blue, #44a6f5);
+}
+
+.card#share .input-group {
+  display: flex;
+  border: 1.5px solid var(--borderPrimary, #d0d0dd);
+  border-radius: 0.5em;
+  overflow: hidden;
+  margin-top: 0.5em;
+}
+
+.card#share .input-group input {
+  flex: 1;
+  border: none;
+  padding: 0.6em 0.85em;
+  border-radius: 0;
+}
+
+.card#share .input-group input:focus {
+  box-shadow: none;
+}
+
+/* ── Info 对话框优化 ──────────────────────────────────────── */
+
+.card .card-content .break-word {
+  word-break: break-all;
+}
+
+/* ── Collapsible (Share 高级选项) ──────────────────────────── */
+
+.card .collapsible {
+  border-top: 1px solid var(--divider, rgba(0, 0, 0, 0.06));
+}
+
+.card .collapsible > label {
+  padding: 0.85em 0;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.92em;
+  color: var(--textSecondary, #666);
+  transition: color 0.15s;
+}
+
+.card .collapsible > label:hover {
+  color: var(--textPrimary, #1a1a2e);
+}
+
+.card .collapsible > label * {
+  margin: 0;
+  color: inherit;
+}
+
+.card .collapsible > label i {
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-size: 1.1em;
+}
+
+.card .collapsible > input:checked ~ label i {
+  transform: rotate(180deg);
+}
+
+.card .collapsible .collapse {
+  max-height: 0;
+  overflow: hidden;
+  transition:
+    max-height 0.3s ease,
+    padding 0.3s ease;
+}
+
+.card .collapsible > input:checked ~ .collapse {
+  padding-top: 0.75em;
+  padding-bottom: 0.75em;
+  max-height: 20em;
+}
+
+/* ── 暗色模式 ─────────────────────────────────────────────── */
+
+:root.dark .card.floating,
+html.dark .card.floating {
+  background: #1e1e2e;
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+:root.dark .card .card-title,
+html.dark .card .card-title {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+:root.dark .card .card-title h2,
+html.dark .card .card-title h2 {
+  color: #e0e0ee;
+}
+
+:root.dark .card .card-content,
+html.dark .card .card-content {
+  color: #a0a0b8;
+}
+
+:root.dark .card .card-content strong,
+html.dark .card .card-content strong {
+  color: #e0e0ee;
+}
+
+:root.dark .card .card-content code,
+html.dark .card .card-content code {
+  background: rgba(255, 255, 255, 0.06);
+  color: #c0c0d8;
+}
+
+:root.dark .card .card-content input[type="text"],
+html.dark .card .card-content input[type="text"] {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #e0e0ee;
+}
+
+:root.dark .card .card-content input[type="text"]:focus,
+html.dark .card .card-content input[type="text"]:focus {
+  border-color: var(--blue, #44a6f5);
+  box-shadow: 0 0 0 3px rgba(68, 166, 245, 0.12);
+}
+
+:root.dark .card .card-action .button--flat.button--grey,
+html.dark .card .card-action .button--flat.button--grey {
+  color: #808098;
+}
+
+:root.dark .card .card-action .button--flat.button--grey:hover,
+html.dark .card .card-action .button--flat.button--grey:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #a0a0b8;
+}
+
+:root.dark .card .card-action .button--flat.button--red,
+html.dark .card .card-action .button--flat.button--red {
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.08);
+}
+
+:root.dark .card .card-action .button--flat.button--red:hover,
+html.dark .card .card-action .button--flat.button--red:hover {
+  background: rgba(239, 83, 80, 0.15);
+  color: #ff7043;
+}
+
+:root.dark
+  .card
+  .card-action
+  .button--flat:not(.button--grey):not(.button--red),
+html.dark
+  .card
+  .card-action
+  .button--flat:not(.button--grey):not(.button--red) {
+  color: #64b5f6;
+}
+
+:root.dark
+  .card
+  .card-action
+  .button--flat:not(.button--grey):not(.button--red):hover,
+html.dark
+  .card
+  .card-action
+  .button--flat:not(.button--grey):not(.button--red):hover {
+  background: rgba(100, 181, 246, 0.08);
+}
+
+:root.dark .file-list,
+html.dark .file-list {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+:root.dark .file-list li,
+html.dark .file-list li {
+  color: #c0c0d8;
+}
+
+:root.dark .file-list li:hover,
+html.dark .file-list li:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+:root.dark .file-list li[aria-selected="true"],
+html.dark .file-list li[aria-selected="true"] {
+  background: var(--blue, #44a6f5);
+  color: #fff;
+}
+
+:root.dark .file-list li:before,
+html.dark .file-list li:before {
+  color: #808098;
+}
+
+:root.dark .card#share ul li input,
+:root.dark .card#share ul li select,
+html.dark .card#share ul li input,
+html.dark .card#share ul li select {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #e0e0ee;
+}
+
+:root.dark .card#share .input-group,
+html.dark .card#share .input-group {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+:root.dark .card#share .input-group input,
+html.dark .card#share .input-group input {
+  background: transparent;
+  color: #e0e0ee;
+}
+
+:root.dark .card .collapsible,
+html.dark .card .collapsible {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+:root.dark .card .collapsible > label,
+html.dark .card .collapsible > label {
+  color: #808098;
+}
+
+:root.dark .card .collapsible > label:hover,
+html.dark .card .collapsible > label:hover {
+  color: #c0c0d8;
+}
+
+/* ── 移动端响应式 ─────────────────────────────────────────── */
+
+@media (max-width: 736px) {
+  .card.floating {
+    max-width: 95%;
+    width: 95%;
+    max-height: 90%;
+    border-radius: 0.65em;
+  }
+
+  .card .card-title {
+    padding: 1em 1em 0.6em;
+  }
+
+  .card .card-content {
+    padding: 1em;
+  }
+
+  .card .card-action {
+    padding: 0.6em 1em 1em;
+    flex-wrap: wrap;
+  }
+
+  .card .card-action .button--flat {
+    padding: 0.6em 1em;
+    font-size: 0.85em;
+  }
+
+  .file-list {
+    max-height: 50vh;
+  }
+
+  .file-list li {
+    padding: 0.7em 0.75em;
+  }
+}
+
+@media (max-width: 450px) {
+  .card.floating {
+    max-width: 98%;
+    width: 98%;
+    border-radius: 0.5em;
+  }
+
+  .card .card-action {
+    justify-content: stretch;
+  }
+
+  .card .card-action .button--flat {
+    flex: 1;
+    text-align: center;
+  }
+}
+
+/* --- Risk Confirmation Dialog --- */
+.risk-confirm-card {
+  max-width: 440px;
+}
+
+.risk-confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  margin-bottom: 0.8em;
+}
+
+.risk-confirm-icon {
+  flex: 0 0 auto;
+}
+
+.risk-confirm-icon.risk-high {
+  color: #da4453;
+}
+
+.risk-confirm-icon.risk-medium {
+  color: #f5a623;
+}
+
+.risk-confirm-icon.risk-low {
+  color: #16845d;
+}
+
+.risk-confirm-title {
+  font-size: 1.15em;
+  font-weight: 600;
+  color: var(--textPrimary);
+}
+
+.risk-confirm-body {
+  font-size: 0.92em;
+  line-height: 1.6;
+  color: var(--textSecondary);
+}
+
+.risk-confirm-level {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  margin-bottom: 0.6em;
+}
+
+.risk-tag {
+  display: inline-block;
+  font-size: 0.8em;
+  font-weight: 600;
+  padding: 0.2em 0.6em;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.risk-tag.risk-high {
+  background: rgba(218, 68, 83, 0.12);
+  color: #da4453;
+}
+
+.risk-tag.risk-medium {
+  background: rgba(245, 166, 35, 0.12);
+  color: #d4880f;
+}
+
+.risk-path {
+  font-family: monospace;
+  font-size: 0.85em;
+  word-break: break-all;
+  color: var(--textPrimary);
+}
+
+.risk-confirm-message {
+  margin-bottom: 0.5em;
+}
+
+.risk-confirm-details {
+  background: rgba(218, 68, 83, 0.06);
+  border-left: 3px solid #da4453;
+  padding: 0.5em 0.8em;
+  border-radius: 0 4px 4px 0;
+  margin-top: 0.5em;
+}
+
+.risk-confirm-details p {
+  margin: 0;
+  font-size: 0.88em;
+}
+
+.button--orange {
+  color: #f5a623 !important;
+}
+
+.button--orange:hover {
+  background: rgba(245, 166, 35, 0.1) !important;
+}
+
+.risk-confirm-card .card-action button {
+  min-width: 88px;
+  min-height: 44px;
+}
+
+:root.dark .risk-confirm-details,
+html.dark .risk-confirm-details {
+  background: rgba(218, 68, 83, 0.1);
+}
+
+/* ── Quick Preview 快捷预览 ───────────────────────────────── */
+
+.quick-preview-card {
+  max-width: 90vw;
+  max-height: 90vh;
+  width: 800px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.quick-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75em 1em;
+  border-bottom: 1px solid var(--borderSecondary, rgba(0, 0, 0, 0.08));
+  gap: 0.5em;
+  flex-shrink: 0;
+}
+
+.quick-preview-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+  flex: 1;
+}
+
+.quick-preview-name {
+  font-weight: 600;
+  font-size: 0.95em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quick-preview-meta {
+  font-size: 0.8em;
+  opacity: 0.5;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.file-type-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+}
+
+.file-type-icon.type-image {
+  color: var(--icon-orange, #f90);
+}
+.file-type-icon.type-video {
+  color: var(--icon-violet, #60f);
+}
+.file-type-icon.type-audio {
+  color: var(--icon-yellow, #ff0);
+}
+.file-type-icon.type-pdf {
+  color: var(--icon-red, #f00);
+}
+.file-type-icon.type-text {
+  color: var(--icon-blue, #00f);
+}
+.file-type-icon.type-blob {
+  color: var(--icon-grey, #999);
+}
+
+.quick-preview-actions {
+  display: flex;
+  gap: 0.25em;
+  flex-shrink: 0;
+}
+
+.quick-preview-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0.35em;
+  border-radius: 0.375em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--textPrimary, #333);
+  opacity: 0.6;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+
+.quick-preview-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.quick-preview-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.quick-preview-btn:disabled:hover {
+  background: transparent;
+  opacity: 0.3;
+}
+
+.quick-preview-btn.close-btn:hover {
+  color: #e53935;
+  background: rgba(229, 57, 53, 0.08);
+}
+
+.quick-preview-btn > .app-icon {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.quick-preview-body {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  max-height: calc(90vh - 4em);
+  background: var(--surfaceSecondary, #f5f5f5);
+}
+
+.quick-preview-image {
+  max-width: 100%;
+  max-height: calc(90vh - 4em);
+  object-fit: contain;
+  display: block;
+}
+
+.quick-preview-video {
+  max-width: 100%;
+  max-height: calc(90vh - 4em);
+  display: block;
+}
+
+.quick-preview-audio-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1em;
+  padding: 2em;
+}
+
+.audio-icon {
+  width: 4rem;
+  height: 4rem;
+  opacity: 0.3;
+  color: var(--icon-yellow, #ff0);
+}
+
+.quick-preview-audio {
+  width: 320px;
+  max-width: 100%;
+}
+
+.quick-preview-pdf {
+  width: 100%;
+  height: calc(90vh - 4em);
+  border: none;
+}
+
+.quick-preview-text {
+  width: 100%;
+  max-height: calc(90vh - 4em);
+  overflow: auto;
+  margin: 0;
+  padding: 1em 1.25em;
+  font-size: 0.85em;
+  line-height: 1.6;
+  font-family:
+    "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", Consolas,
+    monospace;
+  background: var(--surfacePrimary, #fff);
+  color: var(--textPrimary, #333);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.quick-preview-text code {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.quick-preview-markdown {
+  width: 100%;
+  max-height: calc(90vh - 4em);
+  overflow: auto;
+  padding: 1.5rem 2rem;
+  font-size: 14px;
+  line-height: 1.8;
+  background: var(--surfacePrimary, #fff);
+  box-sizing: border-box;
+}
+
+/* Override Markdown content width inside quick preview modal */
+.quick-preview-markdown.md_preview {
+  max-width: 100%;
+  padding: 1.5rem 2rem;
+  margin: 0;
+}
+
+/* Dark mode for markdown preview */
+:root.dark .quick-preview-markdown,
+html.dark .quick-preview-markdown {
+  background: var(--surfacePrimary, #0f172a);
+  color: #e2e8f0;
+}
+
+:root.dark .quick-preview-body:has(.quick-preview-markdown),
+html.dark .quick-preview-body:has(.quick-preview-markdown) {
+  background: var(--surfacePrimary, #0f172a);
+}
+
+/* Mobile markdown preview */
+@media (max-width: 736px) {
+  .quick-preview-markdown {
+    padding: 1rem 1.25rem;
+    font-size: 13px;
+  }
+  .quick-preview-markdown.md_preview {
+    padding: 1rem 1.25rem;
+  }
+}
+
+.quick-preview-no-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75em;
+  padding: 3em;
+  opacity: 0.5;
+}
+
+.quick-preview-no-preview > .app-icon {
+  width: 3rem;
+  height: 3rem;
+}
+
+.quick-preview-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.7);
+  z-index: 1;
+}
+
+/* Dark mode */
+:root.dark .quick-preview-body,
+html.dark .quick-preview-body {
+  background: var(--surfaceSecondary, #1e1e1e);
+}
+
+:root.dark .quick-preview-btn:hover,
+html.dark .quick-preview-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+:root.dark .quick-preview-loading,
+html.dark .quick-preview-loading {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Mobile */
+@media (max-width: 736px) {
+  .quick-preview-card {
+    width: 95vw;
+    max-width: 95vw;
+    max-height: 92vh;
+  }
+
+  .quick-preview-header {
+    padding: 0.5em 0.75em;
+    flex-wrap: wrap;
+  }
+
+  .quick-preview-meta {
+    display: none;
+  }
+
+  .quick-preview-body {
+    max-height: calc(92vh - 3.5em);
+  }
+
+  .quick-preview-pdf {
+    height: calc(92vh - 3.5em);
+  }
+}
+
+/* ── Batch rename ─────────────────────────────────────────── */
+
+.batch-rename-card {
+  width: min(760px, calc(100vw - 2rem));
+  max-width: 760px;
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.batch-rename-card .rename-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.rename-title h2,
+.rename-section-heading h3 {
+  margin: 0;
+}
+
+.rename-title p,
+.rename-section-heading p {
+  margin: 0.2rem 0 0;
+  color: var(--textSecondary, #697386);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.rename-count,
+.rename-check-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 0.35rem 0.65rem;
+  background: rgba(68, 166, 245, 0.1);
+  color: var(--blue, #2587d8);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.batch-rename-content {
+  display: grid;
+  gap: 1rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.rename-rule,
+.rename-preview {
+  border: 1px solid var(--borderSecondary, rgba(0, 0, 0, 0.09));
+  border-radius: 0.7rem;
+  background: var(--surfacePrimary, #fff);
+}
+
+.rename-rule {
+  padding: 0.9rem;
+}
+
+.rename-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.rename-section-heading h3 {
+  color: var(--textPrimary, #1a1a2e);
+  font-size: 0.92rem;
+}
+
+.rename-section-heading select,
+.rename-rule-fields input {
+  box-sizing: border-box;
+  min-height: 2.45rem;
+  border: 1px solid var(--borderPrimary, #d0d0dd);
+  border-radius: 0.48rem;
+  background: var(--surfacePrimary, #fff);
+  color: var(--textPrimary, #1a1a2e);
+}
+
+.rename-section-heading select {
+  min-width: 8.5rem;
+  padding: 0.35rem 0.65rem;
+}
+
+.rename-rule-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.rename-rule-fields > label:not(.rename-checkbox) {
+  display: grid;
+  flex: 1;
+  gap: 0.25rem;
+  min-width: 0;
+  color: var(--textSecondary, #697386);
+  font-size: 0.76rem;
+}
+
+.rename-rule-fields input {
+  width: 100%;
+  margin: 0 !important;
+  padding: 0.48rem 0.65rem !important;
+}
+
+.rename-rule-fields .rename-rule-base {
+  flex: 2;
+}
+
+.rename-rule-fields .rename-rule-number {
+  flex: 0 1 5rem;
+}
+
+.rename-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.45rem;
+  color: var(--textSecondary, #697386);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.rename-checkbox input {
+  width: 1rem;
+  min-height: auto;
+  margin: 0;
+}
+
+.rename-apply-rule {
+  min-height: 44px;
+  flex-shrink: 0;
+}
+
+.rename-preview {
+  min-height: 13rem;
+  overflow: hidden;
+}
+
+.rename-preview > .rename-section-heading {
+  padding: 0.85rem 0.9rem;
+  border-bottom: 1px solid var(--divider, rgba(0, 0, 0, 0.06));
+}
+
+.rename-check-state--success {
+  background: rgba(30, 166, 114, 0.11);
+  color: #16845d;
+}
+
+.rename-check-state .app-icon {
+  font-size: 1rem;
+}
+
+.rename-preview-list {
+  max-height: 37vh;
+  overflow: auto;
+}
+
+.rename-preview-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(8rem, 1fr) 1.5rem minmax(11rem, 1.2fr);
+  align-items: start;
+  gap: 0.55rem;
+  padding: 0.65rem 0.8rem;
+  border-bottom: 1px solid var(--divider, rgba(0, 0, 0, 0.055));
+}
+
+.rename-preview-row:last-child {
+  border-bottom: 0;
+}
+
+.rename-preview-row--unchanged {
+  background: var(--surfaceSecondary, #f7f8fa);
+}
+
+.rename-preview-row--error {
+  background: rgba(218, 68, 83, 0.055);
+}
+
+.rename-row-index {
+  padding-top: 0.56rem;
+  color: var(--textSecondary, #7b8494);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.rename-source {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding-top: 0.48rem;
+  color: var(--textPrimary, #1a1a2e);
+  font-size: 0.82rem;
+}
+
+.rename-source > .app-icon {
+  flex-shrink: 0;
+  color: var(--textSecondary, #7b8494);
+}
+
+.rename-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rename-arrow {
+  align-self: start;
+  margin-top: 0.55rem;
+  color: var(--textSecondary, #9aa2af);
+}
+
+.rename-target {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.batch-rename-card .rename-target input {
+  width: 100%;
+  min-height: 2.2rem;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.42rem 0.6rem;
+}
+
+.batch-rename-card .rename-target input[aria-invalid="true"] {
+  border-color: #da4453;
+  box-shadow: 0 0 0 2px rgba(218, 68, 83, 0.1);
+}
+
+.rename-row-error,
+.rename-row-skip {
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.rename-row-error {
+  color: #c73546;
+}
+
+.rename-row-skip {
+  color: var(--textSecondary, #7b8494);
+}
+
+.rename-banner {
+  border-radius: 0.55rem;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.rename-banner--error {
+  border: 1px solid rgba(218, 68, 83, 0.22);
+  background: rgba(218, 68, 83, 0.08);
+  color: #b52e3f;
+}
+
+.batch-rename-card .card-action {
+  flex-shrink: 0;
+  border-top: 1px solid var(--divider, rgba(0, 0, 0, 0.06));
+}
+
+.rename-card .card-action button {
+  min-height: 44px;
+  min-width: 5.5rem;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+:root.dark .rename-rule,
+:root.dark .rename-preview,
+:root.dark .rename-section-heading select,
+:root.dark .rename-rule-fields input,
+html.dark .rename-rule,
+html.dark .rename-preview,
+html.dark .rename-section-heading select,
+html.dark .rename-rule-fields input {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.09);
+  color: #e0e0ee;
+}
+
+:root.dark .rename-preview-row--unchanged,
+html.dark .rename-preview-row--unchanged {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+:root.dark .rename-source,
+:root.dark .rename-section-heading h3,
+html.dark .rename-source,
+html.dark .rename-section-heading h3 {
+  color: #e0e0ee;
+}
+
+@media (max-width: 736px) {
+  .batch-rename-card {
+    width: calc(100vw - 0.75rem);
+    max-width: calc(100vw - 0.75rem);
+    max-height: 94vh;
+  }
+
+  .rename-rule-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .rename-rule-fields .rename-rule-base,
+  .rename-rule-fields .rename-rule-number {
+    min-width: 0;
+  }
+
+  .rename-checkbox,
+  .rename-apply-rule {
+    width: 100%;
+  }
+
+  .rename-preview-row {
+    grid-template-columns: 1.4rem minmax(0, 1fr);
+    gap: 0.35rem 0.5rem;
+  }
+
+  .rename-source {
+    padding-top: 0.25rem;
+  }
+
+  .rename-arrow {
+    display: none;
+  }
+
+  .rename-target {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 450px) {
+  .batch-rename-card .rename-title,
+  .rename-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .rename-count,
+  .rename-check-state,
+  .rename-section-heading select {
+    align-self: flex-start;
+  }
+
+  .rename-rule-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .batch-rename-card {
+    animation: none;
+  }
+}

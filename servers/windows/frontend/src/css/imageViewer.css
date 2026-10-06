@@ -1,0 +1,308 @@
+/*
+   Image Viewer - Professional image preview enhancements
+   Features: toolbar, zoom indicator, checkerboard bg, loading, cursor feedback
+*/
+
+/* 黑色沉浸式画布：透明图片也不会出现干扰阅读的棋盘格。 */
+.image-ex-container {
+  background: #090b10;
+}
+
+:root.dark .image-ex-container {
+  background: #090b10;
+}
+
+html.dark .image-ex-container {
+  background: #090b10;
+}
+
+/* ===== Cursor feedback ===== */
+.image-ex-container {
+  cursor: grab;
+}
+
+.image-ex-container:active {
+  cursor: grabbing;
+}
+
+/* ===== Loading spinner overlay ===== */
+.image-viewer-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75em;
+  pointer-events: none;
+}
+
+.image-viewer-loading .spinner-ring {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  animation: image-spinner-rotate 0.8s linear infinite;
+}
+
+@keyframes image-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.image-viewer-loading .spinner-text {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.85em;
+  letter-spacing: 0.05em;
+}
+
+/* ===== Floating toolbar ===== */
+.image-viewer-toolbar {
+  position: absolute;
+  bottom: 1.5em;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  gap: 0.25em;
+  padding: 0.35em 0.5em;
+  background: rgba(30, 30, 30, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75em;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.25s ease,
+    visibility 0.25s ease,
+    transform 0.25s ease;
+  transform: translateX(-50%) translateY(8px);
+}
+
+.image-viewer-toolbar.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.image-viewer-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2em;
+  height: 2em;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0.4em;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+  font-size: 1em;
+}
+
+.image-viewer-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.image-viewer-toolbar button:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.image-viewer-toolbar button.active {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.image-viewer-toolbar button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.image-viewer-toolbar button:disabled:hover {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Divider in toolbar */
+.image-viewer-toolbar .toolbar-divider {
+  width: 1px;
+  height: 1.5em;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 0.15em;
+}
+
+/* Zoom level display */
+.image-viewer-toolbar .zoom-display {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  min-width: 3.5em;
+  text-align: center;
+  padding: 0 0.25em;
+  user-select: none;
+}
+
+/* ===== Image info bar (top-right) ===== */
+.image-viewer-info {
+  position: absolute;
+  top: 4.5em;
+  right: 1em;
+  z-index: 20000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25em;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.3s ease,
+    visibility 0.3s ease;
+  pointer-events: none;
+}
+
+.image-viewer-info.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.image-viewer-info .info-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.3em 0.7em;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 0.5em;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.75em;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.image-viewer-info .info-tag i,
+.image-viewer-info .info-tag > .app-icon {
+  opacity: 0.6;
+}
+
+/* ===== Keyboard shortcut hint (bottom-right) ===== */
+.image-viewer-hints {
+  position: absolute;
+  bottom: 1.5em;
+  right: 1.5em;
+  z-index: 20000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.4s ease 0.5s,
+    visibility 0.4s ease 0.5s;
+  pointer-events: none;
+}
+
+.image-viewer-hints.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.image-viewer-hints .hint-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 0.7em;
+}
+
+.image-viewer-hints kbd {
+  display: inline-block;
+  padding: 0.15em 0.45em;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.3em;
+  font-family: inherit;
+  font-size: 0.9em;
+  line-height: 1;
+}
+
+/* ===== Image fit modes ===== */
+.image-ex-img.img-fit-contain {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.image-ex-img.img-fit-cover {
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+}
+
+/* ===== Smooth zoom transition ===== */
+.image-ex-img.zoom-transition {
+  transition: transform 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* ===== Mobile adjustments ===== */
+@media (max-width: 737px) {
+  .image-viewer-toolbar {
+    bottom: 1em;
+    padding: 0.3em 0.4em;
+    gap: 0.15em;
+    border-radius: 0.6em;
+  }
+
+  .image-viewer-toolbar button {
+    width: 2.2em;
+    height: 2.2em;
+  }
+
+  .image-viewer-toolbar .zoom-display {
+    font-size: 0.75em;
+    min-width: 3em;
+  }
+
+  .image-viewer-info {
+    top: 3.5em;
+    right: 0.5em;
+  }
+
+  .image-viewer-info .info-tag {
+    font-size: 0.7em;
+    padding: 0.25em 0.5em;
+  }
+
+  .image-viewer-hints {
+    display: none;
+  }
+}
+
+/* ===== Very small screens ===== */
+@media (max-width: 450px) {
+  .image-viewer-toolbar {
+    bottom: 0.75em;
+    padding: 0.25em 0.35em;
+  }
+
+  .image-viewer-toolbar .toolbar-divider {
+    display: none;
+  }
+
+  .image-viewer-toolbar .zoom-display {
+    display: none;
+  }
+}

@@ -1,0 +1,86 @@
+package fbhttp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"strconv"
+
+	"github.com/redis/go-redis/v9"
+)
+
+// redisUploadCache is an upload cache for multi replica deployments
+type redisUploadCache struct {
+	client *redis.Client
+}
+
+func newRedisUploadCache(redisURL string) (*redisUploadCache, error) {
+	if redisURL == "" {
+		return nil, fmt.Errorf("redis URL 不能为空")
+	}
+
+	opts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		return nil, fmt.Errorf("无效的 Redis URL: %w", err)
+	}
+
+	client := redis.NewClient(opts)
+
+	// Test connection
+	if err := client.Ping(context.Background()).Err(); err != nil {
+		return nil, fmt.Errorf("连接 Redis 失败: %w", err)
+	}
+
+	return &redisUploadCache{client: client}, nil
+}
+
+func (c *redisUploadCache) filePathKey(filePath string) string {
+	return "filebrowser:upload:" + filePath
+}
+
+func (c *redisUploadCache) Register(filePath string, fileSize int64) {
+	err := c.client.Set(context.Background(), c.filePathKey(filePath), fileSize, uploadCacheTTL).Err()
+	if err != nil {
+		log.Printf("failed to register upload in redis cache: %v", err)
+	}
+}
+
+func (c *redisUploadCache) Complete(filePath string) {
+	err := c.client.Del(context.Background(), c.filePathKey(filePath)).Err()
+	if err != nil {
+		log.Printf("failed to complete upload in redis cache: %v", err)
+	}
+}
+
+func (c *redisUploadCache) GetLength(filePath string) (int64, error) {
+	result, err := c.client.Get(context.Background(), c.filePathKey(filePath)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return 0, fmt.Errorf("未找到该路径的活跃上传")
+		}
+		return 0, fmt.Errorf("redis 错误: %w", err)
+	}
+
+	size, err := strconv.ParseInt(result, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("缓存中的上传长度无效: %w", err)
+	}
+
+	c.Touch(filePath)
+
+	return size, nil
+}
+
+func (c *redisUploadCache) Touch(filePath string) {
+	err := c.client.Expire(context.Background(), c.filePathKey(filePath), uploadCacheTTL).Err()
+	if err != nil {
+		log.Printf("failed to touch upload in redis cache: %v", err)
+	}
+}
+
+func (c *redisUploadCache) Close() {
+	if err := c.client.Close(); err != nil {
+		log.Printf("failed to close redis upload cache: %v", err)
+	}
+}

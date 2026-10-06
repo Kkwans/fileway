@@ -1,0 +1,2 @@
+patchedDependencies:
+  video.js@8.23.7: patches/video.js@8.23.7.patch

@@ -1,0 +1,1 @@
+var e=`win-file-browser-controls-timeout-v1`;function t(){let t=4e3;try{let n=localStorage.getItem(e);if(!n)return t;let r=Number(n);return!Number.isFinite(r)||r<1e3||r>3e4?t:Math.round(r)}catch{return t}}function n(t){let n=Math.min(3e4,Math.max(1e3,Math.round(t||4e3)));try{localStorage.setItem(e,String(n))}catch{}return n}export{n,t};

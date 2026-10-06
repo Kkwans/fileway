@@ -1,0 +1,22 @@
+diff --git a/dist/video.cjs.js b/dist/video.cjs.js
+--- a/dist/video.cjs.js
++++ b/dist/video.cjs.js
+@@ -55719,3 +55719,6 @@ class VhsHandler extends Component {
+     this.playlistController_.sourceUpdater_.on('createdsourcebuffers', () => {
+       this.setupEme_();
+-    }); // the bandwidth of the primary segment loader is our best
++    });
++    if (!this.source_.keySystems) {
++      this.playlistController_.sourceUpdater_.initializedEme();
++    } // the bandwidth of the primary segment loader is our best
+diff --git a/dist/video.es.js b/dist/video.es.js
+--- a/dist/video.es.js
++++ b/dist/video.es.js
+@@ -55707,3 +55707,6 @@ class VhsHandler extends Component {
+     this.playlistController_.sourceUpdater_.on('createdsourcebuffers', () => {
+       this.setupEme_();
+-    }); // the bandwidth of the primary segment loader is our best
++    });
++    if (!this.source_.keySystems) {
++      this.playlistController_.sourceUpdater_.initializedEme();
++    } // the bandwidth of the primary segment loader is our best

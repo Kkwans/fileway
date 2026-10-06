@@ -1,0 +1,147 @@
+/* Context menu ---------------------------------------------------------
+ * Keep this surface compact and anchored to the pointer. The menu is a
+ * command list, not a second card inside the listing, so rows must not add
+ * their own margins or transform on hover. */
+.context-menu {
+  position: fixed;
+  z-index: 10020;
+  display: block;
+  width: max-content;
+  min-width: 208px;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px;
+  max-height: calc(100dvh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
+  color: var(--textPrimary, #1f2937);
+  border: 1px solid var(--borderPrimary, #dbe3ec);
+  border-radius: 10px;
+  background: var(--surfacePrimary, #fff);
+  box-shadow:
+    0 14px 32px rgba(15, 23, 42, 0.16),
+    0 3px 8px rgba(15, 23, 42, 0.08);
+  animation: contextMenuIn 140ms ease-out both;
+}
+
+@keyframes contextMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.context-menu .action {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 0 10px;
+  color: var(--textPrimary, #1f2937);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.context-menu .action .action-label {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-menu .action:hover,
+.context-menu .action:focus-visible {
+  color: var(--blue, #1677ff);
+  background: color-mix(in srgb, var(--blue, #1677ff) 9%, transparent);
+  transform: none;
+}
+
+.context-menu .action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue, #1677ff) 62%, transparent);
+  outline-offset: -2px;
+}
+
+.context-menu .action:active {
+  transform: none;
+}
+
+.context-menu .action i,
+.context-menu .action > .app-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: visible;
+  color: var(--textSecondary, #64748b);
+  transition: color 120ms ease;
+}
+
+.context-menu .action:hover i,
+.context-menu .action:focus-visible i,
+.context-menu .action:hover > .app-icon,
+.context-menu .action:focus-visible > .app-icon {
+  color: currentColor;
+}
+
+.context-menu .action .icon-button__counter {
+  margin-left: auto;
+}
+
+/* Make destructive commands distinct without turning the whole menu into an
+ * alert surface. */
+.context-menu #delete-button {
+  margin-top: 3px;
+  border-top: 1px solid var(--divider, #e5e7eb);
+  border-radius: 0 0 7px 7px;
+}
+
+.context-menu #delete-button:hover,
+.context-menu #delete-button:focus-visible {
+  color: var(--icon-red, #dc2626);
+  background: color-mix(in srgb, var(--icon-red, #dc2626) 9%, transparent);
+}
+
+html.dark .context-menu,
+:root.dark .context-menu {
+  color: var(--textPrimary, #e5e7eb);
+  border-color: var(--borderPrimary, #374151);
+  background: var(--surfacePrimary, #1f2937);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.38),
+    0 3px 10px rgba(0, 0, 0, 0.2);
+}
+
+html.dark .context-menu #delete-button,
+:root.dark .context-menu #delete-button {
+  border-top-color: var(--divider, #374151);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-menu {
+    animation: none;
+  }
+
+  .context-menu .action,
+  .context-menu .action > .app-icon {
+    transition: none;
+  }
+}

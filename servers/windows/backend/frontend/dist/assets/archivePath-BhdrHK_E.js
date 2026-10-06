@@ -1,0 +1,1 @@
+import{r as e}from"./fileListing-B5G76fB0.js";var t=[`.tar.bz2`,`.tar.gz`,`.tar.xz`,`.tar.zst`,`.tar`,`.zip`];function n(e){let n=e.toLowerCase();return t.some(e=>n.endsWith(e))}function r(t){return{path:`/archive`,query:{path:e(t)}}}function i(e){return!e.isDir&&n(e.path)?r(e.path):{path:e.url}}export{i as t};
