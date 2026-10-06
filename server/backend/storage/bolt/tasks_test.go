@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/asdine/storm/v3"
+	bbolt "go.etcd.io/bbolt"
 
 	"github.com/Kkwans/nas-file-browser/backend/hls"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
@@ -54,7 +55,22 @@ func TestTaskBackendPersistsReplayAndClearsProgressFields(t *testing.T) {
 	loaded.Error = ""
 	loaded.Result = nil
 	loaded.Status = tasks.StatusQueued
+	var beforeTxID int
+	if err := db.Bolt.View(func(tx *bbolt.Tx) error {
+		beforeTxID = tx.ID()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := backend.Update(loaded); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Bolt.View(func(tx *bbolt.Tx) error {
+		if tx.ID() != beforeTxID+1 {
+			t.Fatalf("task snapshot used %d durable commits, want 1", tx.ID()-beforeTxID)
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err = backend.GetByID(task.ID)

@@ -105,8 +105,15 @@ func (backend taskBackend) Save(task *tasks.Task) error {
 }
 
 func (backend taskBackend) Update(task *tasks.Task) error {
+	// Publish the full task snapshot atomically. Separate durable commits for
+	// each cleared field expose partial state and multiply flush latency.
+	tx, err := backend.db.Begin(true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	record := newTaskRecord(task)
-	if err := backend.db.Update(record); err != nil {
+	if err := tx.Update(record); err != nil {
 		return err
 	}
 	// Storm omits zero values during struct updates. These fields must still be
@@ -121,11 +128,11 @@ func (backend taskBackend) Update(task *tasks.Task) error {
 		"Result": string(task.Result),
 		"Media":  task.Media, "SourcePath": task.SourcePath, "OutputPath": task.OutputPath,
 	} {
-		if err := backend.db.UpdateField(&taskRecord{ID: task.ID}, field, value); err != nil {
+		if err := tx.UpdateField(&taskRecord{ID: task.ID}, field, value); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func newTaskRecord(task *tasks.Task) *taskRecord {
