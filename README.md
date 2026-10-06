@@ -50,7 +50,8 @@ git clone https://github.com/Kkwans/nas-file-browser.git
 cd nas-file-browser
 
 # 构建并启动
-docker-compose -f docker-compose.custom.yml up -d --build
+./scripts/build-image.sh 2026.9.5-v1
+IMAGE_TAG=2026.9.5-v1 docker compose -f docker-compose.custom.yml up -d --no-build
 
 # 访问
 # 地址: http://your-nas-ip:8888
@@ -120,7 +121,8 @@ pnpm dev
 ### 构建镜像
 
 ```bash
-docker-compose -f docker-compose.custom.yml up -d --build
+./scripts/build-image.sh 2026.9.5-v1
+IMAGE_TAG=2026.9.5-v1 docker compose -f docker-compose.custom.yml up -d --no-build
 ```
 
 ## 📋 更新日志

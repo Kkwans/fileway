@@ -3,10 +3,14 @@
 
 services:
   filebrowser:
-    image: nas-file-browser:2026.9.1-ui-cleanup-00cfad0c
+    image: nas-file-browser:${IMAGE_TAG:-2026.9.5-v1}
     build:
       context: .
       dockerfile: Dockerfile.custom
+      args:
+        IMAGE_VERSION: ${IMAGE_VERSION:-2026.9.5-v1}
+        IMAGE_REVISION: ${IMAGE_REVISION:-unknown}
+        IMAGE_CREATED: ${IMAGE_CREATED:-unknown}
     container_name: nas-file-browser
     restart: unless-stopped
     ports:

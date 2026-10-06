@@ -111,6 +111,10 @@ jobs:
         uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+      - name: Validate Docker image policy
+        run: |
+          ./scripts/check-image-tag.sh nas-file-browser:2026.9.5-v1
+          docker compose -f docker-compose.custom.yml config -q
       - name: Build NAS image without publishing
         run: >-
           docker buildx build
