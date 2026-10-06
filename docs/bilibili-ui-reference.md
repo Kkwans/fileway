@@ -1,5 +1,7 @@
 # Android UI rebuild from supplied official screenshots
 
+> 2026-10-06: Later user requirements supersede historical descriptions below: five layouts, server/account only in Settings, original-ratio/full-name waterfall for UNBOUNDED, and no 130%/200% font checks. The UI is not user-accepted. See [handoff](handoff-2026-10-06.md).
+
 The user's three official Bilibili Android screenshots supplied on 2026-10-03
 are the primary visual targets. They supersede the rejected 29122b2 layout.
 Original screenshots stay in private evidence; they are not app assets or public
