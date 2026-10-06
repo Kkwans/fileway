@@ -14,12 +14,15 @@ remain unchanged. Android hardware/media acceptance is separate from server CI.
 | --- | --- | --- |
 | Linux/Windows server core and Web | `server` | One backend, one frontend; native platform adapters |
 | Android application | `clients/android` | Existing Android application |
-| Shared client core | `shared/core` | Reusable Go transport and protocol core |
+| Shared client core | [`shared/core`](shared/core/README.md) | Client-side Go transport and protocol core; not a second backend |
 | Windows native client | Not scaffolded | Later planned delivery; no placeholder app |
 
 Linux and Windows use the same API routes, core and Web build. macOS reuses them
 when its native adapters and packaging are added. See [architecture](docs/server-architecture.md).
 There is no separate Linux or Windows UI tree.
+`shared` currently contains only `core` because this is the one existing reusable
+client module. It does not duplicate the API, file service or Web UI in `server`.
+See the [server build guide](server/README.md) and [shared module guide](shared/README.md).
 
 ## Licenses
 

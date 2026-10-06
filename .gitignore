@@ -7,3 +7,7 @@
 **/__pycache__/
 /migration-private/
 /shared/core/generated/
+/server/backend/frontend/dist/**
+!/server/backend/frontend/dist/README.txt
+/server/backend/frontend/.embed-*/
+/server/backend/dist_built/

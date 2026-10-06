@@ -1,147 +1,56 @@
-# NAS 文件浏览器
+# 栖卷 · Fileway 服务端
 
-基于 [filebrowser](https://github.com/filebrowser/filebrowser) 的二次开发版本，专为 NAS（网络附加存储）场景优化。
+基于 [File Browser](https://github.com/filebrowser/filebrowser) 开发的文件与媒体
+服务端。Linux、Windows 使用同一套 Go 后端、Vue Web UI 和 HTTP API；NAS 是
+Linux 的部署环境，不是独立维护的产品分支。macOS 尚待原生运行验收。
 
-## ✨ 特性
+## 职责与目录
 
-- 🌐 **全中文界面** - 所有界面和错误信息均为中文
-- 📁 **多存储卷支持** - 支持 volume1、volume2、外置 USB、网络存储等
-- 🏷️ **目录分类系统** - 个人文件夹、共享文件夹、系统文件夹分类展示
-- ⚠️ **风险等级标识** - 高危/中危/低危目录标识，高危操作二次确认
-- ⭐ **目录收藏功能** - 收藏常用目录，快速访问（数据存储在后端数据库）
-- 🏷️ **目录标签功能** - 给目录打标签，分类管理（数据存储在后端数据库）
-- 📝 **Markdown 编辑** - 集成 Vditor 编辑器，支持实时预览
-- 🎨 **现代化 UI** - 优化的界面设计，支持暗色模式
-- 📱 **响应式设计** - 支持移动端访问
+| 目录 | 职责 |
+| --- | --- |
+| `backend` | 认证、权限、文件与媒体操作、任务、回收站和持久化 |
+| `frontend` | 所有服务端共用的 Web UI |
+| `docker` | 容器初始化、健康检查及默认配置 |
+| `scripts` | 构建与镜像质量门禁 |
 
-## 🏗️ 项目结构
+客户端网络模块在 [`shared/core`](../shared/core/README.md)，Android UI 在
+[`clients/android`](../clients/android/README.md)，它们不是这里的后端或 Web 副本。
+平台边界见 [架构说明](../docs/server-architecture.md)。
 
-```
-nas-file-browser/
-├── backend/                # Go 后端代码
-│   ├── auth/              # 认证模块
-│   ├── cmd/               # 命令行入口
-│   ├── errors/            # 错误定义（中文）
-│   ├── files/             # 文件操作
-│   ├── http/              # HTTP 接口
-│   ├── users/             # 用户管理
-│   ├── settings/          # 设置管理
-│   ├── storage/           # 存储层
-│   ├── main.go            # 程序入口
-│   ├── go.mod             # Go 模块定义
-│   └── go.sum             # 依赖校验
-├── frontend/              # Vue 3 前端代码
-│   ├── src/               # 源代码
-│   ├── public/            # 静态资源
-│   └── package.json       # 前端依赖
-├── docker/                # Docker 配置
-├── Dockerfile.custom      # Docker 构建文件
-├── docker-compose.custom.yml  # Docker Compose 配置
-└── README.md              # 本文件
+## 开发与验证
+
+使用各组件锁定的 Go、Node.js 和 pnpm 版本。从仓库根目录执行：
+
+```sh
+cd server/frontend
+corepack pnpm install --frozen-lockfile
+corepack pnpm run lint
+corepack pnpm run test
+corepack pnpm run build
+cd ../..
+node server/scripts/embed-web.mjs
+cd server/backend
+go test -p 2 ./...
+go vet ./...
+go build .
 ```
 
-## 🚀 快速开始
+Web 构建产物不进 Git。`backend/frontend/dist/README.txt` 只保证 Go embed 路径
+可编译，不是可用的 Web UI。构建可运行服务前必须嵌入新 Web 产物；不能用旧
+哈希文件充当最新页面。CI 只构建一次 Web，再供两端服务包共同嵌入。
 
-### Docker 部署（推荐）
+开发前端可在 `frontend` 执行 `corepack pnpm dev`；后端启动时显式配置文件根目录
+及仓库外的数据库路径，不在源码目录存放真实用户数据。
 
-```bash
-# 克隆仓库
-git clone https://github.com/Kkwans/nas-file-browser.git
-cd nas-file-browser
+## 部署
 
-# 构建并启动
-./scripts/build-image.sh 2026.9.5-v1
-IMAGE_TAG=2026.9.5-v1 docker compose -f docker-compose.custom.yml up -d --no-build
+- [Linux 容器部署](../deploy/linux/README.md)：通用配置与可选硬件加速。
+- [Windows 服务端部署](../deploy/windows/README.md)：保留启动器、数据和媒体工具。
 
-# 访问
-# 地址: http://your-nas-ip:8888
-# 默认账号: admin
-# 默认密码: 查看容器日志
-```
+同一 API 的路径值随平台变化，例如 Windows `/C/...` 和 Linux `/data/...`。
+创建时间、盘符和卷标是可选原生元数据，不是不同的 API。账号权限、用户范围、
+Range 请求及旧持久化标识在升级中必须保留。
 
-### 查看默认密码
-
-```bash
-docker logs nas-file-browser 2>&1 | grep "password"
-```
-
-## ⚙️ 配置
-
-### 存储卷挂载
-
-编辑 `docker-compose.custom.yml`，修改 volumes 配置：
-
-```yaml
-volumes:
-  - /volume1:/volume1:ro    # 主存储卷
-  - /volume2:/volume2:ro    # 扩展存储卷（如有）
-  - /volumeUSB1:/volumeUSB1:ro  # USB 外置存储（如有）
-```
-
-### 密码策略
-
-默认密码策略：
-- 最小长度：6 位
-- 无复杂度要求（NAS 内网使用场景）
-
-## 📖 API 文档
-
-所有 API 返回中文错误信息：
-
-| 状态码 | 含义 | 示例 |
-|--------|------|------|
-| 400 | 请求参数错误 | "请求参数错误" |
-| 401 | 未授权 | "未授权，请重新登录" |
-| 403 | 没有权限 | "没有管理员权限" |
-| 404 | 资源不存在 | "文件不存在" |
-| 409 | 资源冲突 | "文件已存在" |
-| 500 | 服务器错误 | "服务器内部错误" |
-
-## 🔧 开发
-
-### 环境要求
-
-- Go 1.25+
-- Node.js 24+
-- pnpm 10+
-
-### 本地开发
-
-```bash
-# 后端
-cd backend
-go run .
-
-# 前端
-cd frontend
-pnpm install
-pnpm dev
-```
-
-### 构建镜像
-
-```bash
-./scripts/build-image.sh 2026.9.5-v1
-IMAGE_TAG=2026.9.5-v1 docker compose -f docker-compose.custom.yml up -d --no-build
-```
-
-## 📋 更新日志
-
-### v2.0.0 (2026-05-18)
-
-- ✨ 全中文界面和错误信息
-- 📁 多存储卷支持
-- 🏷️ 目录分类系统
-- ⚠️ 风险等级标识
-- ⭐ 目录收藏功能
-- 🏷️ 目录标签功能
-- 🎨 现代化 UI 设计
-
-## 📄 许可证
-
-基于 [filebrowser](https://github.com/filebrowser/filebrowser) 开发，遵循原项目许可证。
-
-## 🔗 链接
-
-- [GitHub 仓库](https://github.com/Kkwans/nas-file-browser)
-- [原项目](https://github.com/filebrowser/filebrowser)
+项目使用 [Apache-2.0](LICENSE)。后续开发仅在
+[Kkwans/fileway](https://github.com/Kkwans/fileway) 进行。凭据、数据库、运行
+记录和会话计划均放在仓库外，不作为源码提交。
