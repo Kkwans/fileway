@@ -9,6 +9,9 @@
 - Preserve original module/application IDs during import. Separate structural
   migration, shared-server convergence and product feature work.
 - No credentials, databases, personal server addresses or private media in Git.
+- Keep session prompts, implementation plans, temporary audits and deployment
+  receipts outside Git. Commit only maintained product/architecture/API/build
+  documentation; do not use the repository as a conversation handoff store.
 - Archive old repositories and relocate old local checkouts only after required
   migration gates pass and no running service relies on those directories.
 - App feature work remains Plan first, user confirmation, then Goal execution;

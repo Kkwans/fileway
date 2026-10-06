@@ -16,8 +16,8 @@ respective migration checks pass. Do not assume repository import is deployment.
 | Windows native client | Not scaffolded | Later planned delivery; no placeholder app |
 
 Linux and Windows use the same API routes, core and Web build. macOS reuses them
-when its native adapters and packaging are added. See [architecture](docs/server-architecture.md)
-and [migration gates](docs/migration.md). There is no separate NAS or Windows UI tree.
+when its native adapters and packaging are added. See [architecture](docs/server-architecture.md).
+There is no separate Linux or Windows UI tree.
 
 ## Licenses
 
@@ -25,8 +25,9 @@ This repository contains separately licensed components. Preserve each component
 LICENSE and third-party notices: server projects currently use Apache-2.0, and
 the native client uses GPL-3.0. There is no blanket relicensing of imported code.
 
-Latest migration evidence and blockers are recorded in [migration gates](docs/migration.md).
-For the upcoming Android planning session, start with [App handoff](docs/app-next-session.md).
+Development plans, session handoffs, audit snapshots and deployment evidence are
+kept outside the source repository. Versioned source includes maintained product,
+architecture, build and API documentation only.
 
 Product branding is 栖卷 / Fileway. Existing package identifiers and protocol
 names are intentionally preserved for compatibility, not accidental rebranding gaps.

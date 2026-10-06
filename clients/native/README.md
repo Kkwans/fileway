@@ -8,9 +8,8 @@ Android 10+ / arm64. Kotlin, Compose, libVLC and an embedded Go/tsnet transport.
 
 Implementation in progress. Actual hardware decoding and HDR output acceptance remain open.
 
-Update 2026-10-06: the user reports successful real-device external-network Tailscale testing. Preserve this as user-verified evidence for that scenario; the complete network regression matrix and long-play acceptance remain open. See [device/media acceptance](docs/device-media-acceptance.md) and [development workflow](docs/development-workflow.md).
-
-See the [0.3 TODO and first-release gates](docs/android-0.3-todo.md) for the current user-reported blockers, implementation order and separate device acceptance requirements.
+Physical HDR, decoder and long-play acceptance remain incomplete. Development
+plans and device-specific test evidence are maintained outside this repository.
 
 ## Install the UI preview
 
@@ -30,7 +29,7 @@ bash scripts/build-native.sh
 ```
 
 The SDK path belongs in untracked `android/local.properties` or `ANDROID_HOME`.
-See [approved development plan](docs/development-plan.md) and [delivery evidence](docs/delivery.md).
+See [transport contract](docs/embedded-routing.md) and [local state](docs/local-state.md).
 
 Credentials, Tailscale identity, signing keys and real media must stay outside this repository.
 
