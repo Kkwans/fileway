@@ -4,6 +4,9 @@ Fileway maintains one backend in `server/backend` and one Web frontend in
 `server/frontend`. Linux, Windows and later macOS build from this same source.
 API routes, authentication, permissions, file/media operations, persistence and
 task logic are shared. Client applications consume the same API contract.
+The client-owned Go transport/control module is `clients/shared/core`, separate
+from the server. Its portable components have native Windows unit-test coverage;
+Android JNI and future Windows DLL/desktop adapters remain platform-specific.
 
 ## Operating-system boundary
 

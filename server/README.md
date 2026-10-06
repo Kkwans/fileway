@@ -13,7 +13,7 @@ Linux 的部署环境，不是独立维护的产品分支。macOS 尚待原生�
 | `docker` | 容器初始化、健康检查及默认配置 |
 | `scripts` | 构建与镜像质量门禁 |
 
-客户端网络模块在 [`shared/core`](../shared/core/README.md)，Android UI 在
+客户端网络模块在 [`clients/shared/core`](../clients/shared/core/README.md)，Android UI 在
 [`clients/android`](../clients/android/README.md)，它们不是这里的后端或 Web 副本。
 平台边界见 [架构说明](../docs/server-architecture.md)。
 

@@ -40,7 +40,7 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
       - name: Check playback cache control boundary
-        working-directory: shared/core
+        working-directory: clients/shared/core
         run: |
           go test -race ./transport
           go vet ./transport ./bridge

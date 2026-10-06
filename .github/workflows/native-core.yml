@@ -2,22 +2,34 @@ name: Go transport
 on:
   push:
     branches: [main]
-    paths: ['shared/core/**', '.github/workflows/native-core.yml']
+    paths: ['clients/shared/core/**', '.github/workflows/native-core.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     defaults:
       run:
-        working-directory: shared/core
+        shell: bash
+        working-directory: clients/shared/core
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.26.6'
           cache: false
-      - run: go test -race ./...
-      - run: go vet ./...
+      - name: Native core tests
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            CGO_ENABLED=0 go test ./transport ./bridge ./tailnet
+            CGO_ENABLED=0 go vet ./transport ./bridge ./tailnet
+          else
+            go test -race ./...
+            go vet ./...
+          fi

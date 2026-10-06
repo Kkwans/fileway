@@ -6,7 +6,7 @@
 **/.tmp/
 **/__pycache__/
 /migration-private/
-/shared/core/generated/
+/clients/shared/core/generated/
 /server/backend/frontend/dist/**
 !/server/backend/frontend/dist/README.txt
 /server/backend/frontend/.embed-*/
