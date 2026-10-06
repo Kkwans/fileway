@@ -1,6 +1,7 @@
 # Fileway for Android
 
-Native Android client for NAS File Browser. Windows is planned as a separate delivery.
+Native Android client for Fileway's Linux/Windows servers. Windows desktop is
+planned as a later delivery in this same repository.
 
 Android 10+ / arm64. Kotlin, Compose, libVLC and an embedded Go/tsnet transport.
 

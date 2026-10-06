@@ -1,6 +1,7 @@
 # Client engineering rules
 
-- Android first; Windows client is a later goal. Keep the NAS backend untouched.
+- Android first; Windows client is a later goal. Reuse `shared/core` and the
+  shared server API. Do not change `server/` unless the active task includes it.
 - Work on `main`; one independently verified feature per commit, push immediately.
 - Native playback and embedded tsnet are mandatory. Never claim device/HDR/network acceptance from mocks or builds.
 - No passwords, JWTs, node state, signing keys, personal server addresses or copyrighted media in this public repository.

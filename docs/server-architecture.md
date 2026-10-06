@@ -10,7 +10,8 @@ task logic are shared. Client applications consume the same API contract.
 Go chooses platform implementations inside the owning package:
 
 - `files/identity_linux.go` and `identity_windows.go`: native file identity.
-- `files/created_time_linux.go` and `created_time_windows.go`: birth time.
+- `files/created_time_unix.go` (Linux build tag) and `created_time_windows.go`:
+  birth time.
 - `files/drivefs_windows.go`: Windows logical drives and scoped native paths.
 - `files/directory_open_windows.go`: shared-delete directory handles.
 - `http/volumes_windows.go`: logical drive enumeration; `volumes.go` owns the
@@ -39,7 +40,15 @@ data would require an explicit migration and is unnecessary for source reuse.
 Windows virtual paths `/C/...` and Linux paths `/volume2/...` are data in the
 same API fields, not separate APIs. Scope and permissions apply on both systems.
 The Web displays drive-specific data through shared components.
+The common schema makes native metadata optional: `created` is omitted when
+there is no filesystem birth time (including Windows' virtual computer root),
+and `driveLetter` / `volumeLabel` are provided by drives that expose them.
+Existing per-account branding, sorting, icon sizes and sidebar preferences remain
+user data; identical Web source does not require overwriting those preferences.
 
 The CI builds the Web once and embeds that exact artifact into both server
 executables. Platform deployment metadata is recorded separately; user databases,
 credentials, mounts and signing material are runtime state outside this repository.
+Standalone Go builds must first embed the freshly built Web assets into
+`server/backend/frontend/dist`; an old embedded build is not the current UI.
+The root server workflow and Linux multi-stage Dockerfiles perform this step.

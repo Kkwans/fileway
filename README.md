@@ -3,11 +3,12 @@
 跨设备的个人文件与媒体中心。This repository is the migration destination for
 NAS File Browser, its Windows server adaptation, and the native clients.
 
-## Migration status
+## Components
 
-Deployment verification is in progress. Existing published application IDs,
-signing identities, database paths and release URLs remain unchanged until their
-respective migration checks pass. Do not assume repository import is deployment.
+The historical projects have been consolidated into this repository. Linux and
+Windows use one server implementation and one Web build, tested on native CI
+runners. Existing application IDs, signing identities and published preview URLs
+remain unchanged. Android hardware/media acceptance is separate from server CI.
 
 | Component | Path | Status |
 | --- | --- | --- |
@@ -32,3 +33,9 @@ architecture, build and API documentation only.
 
 Product branding is 栖卷 / Fileway. Existing package identifiers and protocol
 names are intentionally preserved for compatibility, not accidental rebranding gaps.
+
+The former [Linux server](https://github.com/Kkwans/nas-file-browser),
+[Windows server](https://github.com/Kkwans/win-file-browser), and
+[client](https://github.com/Kkwans/nas-file-browser-client) repositories are
+read-only archives. Their history and published releases remain available;
+all new development belongs here.
