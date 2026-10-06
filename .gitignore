@@ -18,6 +18,15 @@ frontend/test-results/
 # local env files
 .env.local
 .env.*.local
+.env
+
+# Local NAS runtime data and disposable tool caches (never publish)
+/database/
+/.go-cache/
+/backend/.go-cache/
+/.pw-tmp/
+/.tmp/
+/docker-compose.custom.sync-conflict-*.yml
 
 # Log files
 npm-debug.log*
