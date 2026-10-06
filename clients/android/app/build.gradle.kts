@@ -20,7 +20,7 @@ android {
         testInstrumentationRunnerArguments["notAnnotation"] = "io.github.kkwans.nasfilebrowser.ExternalNetworkAcceptance"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
-            cmake { arguments += "-DNFB_CORE_DIR=${rootProject.projectDir.parentFile}/core/generated" }
+            cmake { arguments += "-DNFB_CORE_DIR=${rootProject.projectDir.resolve("../../shared/core/generated").canonicalPath}" }
         }
     }
     buildFeatures { compose = true; buildConfig = true }

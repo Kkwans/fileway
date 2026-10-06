@@ -7,7 +7,7 @@ jobs:
   package:
     defaults:
       run:
-        working-directory: clients/native
+        working-directory: clients/android
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -40,21 +40,21 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
       - name: Check playback cache control boundary
-        working-directory: clients/native/core
+        working-directory: shared/core
         run: |
           go test -race ./transport
           go vet ./transport ./bridge
       - name: Build native transport
         run: bash scripts/build-native.sh
       - name: Build preview APK
-        run: ./gradlew -p android :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --stacktrace
       - name: Record exact source and checksum
         run: |
-          git rev-parse HEAD > android/app/build/outputs/apk/debug/SOURCE_SHA.txt
-          cd android/app/build/outputs/apk/debug
+          git rev-parse HEAD > app/build/outputs/apk/debug/SOURCE_SHA.txt
+          cd app/build/outputs/apk/debug
           sha256sum app-debug.apk > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: android-preview-package
-          path: clients/native/android/app/build/outputs/apk/debug/
+          path: clients/android/app/build/outputs/apk/debug/
           if-no-files-found: error

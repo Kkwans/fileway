@@ -51,5 +51,5 @@ def verify(asset):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("asset", nargs="?", type=Path,
-        default=Path(__file__).resolve().parents[1] / "android/app/src/androidTest/assets/media/ass-animation-fixture.mkv")
+        default=Path(__file__).resolve().parents[1] / "app/src/androidTest/assets/media/ass-animation-fixture.mkv")
     verify(parser.parse_args().asset.resolve())

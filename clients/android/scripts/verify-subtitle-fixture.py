@@ -39,7 +39,7 @@ def peak_frequency(samples, sample_rate=48000):
 
 
 def verify():
-    asset = Path(__file__).resolve().parents[1] / "android/app/src/androidTest/assets/media/subtitle-fixture.mkv"
+    asset = Path(__file__).resolve().parents[1] / "app/src/androidTest/assets/media/subtitle-fixture.mkv"
     manifest = json.loads(asset.with_suffix(".json").read_text())
     assert hashlib.sha256(asset.read_bytes()).hexdigest() == manifest["sha256"][asset.name]
     for index, expected in enumerate((220, 440, 660, 880)):

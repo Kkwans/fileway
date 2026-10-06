@@ -2,7 +2,7 @@ name: Android
 on:
   push:
     branches: [main]
-    paths: ['clients/native/**', '.github/workflows/android.yml']
+    paths: ['clients/android/**', 'shared/core/**', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
             target: google_apis_ps16k
     defaults:
       run:
-        working-directory: clients/native
+        working-directory: clients/android
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -55,13 +55,13 @@ jobs:
       - name: Build native transport
         run: bash scripts/build-native.sh
       - name: Build and check
-        run: ./gradlew -p android :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest --stacktrace
+        run: ./gradlew :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest --stacktrace
       - name: Upload installable preview candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         continue-on-error: true
         with:
           name: android-preview-candidate-api${{ matrix.api }}
-          path: clients/native/android/app/build/outputs/apk/debug/*.apk
+          path: clients/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
       - name: Allow KVM in ephemeral runner
         run: |
@@ -79,14 +79,14 @@ jobs:
           script: |
             adb shell getconf PAGESIZE
             if [ '${{ matrix.target }}' = google_apis_ps16k ]; then test "$(adb shell getconf PAGESIZE | tr -d '\r')" = 16384; fi
-            mkdir -p clients/native/android/app/build/acceptance
-            cd clients/native; NFB_TEST_STATUS=0; ./gradlew -p android :app:connectedDebugAndroidTest --stacktrace || NFB_TEST_STATUS=$?; adb pull /sdcard/Download/nfb-client-acceptance android/app/build/acceptance/ || NFB_TEST_STATUS=1; exit "$NFB_TEST_STATUS"
+            mkdir -p clients/android/app/build/acceptance
+            cd clients/android; NFB_TEST_STATUS=0; ./gradlew :app:connectedDebugAndroidTest --stacktrace || NFB_TEST_STATUS=$?; adb pull /sdcard/Download/nfb-client-acceptance app/build/acceptance/ || NFB_TEST_STATUS=1; exit "$NFB_TEST_STATUS"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: android-checkpoint-api${{ matrix.api }}
           path: |
-            clients/native/android/app/build/outputs/apk/debug/*.apk
-            clients/native/android/app/build/reports/
-            clients/native/android/app/build/acceptance/
-            clients/native/android/app/build/outputs/androidTest-results/
+            clients/android/app/build/outputs/apk/debug/*.apk
+            clients/android/app/build/reports/
+            clients/android/app/build/acceptance/
+            clients/android/app/build/outputs/androidTest-results/

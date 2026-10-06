@@ -12,7 +12,8 @@ respective migration checks pass. Do not assume repository import is deployment.
 | Component | Path | Status |
 | --- | --- | --- |
 | Linux/Windows server core and Web | `server` | One backend, one frontend; native platform adapters |
-| Android and shared native core | `clients/native` | Existing Android application and Go transport |
+| Android application | `clients/android` | Existing Android application |
+| Shared client core | `shared/core` | Reusable Go transport and protocol core |
 | Windows native client | Not scaffolded | Later planned delivery; no placeholder app |
 
 Linux and Windows use the same API routes, core and Web build. macOS reuses them

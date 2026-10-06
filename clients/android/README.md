@@ -1,4 +1,4 @@
-# NAS File Browser Client
+# Fileway for Android
 
 Native Android client for NAS File Browser. Windows is planned as a separate delivery.
 
@@ -25,10 +25,10 @@ Use JDK 17 and Go 1.26.6 on a supported Linux x64 build host. Install Android pl
 
 ```sh
 bash scripts/build-native.sh
-./gradlew -p android :app:assembleDebug :app:lintDebug
+./gradlew :app:assembleDebug :app:lintDebug
 ```
 
-The SDK path belongs in untracked `android/local.properties` or `ANDROID_HOME`.
+The SDK path belongs in untracked `local.properties` or `ANDROID_HOME`.
 See [transport contract](docs/embedded-routing.md) and [local state](docs/local-state.md).
 
 Credentials, Tailscale identity, signing keys and real media must stay outside this repository.

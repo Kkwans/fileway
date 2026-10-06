@@ -2,7 +2,7 @@ name: Go transport
 on:
   push:
     branches: [main]
-    paths: ['clients/native/core/**', '.github/workflows/native-core.yml']
+    paths: ['shared/core/**', '.github/workflows/native-core.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: clients/native/core
+        working-directory: shared/core
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff

@@ -10,6 +10,5 @@ local.properties
 *.log
 .idea/
 *.iml
-core/generated/
-android/app/src/main/jniLibs/
+app/src/main/jniLibs/
 private/
