@@ -1,0 +1,8 @@
+.env
+**/.env
+**/node_modules/
+**/.go-cache/
+**/.pw-tmp/
+**/.tmp/
+**/__pycache__/
+/migration-private/
