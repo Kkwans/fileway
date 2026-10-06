@@ -21,7 +21,11 @@
         v-model="rule.path"
       />
 
-      <button type="button" class="button button--red" @click="remove($event, index)">
+      <button
+        type="button"
+        class="button button--red"
+        @click="remove($event, index)"
+      >
         -
       </button>
     </div>

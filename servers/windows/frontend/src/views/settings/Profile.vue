@@ -465,10 +465,13 @@ onMounted(async () => {
   );
   // Account toggles + editor theme: save on change (no in-card 保存/更新).
   let accountReady = false;
-  watch([singleClick, redirectAfterCopyMove, dateFormat, aceEditorTheme], () => {
-    if (!accountReady || !authStore.user?.id) return;
-    void persistAccountPrefsNow();
-  });
+  watch(
+    [singleClick, redirectAfterCopyMove, dateFormat, aceEditorTheme],
+    () => {
+      if (!accountReady || !authStore.user?.id) return;
+      void persistAccountPrefsNow();
+    }
+  );
   setTimeout(() => {
     prefsReady = true;
     accountReady = true;

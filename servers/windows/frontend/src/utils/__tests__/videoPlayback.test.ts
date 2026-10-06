@@ -24,9 +24,9 @@ describe("视频播放源策略", () => {
     expect(getDirectVideoFailureCopy("unsupported").title).toBe(
       "当前浏览器不支持此视频格式"
     );
-    expect(
-      getDirectVideoFailureCopy("decode", "hevc").title
-    ).toContain("H.265");
+    expect(getDirectVideoFailureCopy("decode", "hevc").title).toContain(
+      "H.265"
+    );
     expect(getDirectVideoFailureCopy("decode", "hevc").description).toContain(
       "只有声音"
     );

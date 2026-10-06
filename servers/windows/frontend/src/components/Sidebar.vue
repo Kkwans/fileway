@@ -285,10 +285,10 @@
                     />
                     <span>
                       <strong>{{ volume.displayName }}</strong>
-                      <small
-                        >{{ volume.explorerUsage ||
-                        `${volume.usedFormatted} / ${volume.totalFormatted}` }}</small
-                      >
+                      <small>{{
+                        volume.explorerUsage ||
+                        `${volume.usedFormatted} / ${volume.totalFormatted}`
+                      }}</small>
                       <i aria-hidden="true"
                         ><b
                           :style="{
@@ -780,9 +780,10 @@
                         }"
                       ></div>
                     </div>
-                    <span class="volume-usage"
-                      >{{ vol.explorerUsage || `${vol.usedFormatted} / ${vol.totalFormatted}` }}</span
-                    >
+                    <span class="volume-usage">{{
+                      vol.explorerUsage ||
+                      `${vol.usedFormatted} / ${vol.totalFormatted}`
+                    }}</span>
                   </div>
                 </div>
               </button>

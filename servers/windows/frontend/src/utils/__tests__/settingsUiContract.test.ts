@@ -103,7 +103,8 @@ describe("settings UI contract", () => {
     expect(profile).toContain("check-card");
     expect(profile).toContain("resumeMinSec");
     // timeout row must not ship a preset dropdown
-    const timeoutBlock = profile.split("播放器控件自动隐藏")[1]?.split("默认播放策略")[0] || "";
+    const timeoutBlock =
+      profile.split("播放器控件自动隐藏")[1]?.split("默认播放策略")[0] || "";
     expect(timeoutBlock).not.toContain("<select");
   });
 

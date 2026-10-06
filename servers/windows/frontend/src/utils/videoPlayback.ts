@@ -1,16 +1,3 @@
-const KNOWN_INCOMPATIBLE_VIDEO_EXTENSIONS = new Set([
-  "mkv",
-  "avi",
-  "flv",
-  "wmv",
-  "rm",
-  "rmvb",
-  // Chromium commonly rejects the QuickTime container before issuing a media
-  // request; keep the source detached until the user chooses a playback
-  // path instead of leaving the player in an apparent loading state.
-  "mov",
-]);
-
 const VIDEO_MIME_TYPES: Record<string, string> = {
   mp4: "video/mp4",
   m4v: "video/mp4",
@@ -58,6 +45,8 @@ function extensionOf(value: string) {
 }
 
 export function isKnownIncompatibleVideo(path: string) {
+  // Retain the public helper's argument contract for existing callers.
+  void path;
   // Always try the direct source first (MKV/MOV/etc.). Chromium may still
   // decode common tracks; forcing HLS without ffmpeg is worse UX.
   // Compatibility playback remains available after a real media error.
@@ -172,7 +161,10 @@ export function getDirectVideoFailureCopy(
 ) {
   const isHevc = isHevcCodec(videoCodec);
 
-  if (isHevc && (failure === "decode" || failure === "unsupported" || failure === "unknown")) {
+  if (
+    isHevc &&
+    (failure === "decode" || failure === "unsupported" || failure === "unknown")
+  ) {
     return {
       icon: "movie_filter",
       title: "当前浏览器无法解码 H.265 / HEVC",

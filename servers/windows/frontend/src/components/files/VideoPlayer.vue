@@ -257,7 +257,6 @@ import {
   getNativeContainerPlayback,
   isHevcCodec,
   isPlaybackPositionSeekable,
-  isKnownIncompatibleVideo,
   supportsH264CompatibilityPlayback,
   type DirectVideoFailure,
 } from "@/utils/videoPlayback";
@@ -267,9 +266,7 @@ import { mediaIcon } from "@/utils/mediaIconSemantics";
 import videojs from "video.js";
 import type Player from "video.js/dist/types/player";
 import type { HLSPlaybackState, HLSPlaybackStatus } from "@/api/media";
-import {
-  resolveControlsTimeoutMs,
-} from "@/utils/playerControls";
+import { resolveControlsTimeoutMs } from "@/utils/playerControls";
 import { useAuthStore } from "@/stores/auth";
 import "videojs-hotkeys";
 import "video.js/dist/video-js.min.css";
@@ -471,17 +468,6 @@ function normalizePlaybackMode(raw: string) {
   return "native";
 }
 
-const playbackModeLabel = computed(() => {
-  switch (sessionPlaybackMode.value) {
-    case "compat":
-      return "兼容";
-    case "ask":
-      return "询问";
-    default:
-      return "原生";
-  }
-});
-
 function applyPlaybackRate(rate: number) {
   const p = player.value;
   if (!p) return;
@@ -503,7 +489,7 @@ function persistPlayerPrefs(patch: {
     playbackMode:
       patch.playbackMode ??
       normalizePlaybackMode(prev.playbackMode || "native"),
-    playbackRate: patch.playbackRate ?? (prev.playbackRate ?? 1),
+    playbackRate: patch.playbackRate ?? prev.playbackRate ?? 1,
     resumeMode: prev.resumeMode || "resume",
     resumeMinSec: prev.resumeMinSec ?? 10,
   };
@@ -657,12 +643,9 @@ async function initVideoPlayer() {
 }
 
 function getOptions(...sources: Record<string, unknown>[]) {
-  const timeoutSec = resolveControlsTimeoutMs(
-    authStore.user?.playerPreferences?.controlsTimeoutSec
-  );
   const options = {
     // 0 = never hide; 1–20s from account preference.
-    inactivityTimeout: timeoutSec,
+    inactivityTimeout: controlsTimeoutMs.value,
     controlBar: {
       skipButtons: { forward: 10, backward: 10 },
       playbackRates: playbackRates.value,
@@ -687,7 +670,9 @@ function keepControlsActive() {
   if (!p || disposed) return;
   try {
     p.userActive(true);
-    (p as unknown as { reportUserActivity?: () => void }).reportUserActivity?.();
+    (
+      p as unknown as { reportUserActivity?: () => void }
+    ).reportUserActivity?.();
   } catch {}
 }
 
@@ -706,7 +691,8 @@ function bindControlKeepAlive(p: {
     "click",
   ] as const;
   const handler = () => keepControlsActive();
-  for (const ev of events) root.addEventListener(ev, handler, { passive: true });
+  for (const ev of events)
+    root.addEventListener(ev, handler, { passive: true });
   p.on("play", keepControlsActive);
   p.on("pause", keepControlsActive);
 }
@@ -971,10 +957,13 @@ const compatibilityStartLabel = computed(() => {
     return "重新准备";
   }
   if (isHevcCodec(mediaCodec.value)) {
-    if (/^(hevc|h265|x265|hev1|hvc1)$/i.test(mediaCodec.value.toLowerCase()) || /hevc|h265/i.test(mediaCodec.value)) {
-    return "兼容转码";
-  }
-  return "切换为兼容";
+    if (
+      /^(hevc|h265|x265|hev1|hvc1)$/i.test(mediaCodec.value.toLowerCase()) ||
+      /hevc|h265/i.test(mediaCodec.value)
+    ) {
+      return "兼容转码";
+    }
+    return "切换为兼容";
   }
   return "启动兼容播放";
 });
@@ -1087,6 +1076,8 @@ async function probeNativeContainer(path: string) {
 }
 
 function shouldAttachDirectSource(path: string) {
+  // Keep the shared call contract while this platform always tries direct first.
+  void path;
   // Native-first for every container, including MKV.
   return true;
 }

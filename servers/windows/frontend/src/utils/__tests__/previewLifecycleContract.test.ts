@@ -25,10 +25,14 @@ describe("媒体预览生命周期契约", () => {
     // Native-first: never block attach by extension; compatibility is opt-in after failure.
     expect(videoPlayerSource).toContain("const sourceAttached = ref(true)");
     expect(videoPlayerSource).toContain("function buildDirectSource");
-    expect(videoPlayerSource).toContain("buildDirectSource(props.path, props.source)");
+    expect(videoPlayerSource).toContain(
+      "buildDirectSource(props.path, props.source)"
+    );
     expect(videoPlayerSource).toContain("{ sources: [] }");
     expect(videoPlayerSource).toContain('type === "video/x-matroska"');
-    expect(videoPlayerSource).toContain("inactivityTimeout: controlsTimeoutMs.value");
+    expect(videoPlayerSource).toContain(
+      "inactivityTimeout: controlsTimeoutMs.value"
+    );
     expect(videoPlayerSource).toContain("nativeControlsForTouch: false");
     expect(videoPlayerSource).toContain("function bindControlKeepAlive");
     expect(videoPlayerSource).not.toContain("<source />");

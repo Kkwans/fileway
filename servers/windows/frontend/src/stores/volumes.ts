@@ -2,10 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import type { Volume, SubDir } from "@/api/volumes";
 import { getVolumes } from "@/api/volumes";
-import {
-  formatStorageSize,
-  formatExplorerUsage,
-} from "@/utils/storageSize";
+import { formatStorageSize, formatExplorerUsage } from "@/utils/storageSize";
 import type { AppIconName } from "@/components/ui/iconRegistry";
 
 export interface VolumeDisplay extends Volume {
@@ -18,10 +15,7 @@ export interface VolumeDisplay extends Volume {
   color: string;
 }
 
-const VOLUME_ICONS: Record<
-  string,
-  { icon: AppIconName; color: string }
-> = {
+const VOLUME_ICONS: Record<string, { icon: AppIconName; color: string }> = {
   system: { icon: "hard-drive", color: "#4CAF50" },
   usb: { icon: "usb", color: "#2196F3" },
   network: { icon: "cloud", color: "#9C27B0" },

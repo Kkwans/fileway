@@ -30,9 +30,7 @@ export function writeControlsTimeoutMs(ms: number): number {
  * 0 → never hide (video.js inactivityTimeout 0).
  * 1–20 → seconds.
  */
-export function resolveControlsTimeoutMs(
-  accountSec?: number | null
-): number {
+export function resolveControlsTimeoutMs(accountSec?: number | null): number {
   if (accountSec === undefined || accountSec === null) {
     return readControlsTimeoutMs();
   }

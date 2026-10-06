@@ -24,7 +24,11 @@
         <div class="art-ask-title">选择播放方式</div>
         <div class="art-ask-sub">默认策略为「每次询问」；选择后立即生效</div>
         <div class="art-ask-actions">
-          <button type="button" class="art-ask-btn" @click="chooseMode('native')">
+          <button
+            type="button"
+            class="art-ask-btn"
+            @click="chooseMode('native')"
+          >
             原生播放
           </button>
           <button
@@ -77,10 +81,18 @@
             step="0.01"
           />
           <div class="art-modal-actions">
-            <button type="button" class="art-modal-btn" @click="rateDialogVisible = false">
+            <button
+              type="button"
+              class="art-modal-btn"
+              @click="rateDialogVisible = false"
+            >
               取消
             </button>
-            <button type="button" class="art-modal-btn art-modal-btn--ok" @click="confirmRate">
+            <button
+              type="button"
+              class="art-modal-btn art-modal-btn--ok"
+              @click="confirmRate"
+            >
               应用
             </button>
           </div>
@@ -116,10 +128,18 @@
           step="0.01"
         />
         <div class="art-modal-actions">
-          <button type="button" class="art-modal-btn" @click="rateDialogVisible = false">
+          <button
+            type="button"
+            class="art-modal-btn"
+            @click="rateDialogVisible = false"
+          >
             取消
           </button>
-          <button type="button" class="art-modal-btn art-modal-btn--ok" @click="confirmRate">
+          <button
+            type="button"
+            class="art-modal-btn art-modal-btn--ok"
+            @click="confirmRate"
+          >
             应用
           </button>
         </div>
@@ -129,7 +149,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import Artplayer from "artplayer";
 import Hls from "hls.js";
 import { files as api, media as mediaApi, users as usersApi } from "@/api";
@@ -140,7 +168,14 @@ import PathPicker from "@/components/prompts/PathPicker.vue";
 
 type Policy = "native" | "compat" | "ask";
 type ActualMode = "native" | "compat";
-type Quality = "source" | "2160p" | "1440p" | "1080p" | "720p" | "480p" | "native";
+type Quality =
+  | "source"
+  | "2160p"
+  | "1440p"
+  | "1080p"
+  | "720p"
+  | "480p"
+  | "native";
 
 const PRESET_RATES = [0.25, 0.5, 1, 1.25, 1.5, 2];
 
@@ -225,7 +260,9 @@ async function scanSiblingSubtitles() {
       });
     const known = new Set(allSubtitleItems.value.map((s) => s.url));
     extraSubtitles.value = [
-      ...extraSubtitles.value.filter((s) => found.some((f) => f.url === s.url || f.name === s.name)),
+      ...extraSubtitles.value.filter((s) =>
+        found.some((f) => f.url === s.url || f.name === s.name)
+      ),
       ...found.filter((f) => !known.has(f.url)),
     ];
   } catch {
@@ -360,7 +397,10 @@ const qualityOptions = computed(() => {
 });
 
 function preferredCompatQuality(): Exclude<Quality, "native"> {
-  if (transcodeQuality.value !== "source" && transcodeQuality.value !== "native") {
+  if (
+    transcodeQuality.value !== "source" &&
+    transcodeQuality.value !== "native"
+  ) {
     return transcodeQuality.value;
   }
   const h = sourceHeight.value || 0;
@@ -380,8 +420,7 @@ const loadingTitle = computed(() =>
 );
 
 const progressLabel = computed(() => {
-  const wait =
-    loadWaitSec.value > 0 ? ` · ${loadWaitSec.value}s` : "";
+  const wait = loadWaitSec.value > 0 ? ` · ${loadWaitSec.value}s` : "";
   if (loadStatusText.value) return `${loadStatusText.value}${wait}`;
   if (loadProgress.value == null) {
     return loadWaitSec.value > 0 ? `加载中${wait}` : "";
@@ -393,7 +432,8 @@ const progressLabel = computed(() => {
 const mediaUiReady = ref(false);
 
 function nativeBufferPercent(video?: HTMLVideoElement | null): number | null {
-  if (!video || !video.duration || !Number.isFinite(video.duration)) return null;
+  if (!video || !video.duration || !Number.isFinite(video.duration))
+    return null;
   try {
     if (!video.buffered || video.buffered.length === 0) return null;
     const end = video.buffered.end(video.buffered.length - 1);
@@ -427,7 +467,10 @@ function refreshMediaUiState(reason = "") {
     if (pct != null && pct > 0) {
       loadStatusText.value = "";
       loadProgress.value = pct;
-    } else if (video.readyState <= 1 || (video.readyState >= 2 && !videoHasFrame(video))) {
+    } else if (
+      video.readyState <= 1 ||
+      (video.readyState >= 2 && !videoHasFrame(video))
+    ) {
       loadStatusText.value = "原生加载中…（缓冲/探测）";
       loadProgress.value = null;
     }
@@ -505,41 +548,6 @@ function accountResumeMode(): "resume" | "from-start" | "ask" {
   return "resume";
 }
 
-/**
- * Browser codec probe via HTMLMediaElement.canPlayType.
- * true = likely OK (Firefox HEVC often "maybe"); false = should not try native;
- * null = unknown codec — still try native with a visible loader.
- */
-function browserSupportsCodec(codec: string): boolean | null {
-  const c = (codec || "").toLowerCase();
-  if (!c) return null;
-  const probe = document.createElement("video");
-  const mimes: string[] = [];
-  if (/hevc|h265/.test(c)) {
-    mimes.push(
-      'video/mp4; codecs="hvc1.1.6.L93.B0"',
-      'video/mp4; codecs="hev1.1.6.L93.B0"',
-      'video/mp4; codecs="hvc1"',
-      'video/mp4; codecs="hev1"'
-    );
-  } else if (/avc|h264/.test(c)) {
-    mimes.push('video/mp4; codecs="avc1.42E01E"', 'video/mp4; codecs="avc1"');
-  } else if (/vp0?9/.test(c)) {
-    mimes.push('video/webm; codecs="vp9"');
-  } else if (/av1/.test(c)) {
-    mimes.push('video/mp4; codecs="av01.0.04M.08"', 'video/mp4; codecs="av01"');
-  } else {
-    return null;
-  }
-  let maybe = false;
-  for (const mime of mimes) {
-    const r = probe.canPlayType(mime);
-    if (r === "probably") return true;
-    if (r === "maybe") maybe = true;
-  }
-  return maybe ? true : false;
-}
-
 function formatClock(sec: number) {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
   const s = Math.floor(sec % 60);
@@ -555,7 +563,11 @@ function browserSupportsContainer(path: string): boolean | null {
   const ext = pathExt(path);
   if (!ext) return null;
   // Browsers cannot play Matroska/FLV/RM containers even when the codec is OK.
-  if (["mkv", "mk3d", "mka", "flv", "f4v", "rm", "rmvb", "wmv", "avi"].includes(ext)) {
+  if (
+    ["mkv", "mk3d", "mka", "flv", "f4v", "rm", "rmvb", "wmv", "avi"].includes(
+      ext
+    )
+  ) {
     return false;
   }
   const probe = document.createElement("video");
@@ -575,10 +587,17 @@ function videoHasFrame(video?: HTMLVideoElement | null) {
 }
 
 /** Official ArtPlayer auto-playback chrome — reuse DOM/classes/icons from artplayer.org. */
-function injectResumeToast(position: number, mode: "resume" | "from-start" | "ask") {
+function injectResumeToast(
+  position: number,
+  mode: "resume" | "from-start" | "ask"
+) {
   const tryMount = (attempt: number) => {
-    const t = art.value?.template as unknown as { $player?: HTMLElement } | null;
-    const stage = document.querySelector(".art-player-stage") as HTMLElement | null;
+    const t = art.value?.template as unknown as {
+      $player?: HTMLElement;
+    } | null;
+    const stage = document.querySelector(
+      ".art-player-stage"
+    ) as HTMLElement | null;
     const player = (t?.$player as HTMLElement | null) || stage;
     if (!player) {
       if (attempt < 10) window.setTimeout(() => tryMount(attempt + 1), 150);
@@ -626,7 +645,10 @@ function injectResumeToast(position: number, mode: "resume" | "from-start" | "as
       const video = art.value?.video as HTMLVideoElement | undefined;
       if (act === "resume") {
         if (video) {
-          video.currentTime = Math.min(position, (video.duration || position) - 0.5);
+          video.currentTime = Math.min(
+            position,
+            (video.duration || position) - 0.5
+          );
           void video.play?.().catch(() => {});
         }
         dismiss();
@@ -668,8 +690,8 @@ function notice(msg: string) {
 
 function artSetting(): SettingApi | null {
   return (
-    ((art.value as unknown as { setting?: SettingApi })?.setting as SettingApi) ??
-    null
+    ((art.value as unknown as { setting?: SettingApi })
+      ?.setting as SettingApi) ?? null
   );
 }
 
@@ -809,7 +831,9 @@ function loadSubtitlePrefs(): SubtitlePrefs {
           ? data.size
           : base.size,
       bottom:
-        typeof data.bottom === "number" && data.bottom >= 0 && data.bottom <= 120
+        typeof data.bottom === "number" &&
+        data.bottom >= 0 &&
+        data.bottom <= 120
           ? data.bottom
           : base.bottom,
       enabled: !!data.enabled,
@@ -870,9 +894,11 @@ function applySubtitleChrome() {
     );
   }
   try {
-    const sub = (art.value as unknown as {
-      subtitle?: { style?: (k: string, v: string) => void };
-    })?.subtitle;
+    const sub = (
+      art.value as unknown as {
+        subtitle?: { style?: (k: string, v: string) => void };
+      }
+    )?.subtitle;
     sub?.style?.("fontSize", SUBTITLE_SIZE_PX[subtitlePrefs.value.size]);
     sub?.style?.("bottom", `${subtitlePrefs.value.bottom}px`);
   } catch {
@@ -929,7 +955,11 @@ function persistPlaybackPosition(force = false) {
   const pos = video.currentTime;
   if (!Number.isFinite(pos) || pos < 1) return;
   const now = Date.now();
-  if (!force && Math.abs(pos - lastSavedPosition) < 5 && now - lastSaveAt < 8000) {
+  if (
+    !force &&
+    Math.abs(pos - lastSavedPosition) < 5 &&
+    now - lastSaveAt < 8000
+  ) {
     return;
   }
   lastSavedPosition = pos;
@@ -964,7 +994,10 @@ function applyResume(resume: {
         let max = Math.max(0, video.duration - 0.5);
         try {
           if (video.seekable && video.seekable.length > 0) {
-            max = Math.max(0, video.seekable.end(video.seekable.length - 1) - 0.5);
+            max = Math.max(
+              0,
+              video.seekable.end(video.seekable.length - 1) - 0.5
+            );
           }
         } catch {
           /* ignore */
@@ -1020,9 +1053,11 @@ function markBarSelectorCurrent(name: string, labels: string[]) {
 }
 
 function refreshQualityPickers() {
-  const setting = artSetting() as (SettingApi & {
-    update?: (s: Record<string, unknown>) => unknown;
-  }) | null;
+  const setting = artSetting() as
+    | (SettingApi & {
+        update?: (s: Record<string, unknown>) => unknown;
+      })
+    | null;
   const qualityItem = buildSettings().find(
     (s) => (s as { name?: string }).name === "playback-quality"
   ) as Record<string, unknown> | undefined;
@@ -1085,7 +1120,10 @@ function buildSettingsOption() {
     const row = { ...item } as Record<string, unknown>;
     delete row.icon;
     const name = row.name as string;
-    row.mounted = function mounted(_panel: HTMLElement, it: Record<string, unknown>) {
+    row.mounted = function mounted(
+      _panel: HTMLElement,
+      it: Record<string, unknown>
+    ) {
       try {
         const ic = iconClone(settingIconKey(name)) || iconClone("config");
         if (ic) it.icon = ic;
@@ -1096,8 +1134,6 @@ function buildSettingsOption() {
     return row;
   });
 }
-
-let chromeInstalled = false;
 
 function installPlayerChrome() {
   const setting = artSetting();
@@ -1111,7 +1147,6 @@ function installPlayerChrome() {
   bindBarSelectorPopups();
   hardenSelectorLists();
   if (isMobile.value) hideMobileExtraControls();
-  chromeInstalled = true;
 }
 
 /**
@@ -1130,7 +1165,9 @@ async function switchEngine(
   persistPlaybackPosition(true);
 
   const targetQuality =
-    mode === "compat" ? (quality ?? preferredCompatQuality()) : transcodeQuality.value;
+    mode === "compat"
+      ? (quality ?? preferredCompatQuality())
+      : transcodeQuality.value;
 
   // Optimistic UI — user sees the switch immediately
   actualMode.value = mode;
@@ -1183,7 +1220,9 @@ async function switchEngine(
       if (!url) {
         loadStatusText.value = status.id ? "转码排队中…" : "暂无法播放地址";
         loadProgress.value = null;
-        notice(status.id ? "兼容任务已提交，转码完成后可播放" : "兼容播放地址不可用");
+        notice(
+          status.id ? "兼容任务已提交，转码完成后可播放" : "兼容播放地址不可用"
+        );
         if (!status.id) {
           window.setTimeout(() => {
             if (token !== switchToken) return;
@@ -1231,7 +1270,10 @@ async function switchEngine(
       loaderForceTimer = window.setTimeout(() => {
         if (token !== switchToken) return;
         const video = art.value?.video as HTMLVideoElement | undefined;
-        if (mediaUiReady.value || (video && video.readyState >= 2 && videoHasFrame(video))) {
+        if (
+          mediaUiReady.value ||
+          (video && video.readyState >= 2 && videoHasFrame(video))
+        ) {
           clearLoadingState();
           return;
         }
@@ -1279,7 +1321,10 @@ function startCompatProgressPolling(id: string) {
       } else if (status.state === "queued") {
         loadStatusText.value = `转码排队中… ${elapsed}s`;
         loadProgress.value = null;
-      } else if (status.state === "streamable" || status.state === "completed") {
+      } else if (
+        status.state === "streamable" ||
+        status.state === "completed"
+      ) {
         loadStatusText.value = "";
         loadProgress.value = 99;
         const video = art.value?.video as HTMLVideoElement | undefined;
@@ -1317,14 +1362,6 @@ async function loadMediaInfo() {
   }
 }
 
-async function startCompat(fromAuto = false, quality?: Quality) {
-  await switchEngine("compat", quality, fromAuto);
-}
-
-function startNative() {
-  void switchEngine("native");
-}
-
 function chooseMode(mode: ActualMode) {
   askVisible.value = false;
   persistPlaybackMode(mode);
@@ -1352,7 +1389,11 @@ function bindNativeProgress() {
   clearNativeProgressHooks();
   const video = art.value?.video as HTMLVideoElement | undefined;
   if (!video) return;
-  if (videoPlaying.value || video.readyState >= 2 || (video.currentTime > 0 && !video.paused)) {
+  if (
+    videoPlaying.value ||
+    video.readyState >= 2 ||
+    (video.currentTime > 0 && !video.paused)
+  ) {
     clearLoadingState();
     return;
   }
@@ -1463,8 +1504,7 @@ function updateOrientationState() {
   const h = box.clientHeight || window.innerHeight;
   isPortrait.value = h > w;
   isMobile.value =
-    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
-    w < 768;
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || w < 768;
 }
 
 function rateDisplay() {
@@ -1584,11 +1624,6 @@ function applyRate(rate: number) {
   syncPlayerLabels();
 }
 
-function setActualMode(mode: ActualMode) {
-  actualMode.value = mode;
-  syncPlayerLabels();
-}
-
 async function applyTranscodeQuality(q: Quality): Promise<string> {
   if (q === "native") {
     return resolutionLabel.value;
@@ -1596,7 +1631,9 @@ async function applyTranscodeQuality(q: Quality): Promise<string> {
   if (actualMode.value !== "compat") {
     // Native cannot re-encode — keep source res, remember preferred compat quality.
     transcodeQuality.value = q;
-    notice(`原生模式不支持转码分辨率；已记录 ${qualityLabel(q)}，切到兼容后生效`);
+    notice(
+      `原生模式不支持转码分辨率；已记录 ${qualityLabel(q)}，切到兼容后生效`
+    );
     syncPlayerLabels();
     return resolutionLabel.value;
   }
@@ -1634,9 +1671,7 @@ function buildSettings() {
       ],
       onSelect(item: { html: string; value: string }) {
         if (!item || item.value == null) return modeDisplay();
-        void switchEngine(
-          item.value === "compat" ? "compat" : "native"
-        );
+        void switchEngine(item.value === "compat" ? "compat" : "native");
         return item.value === "compat" ? "兼容" : "原生";
       },
     },
@@ -1714,18 +1749,50 @@ function buildSettings() {
           name: "sub-size",
           html: "字幕大小",
           selector: [
-            { name: "sub-size-sm", html: "小", value: "__size_sm__", default: subtitlePrefs.value.size === "sm" },
-            { name: "sub-size-md", html: "中", value: "__size_md__", default: subtitlePrefs.value.size === "md" },
-            { name: "sub-size-lg", html: "大", value: "__size_lg__", default: subtitlePrefs.value.size === "lg" },
+            {
+              name: "sub-size-sm",
+              html: "小",
+              value: "__size_sm__",
+              default: subtitlePrefs.value.size === "sm",
+            },
+            {
+              name: "sub-size-md",
+              html: "中",
+              value: "__size_md__",
+              default: subtitlePrefs.value.size === "md",
+            },
+            {
+              name: "sub-size-lg",
+              html: "大",
+              value: "__size_lg__",
+              default: subtitlePrefs.value.size === "lg",
+            },
           ],
         },
         {
           name: "sub-pos",
           html: "字幕位置",
           selector: [
-            { name: "sub-pos-15", html: "低（贴底）", value: "__pos_15__", default: subtitlePrefs.value.bottom <= 20 },
-            { name: "sub-pos-40", html: "中", value: "__pos_40__", default: subtitlePrefs.value.bottom > 20 && subtitlePrefs.value.bottom <= 50 },
-            { name: "sub-pos-80", html: "高", value: "__pos_80__", default: subtitlePrefs.value.bottom > 50 },
+            {
+              name: "sub-pos-15",
+              html: "低（贴底）",
+              value: "__pos_15__",
+              default: subtitlePrefs.value.bottom <= 20,
+            },
+            {
+              name: "sub-pos-40",
+              html: "中",
+              value: "__pos_40__",
+              default:
+                subtitlePrefs.value.bottom > 20 &&
+                subtitlePrefs.value.bottom <= 50,
+            },
+            {
+              name: "sub-pos-80",
+              html: "高",
+              value: "__pos_80__",
+              default: subtitlePrefs.value.bottom > 50,
+            },
           ],
         },
         {
@@ -1983,7 +2050,12 @@ onMounted(async () => {
     if (uid) {
       const me = await usersApi.get(uid);
       if (me && authStore.user) {
-        authStore.updateUser({ ...authStore.user, ...me, playerPreferences: me.playerPreferences || authStore.user.playerPreferences });
+        authStore.updateUser({
+          ...authStore.user,
+          ...me,
+          playerPreferences:
+            me.playerPreferences || authStore.user.playerPreferences,
+        });
       } else if (me) {
         authStore.setUser(me);
       }
@@ -2005,7 +2077,6 @@ onMounted(async () => {
 
   const orientation = orientationPref();
 
-  const resumeMode = accountResumeMode();
   // Always seed official toast storage when we have a saved position.
   if (!askVisible.value) {
     try {
@@ -2061,8 +2132,7 @@ onMounted(async () => {
     }
   }
   const startCompatUrl =
-    !askVisible.value &&
-    (policy.value === "compat" || forceCompatContainer);
+    !askVisible.value && (policy.value === "compat" || forceCompatContainer);
   if (startCompatUrl) {
     actualMode.value = "compat";
   }
@@ -2151,7 +2221,10 @@ onMounted(async () => {
             return;
           }
           refreshMediaUiState("native-poll");
-          if (mediaUiReady.value || (v && !v.error && videoHasFrame(v) && v.readyState >= 2)) {
+          if (
+            mediaUiReady.value ||
+            (v && !v.error && videoHasFrame(v) && v.readyState >= 2)
+          ) {
             window.clearInterval(poll);
             clearLoadingState();
             return;
@@ -2177,7 +2250,10 @@ onMounted(async () => {
             return;
           }
           // Stall: no frame after grace period (or known-bad container with no progress).
-          if (elapsed < (forceCompatContainer ? 8000 : 6000) && !(v && v.readyState >= 2 && !videoHasFrame(v))) {
+          if (
+            elapsed < (forceCompatContainer ? 8000 : 6000) &&
+            !(v && v.readyState >= 2 && !videoHasFrame(v))
+          ) {
             return;
           }
           if (switchingEngine) {
@@ -2215,7 +2291,9 @@ onMounted(async () => {
         .catch(() => {});
     }
 
-    const t = art.value?.template as unknown as { $player?: HTMLElement } | null;
+    const t = art.value?.template as unknown as {
+      $player?: HTMLElement;
+    } | null;
     playerRoot.value = t?.$player || null;
     try {
       installPlayerChrome();
@@ -2226,7 +2304,9 @@ onMounted(async () => {
     if (isMobile.value && orientation === "auto-fullscreen") {
       window.setTimeout(() => {
         try {
-          const p = art.value as unknown as { fullscreen?: { enter?: () => void } };
+          const p = art.value as unknown as {
+            fullscreen?: { enter?: () => void };
+          };
           p?.fullscreen?.enter?.();
         } catch {
           /* ignore */
@@ -2267,11 +2347,18 @@ onMounted(async () => {
     syncPlayerLabels();
   });
 
-  (["playing", "canplay", "canplaythrough", "loadeddata", "loadedmetadata"] as const).forEach(
-    (ev) =>
-      art.value?.on(ev, () => {
-        refreshMediaUiState(ev);
-      })
+  (
+    [
+      "playing",
+      "canplay",
+      "canplaythrough",
+      "loadeddata",
+      "loadedmetadata",
+    ] as const
+  ).forEach((ev) =>
+    art.value?.on(ev, () => {
+      refreshMediaUiState(ev);
+    })
   );
   art.value?.on("video:timeupdate", () => {
     if (!mediaUiReady.value) refreshMediaUiState("timeupdate");
@@ -2526,7 +2613,8 @@ onBeforeUnmount(() => {
     opacity 0.15s ease,
     transform 0.15s ease;
 }
-.art-player-stage :deep(.art-control-selector.art-selector-open .art-selector-list) {
+.art-player-stage
+  :deep(.art-control-selector.art-selector-open .art-selector-list) {
   opacity: 1;
   transform: translate(-50%, 0);
   pointer-events: auto;
@@ -2548,7 +2636,9 @@ onBeforeUnmount(() => {
   align-items: center;
   position: absolute;
   left: var(--art-padding, 10px);
-  bottom: calc(var(--art-control-height, 46px) + var(--art-bottom-gap, 5px) + 10px);
+  bottom: calc(
+    var(--art-control-height, 46px) + var(--art-bottom-gap, 5px) + 10px
+  );
   padding: 10px;
   line-height: 1;
   color: var(--art-font-color, #fff);
@@ -2586,7 +2676,8 @@ onBeforeUnmount(() => {
   font-weight: 600;
   white-space: nowrap;
 }
-.art-player-stage :deep(.art-layer-auto-playback .art-auto-playback-jump:hover) {
+.art-player-stage
+  :deep(.art-layer-auto-playback .art-auto-playback-jump:hover) {
   filter: brightness(1.12);
 }
 /* Player-themed PathPicker — full dark glass, no light-theme leakage */
@@ -2701,7 +2792,8 @@ onBeforeUnmount(() => {
   transform: translate(-50%, 10px) !important;
   pointer-events: none !important;
 }
-.art-player-stage :deep(.art-control-selector.art-selector-open:hover .art-selector-list) {
+.art-player-stage
+  :deep(.art-control-selector.art-selector-open:hover .art-selector-list) {
   opacity: 1 !important;
   transform: translate(-50%, 0) !important;
   pointer-events: auto !important;

@@ -5,7 +5,9 @@
       <div class="card">
         <div class="card-title">
           <h2>用户管理</h2>
-          <router-link class="button" to="/settings/users/new">新建</router-link>
+          <router-link class="button" to="/settings/users/new"
+            >新建</router-link
+          >
         </div>
 
         <div class="card-content full">
