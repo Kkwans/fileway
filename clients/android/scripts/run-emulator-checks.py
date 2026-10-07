@@ -9,10 +9,36 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import xml.etree.ElementTree as ET
 
 PACKAGE = "io.github.kkwans.nasfilebrowser"
-RESTART_CLASSES = [f"{PACKAGE}.ThemeRestartPrepareTest", f"{PACKAGE}.ThemeRestartVerifyTest"]
+RESTART_PACKAGE = f"{PACKAGE}.hostrestart"
+RESTART_CLASSES = [f"{RESTART_PACKAGE}.ThemeRestartPrepareTest", f"{RESTART_PACKAGE}.ThemeRestartVerifyTest"]
 RUNNER = f"{PACKAGE}.test/androidx.test.runner.AndroidJUnitRunner"
+
+
+def suite_contract(component):
+    reports = list((component / "app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
+    if not reports:
+        return 1, "Full suite has no JUnit report\n"
+    cases = []
+    try:
+        for report in reports:
+            cases.extend(ET.parse(report).getroot().iter("testcase"))
+    except (ET.ParseError, OSError) as error:
+        return 1, f"Unreadable full-suite JUnit: {type(error).__name__}\n"
+    if not cases:
+        return 1, "Full suite executed no reported test cases\n"
+    misplaced = [case.get("classname", "") for case in cases
+                 if case.get("classname", "").startswith(RESTART_PACKAGE + ".")
+                 or case.get("classname", "") in [f"{PACKAGE}.ThemeRestartPrepareTest", f"{PACKAGE}.ThemeRestartVerifyTest"]]
+    if misplaced:
+        return 1, "Host restart tests leaked into the ordinary suite: " + ", ".join(sorted(set(misplaced))) + "\n"
+    failed = sum(case.find("failure") is not None or case.find("error") is not None for case in cases)
+    skipped = sum(case.find("skipped") is not None for case in cases)
+    if failed or skipped:
+        return 1, f"Full-suite JUnit reports {failed} failed and {skipped} unverified/skipped cases\n"
+    return 0, f"Full suite reported {len(cases)} cases; host restart tests are isolated\n"
 
 
 def run_command(command, cwd, timeout):
@@ -57,12 +83,20 @@ def run_checks(component, serial, run=run_command):
 
     wrapper = "gradlew.bat" if os.name == "nt" else "./gradlew"
     suite_status = check("connected-suite", [wrapper, ":app:connectedDebugAndroidTest", "--stacktrace",
-          "-Pandroid.testInstrumentationRunnerArguments.notClass=" + ",".join(RESTART_CLASSES)], 1200)
+          # AGP/UTP discovery did not preserve the second comma-separated notClass
+          # exclusion. A dedicated package is one unambiguous argument value.
+          "-Pandroid.testInstrumentationRunnerArguments.notPackage=" + RESTART_PACKAGE], 1200)
     if suite_status == 124:
         # Losing the Gradle observer does not prove device instrumentation ended.
         # Preserve evidence without racing another install/test against it.
         check("evidence-export", adb + ["pull", "/sdcard/Download/nfb-client-acceptance", str(evidence)])
         return first_failure
+
+    contract_status, contract_output = suite_contract(component)
+    (evidence / "suite-contract.txt").write_text(contract_output, encoding="utf-8")
+    print(f"suite-contract: exit {contract_status}", flush=True)
+    if contract_status and not first_failure:
+        first_failure = contract_status
 
     # No fresh install or data clearing: the restart gate must retain the saved
     # theme in app-private storage across an actual process stop.

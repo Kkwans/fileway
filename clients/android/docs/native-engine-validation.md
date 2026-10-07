@@ -50,7 +50,7 @@ Run only on the identified fixture device, through the existing test APK runner:
 ```sh
 adb -s "$FIXTURE_SERIAL" shell am instrument -w -r \
   -e class io.github.kkwans.nasfilebrowser.EngineComparisonTest \
-  -e nfbProbeEngines vlc,media3 -e nfbProbeRounds 2 \
+  -e nfbProbeEngines all -e nfbProbeRounds 2 \
   io.github.kkwans.nasfilebrowser.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
@@ -63,6 +63,10 @@ candidate attempt emits a `filewayEngineProbe` JSON instrumentation status;
 failures are retained and other candidates still run. No URLs or credentials are
 included. One candidate can be selected to isolate a failure, but that result is
 not a complete comparison.
+Use the single values `all`, `vlc` or `media3`; comma-separated runner arguments
+are not reliable through the current Gradle/UTP path. The final
+`filewayEngineProbeSummary` includes selection, round count and every actual
+attempt, so consumers can verify that both candidates were exercised.
 
 `firstPixelMs` includes engine construction/open and excludes prior login/lease
 creation. `seekClockAndPixelsMs` proves a matching clock and visible video only:

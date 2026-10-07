@@ -145,8 +145,13 @@ class EngineComparisonTest {
 
     @Test fun nativeBasePathsUseTheSameLeaseAndPixelChecks(): Unit = runBlocking {
         val arguments = InstrumentationRegistry.getArguments()
-        val engines = (arguments.getString("nfbProbeEngines") ?: "vlc,media3").split(',')
-        require(engines.isNotEmpty() && engines.distinct() == engines && engines.all { it in setOf("vlc", "media3") })
+        // Use a single argument value: UTP can alter comma-separated runner values.
+        val selection = arguments.getString("nfbProbeEngines") ?: "all"
+        val engines = when (selection) {
+            "all" -> listOf("vlc", "media3")
+            "vlc", "media3" -> listOf(selection)
+            else -> error("nfbProbeEngines must be all, vlc or media3")
+        }
         val rounds = (arguments.getString("nfbProbeRounds") ?: "2").toInt().also { require(it in 1..10) }
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val sha = MessageDigest.getInstance("SHA-256").digest(media).joinToString("") { "%02x".format(it) }
@@ -154,6 +159,7 @@ class EngineComparisonTest {
         activity.scenario.onActivity { host = it }
         withTimeout(5000) { while (!main { host.viewport.width > 0 }) delay(50) }
         val failures = mutableListOf<String>()
+        val measurements = mutableListOf<JSONObject>()
         NativePlaybackTest.Fixture(media).use { source ->
             val session = NasSession.login(ServerProfile(name = "Owned engine probe", address = source.url), "fixture", "fixture-only")
             var lease: String? = null
@@ -214,6 +220,7 @@ class EngineComparisonTest {
                             // Numeric/enumerated observations only: never report capability URLs.
                             // Android test parsers reserve 0 for a completed test;
                             // candidate measurements are IN_PROGRESS (2), not passes.
+                            measurements.add(result)
                             instrumentation.sendStatus(2, Bundle().apply { putString("filewayEngineProbe", result.toString()) })
                         }
                     }
@@ -226,6 +233,10 @@ class EngineComparisonTest {
                 }
             }
         }
+        instrumentation.addResults(Bundle().apply {
+            putString("filewayEngineProbeSummary", JSONObject().put("selection", selection).put("rounds", rounds)
+                .put("attempts", measurements.size).put("records", JSONArray(measurements)).toString())
+        })
         assertTrue("Baseline failures: ${failures.joinToString()}", failures.isEmpty())
     }
 }

@@ -1,4 +1,4 @@
-package io.github.kkwans.nasfilebrowser
+package io.github.kkwans.nasfilebrowser.hostrestart
 
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import io.github.kkwans.nasfilebrowser.MainActivity
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.data.AppTheme
 import kotlinx.coroutines.*
