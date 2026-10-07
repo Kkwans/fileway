@@ -79,6 +79,17 @@ dependencies {
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     // Comparison harness only: no Media3 runtime is added to the product APK.
     androidTestImplementation("androidx.media3:media3-exoplayer:1.11.1")
+    providers.gradleProperty("filewayMpvProbeAar").orNull?.let { path ->
+        require(!providers.gradleProperty("filewayLibassProbeAar").isPresent && !providers.gradleProperty("filewayFfmpegProbeManifest").isPresent) {
+            "Use separate comparison APKs for the published mpv and enhanced Media3 native payloads"
+        }
+        val aar = file(path)
+        val actual = MessageDigest.getInstance("SHA-256").digest(aar.readBytes()).joinToString("") { "%02x".format(it) }
+        require(actual == "df146592480fc8418415a06b1f1a1d6318b0088e21f52254b0e9a82b61ca8fa2") { "Unverified mpv comparison AAR" }
+        androidTestImplementation(files(aar))
+        android.sourceSets.getByName("androidTest").kotlin.srcDir("src/mpvProbeTest/java")
+        android.sourceSets.getByName("androidTest").assets.srcDir("src/mpvProbeTest/assets")
+    }
     providers.gradleProperty("filewayLibassProbeAar").orNull?.let { path ->
         require(providers.gradleProperty("filewayFfmpegProbeManifest").isPresent) { "Combined subtitle probe requires the verified FFmpeg audio candidate" }
         val aar = file(path)

@@ -41,10 +41,21 @@ import kotlin.math.abs
 @androidx.annotation.OptIn(UnstableApi::class)
 class EngineComparisonTest {
     @get:Rule val activity = ActivityScenarioRule(EngineProbeActivity::class.java)
+    @Test fun nativeBasePathsUseTheSameLeaseAndPixelChecks(): Unit = runBlocking {
+        EngineComparisonHarness(activity).run()
+    }
+}
+
+/** Test-only injection keeps optional native candidates on the exact same fixture and assertions. */
+@androidx.annotation.OptIn(UnstableApi::class)
+internal class EngineComparisonHarness(
+    private val activity: ActivityScenarioRule<EngineProbeActivity>,
+    private val additional: Map<String, (EngineProbeActivity) -> Probe> = emptyMap(),
+) {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
 
     /** All adapter access is on Main, including getters. No product engine registry. */
-    private interface Probe {
+    interface Probe {
         val view: View
         val version: String
         val position: Long
@@ -143,14 +154,16 @@ class EngineComparisonTest {
         }
     }
 
-    @Test fun nativeBasePathsUseTheSameLeaseAndPixelChecks(): Unit = runBlocking {
+    suspend fun run() {
         val arguments = InstrumentationRegistry.getArguments()
+        val factories = linkedMapOf<String, (EngineProbeActivity) -> Probe>("vlc" to ::VlcProbe, "media3" to ::Media3Probe)
+        require(additional.keys.none { it in factories })
+        factories.putAll(additional)
         // Use a single argument value: UTP can alter comma-separated runner values.
         val selection = arguments.getString("nfbProbeEngines") ?: "all"
-        val engines = when (selection) {
-            "all" -> listOf("vlc", "media3")
-            "vlc", "media3" -> listOf(selection)
-            else -> error("nfbProbeEngines must be all, vlc or media3")
+        val engines = if (selection == "all") factories.keys.toList() else {
+            require(selection in factories) { "nfbProbeEngines must be all or one of ${factories.keys}" }
+            listOf(selection)
         }
         val rounds = (arguments.getString("nfbProbeRounds") ?: "2").toInt().also { require(it in 1..10) }
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
@@ -179,7 +192,7 @@ class EngineComparisonTest {
                         val started = SystemClock.elapsedRealtime()
                         try {
                             probe = main {
-                                (if (engine == "vlc") VlcProbe(host) else Media3Probe(host)).also {
+                                requireNotNull(factories[engine])(host).also {
                                     host.viewport.addView(it.view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                                         host.viewport.width * 9 / 16, Gravity.CENTER))
                                 }
