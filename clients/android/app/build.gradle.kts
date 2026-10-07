@@ -7,6 +7,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+// Explicit comparison build only. Normal debug and every release keep the accepted dependency pin.
+val vlcProbeVersion = providers.gradleProperty("filewayVlcProbeVersion").orNull
+require(vlcProbeVersion == null || vlcProbeVersion == "3.7.7") { "Only the pinned libVLC 3.7.7 comparison is supported" }
 android {
     namespace = "io.github.kkwans.nasfilebrowser"
     compileSdk = 37
@@ -41,6 +44,7 @@ android {
             require(nativeVerbose in listOf("true", "false")) { "filewayNativeVerbose must be true or false" }
             buildConfigField("boolean", "NATIVE_VERBOSE", nativeVerbose)
             if (nativeVerbose == "true") versionNameSuffix = "-native-diagnostic"
+            if (vlcProbeVersion != null) versionNameSuffix = (versionNameSuffix ?: "") + "-vlc-3.7.7-comparison"
         }
         release {
             isMinifyEnabled = true
@@ -62,7 +66,8 @@ dependencies {
     implementation("me.saket.telephoto:zoomable-image-coil3:0.19.0")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("org.videolan.android:libvlc-all:3.7.6")
+    debugImplementation("org.videolan.android:libvlc-all:${vlcProbeVersion ?: "3.7.6"}")
+    releaseImplementation("org.videolan.android:libvlc-all:3.7.6")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("androidx.room:room-runtime:2.8.5")

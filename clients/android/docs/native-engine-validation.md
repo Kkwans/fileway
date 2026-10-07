@@ -76,6 +76,23 @@ tempo, audible output or synchronization. This harness does not clear font cache
 or app data; record actual process/cache/device conditions externally, and do not
 call a retained-data run cold. Debug timing is diagnostic, not a release p95 gate.
 
+## Official libVLC update comparison
+
+For the same fixture-only debug APK and instrumentation, use
+`-PfilewayVlcProbeVersion=3.7.7`. Only this explicit version is accepted. The debug
+version name ends in `-vlc-3.7.7-comparison`; ordinary debug and **all release**
+configurations remain pinned to 3.7.6. This option does not authorize publishing
+the comparison APK or selecting the product engine.
+
+Build both APKs with the same option, then run `EngineComparisonTest` with `all`
+and the unchanged `NativeSubtitleTest` and `ExternalSubtitleNativeTest` cases.
+Use the same source SHA, owned device, fixture bytes and transport policy for the
+3.7.6/3.7.7 rounds. Record the resolved AAR and both ABI library hashes, ELF page
+alignment, runtime version/changeset and every failed attempt. Confirm the release
+dependency graph still resolves 3.7.6 with the property supplied, and rebuild
+without the property to verify the default path. A successful build or warm run
+does not close cold startup, subtitle or actual audio/HDR gates.
+
 Current adapters are libVLC and **platform-decoder Media3 baseline only**.
 FFmpeg audio, libass, PGS/ASS/TrueHD/HDR, switching continuity and mpv comparison
 remain required before adoption. `PASS_BASELINE_ONLY` explicitly preserves that
