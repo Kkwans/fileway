@@ -26,3 +26,11 @@ Google Material Icons, Apache-2.0. Pinned source commit: `bd8cb85bd4bad964fe6918
 - `ic_search.xml`: [action/search](https://raw.githubusercontent.com/google/material-design-icons/bd8cb85bd4bad964fe6918f79665bb40c3a8efef/src/action/search/materialiconsoutlined/24px.svg) — SVG SHA256 `4679a3ccd253f707eeacf7edbb2fb3e395174b690a9ca55ab5fe8a3826002625`
 
 - `ic_refresh.xml`: [navigation/refresh](https://raw.githubusercontent.com/google/material-design-icons/bd8cb85bd4bad964fe6918f79665bb40c3a8efef/src/navigation/refresh/materialiconsoutlined/24px.svg) — SVG SHA256 `b9b1959396d3635730ce003f1f24bcc8f6d3f64a01b28ac7c156a05460503b52`
+
+## Material Symbols queue and image controls
+
+Pinned commit `737e3324305806514d7909874fa1818ae1808232`, Outlined 24px Android XML, Apache-2.0. Removed only the theme-dependent tint attribute; Compose supplies the control tint. Path geometry is unchanged.
+
+- `ic_skip_previous.xml`: [skip_previous](https://raw.githubusercontent.com/google/material-design-icons/737e3324305806514d7909874fa1818ae1808232/symbols/android/skip_previous/materialsymbolsoutlined/skip_previous_24px.xml), source SHA256 `9df8ea6b67a61b13fb03ddeac98210d68cfd0d9138c773c80dec55f8e7db5421`.
+- `ic_skip_next.xml`: [skip_next](https://raw.githubusercontent.com/google/material-design-icons/737e3324305806514d7909874fa1818ae1808232/symbols/android/skip_next/materialsymbolsoutlined/skip_next_24px.xml), source SHA256 `6bee66d953bc320cdb107599a668a4425cb802136a063450580e114f8fd7cb73`.
+- `ic_playlist_play.xml`: [playlist_play](https://raw.githubusercontent.com/google/material-design-icons/737e3324305806514d7909874fa1818ae1808232/symbols/android/playlist_play/materialsymbolsoutlined/playlist_play_24px.xml), source SHA256 `2af8af2f6733f3d0e2a4bf4b2378352b298a981ba56a05677e9e312ee65d1c4d`.

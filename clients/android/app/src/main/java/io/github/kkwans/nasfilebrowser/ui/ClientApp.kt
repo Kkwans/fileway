@@ -23,6 +23,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
@@ -38,6 +39,7 @@ import java.util.Locale
     val state by model.state.collectAsStateWithLifecycle()
     val recent by model.recent.collectAsStateWithLifecycle()
     val search by model.search.state.collectAsStateWithLifecycle()
+    val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     val activity = LocalActivity.current
     BackHandler(state.connected) { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
@@ -54,12 +56,14 @@ import java.util.Locale
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
-    LibraryTheme {
-        when {
-            search.open -> SearchScreen(model, state)
-            state.tab == "files" -> BrowserScreen(model, state)
-            state.tab == "settings" -> SettingsScreen(model, state)
-            else -> RecentScreen(model, state, recent)
+    pageState.SaveableStateProvider(if (search.open) "search" else state.tab) {
+        LibraryTheme {
+            when {
+                search.open -> SearchScreen(model, state)
+                state.tab == "files" -> BrowserScreen(model, state)
+                state.tab == "settings" -> SettingsScreen(model, state)
+                else -> RecentScreen(model, state, recent)
+            }
         }
     }
 }

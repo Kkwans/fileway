@@ -40,6 +40,7 @@ data class ClientState(
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
     val serverLabel: String = "", val accountName: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
     val error: String? = null, val selected: ResourceRef? = null, val image: ResourceRef? = null,
+    val mediaQueue: MediaQueue? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
@@ -75,6 +76,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var lease = ""
     private val subtitleLeases = mutableListOf<PreviewLease>()
     private var generation = 0
+    private var mediaRequest = 0L
+    private var queueSequence = 0L
+    private var pendingMediaOpen: Long? = null
     private var operation: Job? = null
     private var startupJob: Job? = null
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -88,7 +92,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var lastSaved: Pair<Long, Long>? = null
     private val layoutWrites = Mutex()
     private var layoutRequest = 0L
-    val search = SearchController(viewModelScope, { context == it && generation == it.generation }, ::open)
+    val search: SearchController = SearchController(viewModelScope, { context == it && generation == it.generation }, ::openSearchResult)
     init {
         player.checkpoint = { saveProgress() }
         val expected = generation
@@ -125,7 +129,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
         val expected = generation
-        mutable.value = mutable.value.copy(startupPending = automatic, busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, image = null, previewScope = "", fileLayout = FileLayout.COVER)
+        mutable.value = mutable.value.copy(startupPending = automatic, busy = true, stage = if (restored == null) "正在登录服务器" else "正在恢复登录", error = null, selected = null, image = null, mediaQueue = null, previewScope = "", fileLayout = FileLayout.COVER)
         operation = viewModelScope.launch {
             var opened: NasSession? = null
             try {
@@ -223,30 +227,52 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun open(file: ResourceRef) {
+    fun open(file: ResourceRef) = openFrom(file, mutable.value.files, MediaQueueSource.DIRECTORY)
+    private fun openSearchResult(file: ResourceRef) = openFrom(file, search.mediaSnapshot(), MediaQueueSource.SEARCH)
+    private fun openFrom(file: ResourceRef, candidates: List<ResourceRef>, source: MediaQueueSource) {
+        val bound = context ?: return
+        openQueued(file, MediaQueue.snapshot(++queueSequence, bound.account.key, file, candidates, source))
+    }
+    fun navigateMedia(index: Int) {
+        val bound = context ?: return
+        val queue = mutable.value.mediaQueue?.takeIf { it.owner == bound.account.key }?.select(index) ?: return
+        if (queue.index == mutable.value.mediaQueue?.index) return
+        if (queue.kind == MediaKind.IMAGE) mutable.value = mutable.value.copy(image = queue.current, mediaQueue = queue, error = null)
+        else openQueued(queue.current, queue)
+    }
+    fun previousMedia() { mutable.value.mediaQueue?.let { navigateMedia(it.index - 1) } }
+    fun nextMedia() { mutable.value.mediaQueue?.let { navigateMedia(it.index + 1) } }
+    fun retryPlayback() {
+        val file = mutable.value.selected ?: return
+        openQueued(file, mutable.value.mediaQueue)
+    }
+    private fun openQueued(file: ResourceRef, queue: MediaQueue?) {
         if (file.directory) {
             navigation.addLast(mutable.value.path to mutable.value.wirePath)
             browse(file.path, file.wirePath)
-        } else if (file.type == "video" || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "avi", "mov", "m2ts", "ts")) {
+        } else if (file.mediaKind() == MediaKind.VIDEO) {
             val bound = context ?: return
             search.cancel()
-            operation?.cancel(); val expected = generation
-            mutable.value = mutable.value.copy(busy = true, stage = "正在打开视频", error = null)
+            operation?.cancel(); val expected = generation; val request = ++mediaRequest
+            pendingMediaOpen = request
+            mutable.value = mutable.value.copy(selected = file, image = null, mediaQueue = queue, busy = true, stage = "正在打开视频", error = null)
             operation = viewModelScope.launch {
                 try {
                     endPlayback()
                     mediaClosing?.join()
+                    currentCoroutineContext().ensureActive()
+                    if (generation != expected || mediaRequest != request || context != bound) return@launch
                     val remote = history.remote(bound.api, file.path, file.wirePath)
                     val key = file.wirePath.ifEmpty { file.path }
                     val local = history.local(bound.account, key, remote.identity)
                     val resume = PlaybackHistory.resume(local, remote)
                     cache.awaitReady()
                     val url = bound.api.lease(file.path, file.wirePath, bound.account.key + "/" + remote.identity)
-                    if (generation != expected) { cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)) }; return@launch }
+                    if (generation != expected || mediaRequest != request || context != bound) { cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)) }; return@launch }
                     revokeLease(); lease = url
                     val writer = PlaybackWriter(history, bound.api) { snapshot, failure -> viewModelScope.launch {
                         val current = playback
-                        if (current?.context == bound && current.file.wirePath.ifEmpty { current.file.path } == key && current.identity == remote.identity &&
+                        if (mediaRequest == request && current?.context == bound && current.file.wirePath.ifEmpty { current.file.path } == key && current.identity == remote.identity &&
                             (snapshot == null || lastSaved == (snapshot.positionMs to snapshot.durationMs))) {
                             val message = when (snapshot?.sync) {
                                 ProgressSync.SYNCED -> "续播已同步"
@@ -260,18 +286,22 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                         }
                     } }
                     playback = PlaybackBinding(bound, file, remote.identity, writer)
+                    pendingMediaOpen = null
                     lastSaved = null
                     mutable.value = mutable.value.copy(selected = file, busy = false, stage = "", progressStatus = null)
                     player.open(url, resume, autoplay = foreground)
                     saveTimer?.cancel()
                     saveTimer = viewModelScope.launch { while (true) { delay(10_000); if (player.state.value.playing) saveProgress() } }
                 } catch (error: Exception) {
-                    if (error !is CancellationException && generation == expected) mutable.value = mutable.value.copy(busy = false, error = "无法打开视频，请重试")
+                    if (error !is CancellationException && generation == expected && mediaRequest == request) {
+                        pendingMediaOpen = null
+                        mutable.value = mutable.value.copy(busy = false, stage = "", error = "无法打开视频，请重试或选择其他视频")
+                    }
                 }
             }
-        } else if (file.type == "image" || file.name.substringAfterLast('.').lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif")) {
-            search.cancel(); operation?.cancel(); endPlayback()
-            mutable.value = mutable.value.copy(selected = null, image = file, busy = false, error = null)
+        } else if (file.mediaKind() == MediaKind.IMAGE) {
+            search.cancel(); operation?.cancel(); mediaRequest++; pendingMediaOpen = null; endPlayback()
+            mutable.value = mutable.value.copy(selected = null, image = file, mediaQueue = queue, busy = false, stage = "", error = null)
         } else mutable.value = mutable.value.copy(error = "这个文件类型暂不支持打开")
     }
     private fun browse(path: String, wire: String) {
@@ -328,7 +358,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             subtitleLeases.add(asset)
         } catch (error: Throwable) { asset.release(); throw error }
     }
-    fun closeImage() { mutable.value = mutable.value.copy(image = null) }
+    fun closeImage() { mutable.value = mutable.value.copy(image = null, mediaQueue = null) }
     suspend fun image(file: ResourceRef, quality: ImageQuality): Pair<PreviewLease, ResourceRef> {
         val bound = context ?: error("服务器尚未连接")
         cache.awaitReady()
@@ -348,11 +378,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         startupJob?.cancel()
         operation?.cancel()
         resumeOperation?.cancel()
+        val opening = pendingMediaOpen != null
+        if (opening) { mediaRequest++; pendingMediaOpen = null }
         val startup = mutable.value.startupPending
         if (startup) { generation++; closeSession() }
         mutable.value = mutable.value.copy(startupPending = false, busy = false, stage = "",
             connected = if (startup) false else mutable.value.connected,
-            previewScope = if (startup) "" else mutable.value.previewScope)
+            previewScope = if (startup) "" else mutable.value.previewScope,
+            error = if (opening) "已取消打开，可重试或选择其他视频" else mutable.value.error)
     }
     fun back(): Boolean {
         if (mutable.value.image != null) { closeImage(); return true }
@@ -390,7 +423,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return
         if (snapshot.accountKey != bound.account.key) return
-        open(ResourceRef(snapshot.path, snapshot.wirePath, snapshot.name, false, "video", 0))
+        val file = ResourceRef(snapshot.path, snapshot.wirePath, snapshot.name, false, "video", 0)
+        openFrom(file, listOf(file), MediaQueueSource.SINGLE)
     }
     fun togglePlayback() {
         if (player.state.value.playing) { pausePlayback(); return }
@@ -460,9 +494,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             }
         } else player.stop()
     }
-    fun leavePlayer() { operation?.cancel(); endPlayback(); mutable.value = mutable.value.copy(selected = null, busy = false, stage = "") }
+    fun leavePlayer() { operation?.cancel(); mediaRequest++; pendingMediaOpen = null; endPlayback(); mutable.value = mutable.value.copy(selected = null, mediaQueue = null, busy = false, stage = "") }
     private fun revokeLease() { val old = lease; lease = ""; if (old.isNotEmpty()) cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", old)) } }
     private fun closeSession() {
+        mediaRequest++; pendingMediaOpen = null
         previewImageLoader.memoryCache?.clear()
         search.close()
         endPlayback(); val old = context; context = null

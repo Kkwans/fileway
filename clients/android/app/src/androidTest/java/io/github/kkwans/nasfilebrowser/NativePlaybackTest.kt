@@ -280,7 +280,8 @@ class NativePlaybackTest {
         }
     }
 
-    internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap()) : Closeable {
+    internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap(),
+        private val videos: List<String> = listOf("fixture.mkv")) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val rawRequests = AtomicInteger()
@@ -329,7 +330,9 @@ class NativePlaybackTest {
                     send(token.toByteArray(), "text/plain")
                 }
                 endpoint == "/api/resources/" -> {
-                    val items = JSONArray().put(JSONObject().put("path", "/fixture.mkv").put("wirePath", "/fixture.mkv").put("name", "Native playback fixture.mkv").put("type", "video").put("size", media.size))
+                    val items = JSONArray()
+                    videos.forEach { name -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name")
+                        .put("name", if (name == "fixture.mkv") "Native playback fixture.mkv" else name).put("type", "video").put("size", media.size)) }
                     subtitles.forEach { (name, bytes) -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name").put("name", name).put("size", bytes.size)) }
                     send(JSONObject().put("items", items).toString().toByteArray())
                 }
@@ -337,13 +340,13 @@ class NativePlaybackTest {
                     subtitleRequests.incrementAndGet()
                     send(subtitles.getValue(endpoint.removePrefix("/api/raw/")), "text/plain; charset=utf-8")
                 }
-                endpoint == "/api/preview/thumb/fixture.mkv" -> send(ByteArray(0), status = 404)
+                endpoint.substringBefore('?').removePrefix("/api/preview/thumb/") in videos -> send(ByteArray(0), status = 404)
                 endpoint.startsWith("/api/media/playback") -> {
                     if (request[0] == "GET" && stallNextRead.compareAndSet(true, false)) { resumeRead.countDown(); releaseRead.await(10, TimeUnit.SECONDS) }
                     if (request[0] == "PUT") { position = JSONObject(String(body)).getDouble("position"); updated = System.currentTimeMillis() }
                     send(JSONObject().put("identity", identity).put("position", position).put("duration", 12.0).put("updatedAt", updated).put("exists", true).toString().toByteArray())
                 }
-                endpoint.startsWith("/api/raw/fixture.mkv") -> {
+                endpoint.substringBefore('?').removePrefix("/api/raw/") in videos -> {
                     check(!endpoint.contains("inline=true"))
                     rawRequests.incrementAndGet()
                     val range = headers["range"]?.removePrefix("bytes=")

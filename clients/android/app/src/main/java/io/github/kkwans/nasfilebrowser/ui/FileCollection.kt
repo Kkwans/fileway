@@ -44,10 +44,10 @@ internal fun FileLayout.collectionDescription() = when (this) {
 @Composable internal fun <T> FileCollection(entries: List<T>, layout: FileLayout, modifier: Modifier,
     description: String, resetKey: Any?, keyOf: (T) -> String,
     header: @Composable (() -> Unit)? = null, entry: @Composable (T) -> Unit) {
+    key(resetKey, layout) {
     val list = rememberLazyListState()
     val grid = rememberLazyGridState()
     val waterfall = rememberLazyStaggeredGridState()
-    LaunchedEffect(resetKey, layout) { list.scrollToItem(0); grid.scrollToItem(0); waterfall.scrollToItem(0) }
     val cell = when (layout) { FileLayout.COVER -> 148.dp; FileLayout.COMPACT -> 96.dp; FileLayout.UNBOUNDED -> 112.dp; else -> null }
     val area = modifier.background(MaterialTheme.colorScheme.surface).semantics { contentDescription = description }
     if (layout == FileLayout.UNBOUNDED) BoxWithConstraints(area) {
@@ -66,5 +66,6 @@ internal fun FileLayout.collectionDescription() = when (this) {
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (header != null) item(key = "collection-header") { header() }
         items(entries, key = { "entry:${keyOf(it)}" }) { entry(it) }
+    }
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -20,7 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
-import io.github.kkwans.nasfilebrowser.data.HeldPlaybackRate
 import io.github.kkwans.nasfilebrowser.data.parsePlaybackRate
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -65,11 +65,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
+import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import kotlinx.coroutines.delay
 import org.videolan.libvlc.util.VLCVideoLayout
 
-private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, SOURCE, EXTERNAL }
+private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, SOURCE, EXTERNAL, QUEUE }
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.activity()
@@ -80,6 +81,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 @Composable internal fun PlayerScreen(model: ClientModel, file: ResourceRef) {
     val state by model.player.state.collectAsStateWithLifecycle()
     val client by model.state.collectAsStateWithLifecycle()
+    val queue = client.mediaQueue
     val liveState by rememberUpdatedState(state)
     val holdRate by model.playbackPreferences.holdRate.collectAsStateWithLifecycle()
     val liveHoldRate by rememberUpdatedState(holdRate)
@@ -99,9 +101,12 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var seek by remember(file) { mutableStateOf<Float?>(null) }
     var showRequest by remember(file) { mutableStateOf(false) }
     val feedback = remember { SnackbarHostState() }
+    LaunchedEffect(state.operationError) {
+        state.operationError?.let { message -> feedback.showSnackbar(message); model.player.clearOperationError(message) }
+    }
     LaunchedEffect(client.busy, file) {
         showRequest = false
-        if (client.busy) { delay(2000); showRequest = true }
+        if (client.busy) { delay(200); showRequest = true }
     }
     LaunchedEffect(client.progressStatus) {
         if (client.progressStatus == "续播保存失败，请重试" &&
@@ -163,7 +168,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
         CompositionLocalProvider(LocalContentColor provides Color.White) {
             BoxWithConstraints(Modifier.fillMaxSize().background(PlayerCanvas).windowInsetsPadding(WindowInsets.safeDrawing)) {
                 val landscape = maxWidth > maxHeight
-                val portraitStageHeight = maxWidth / (16f / 9f) + 96.dp
+                val portraitStageHeight = maxWidth / (16f / 9f) + 116.dp
                 Column(Modifier.fillMaxSize()) {
                     if (!landscape) Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
@@ -175,7 +180,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                     // hiding the HUD never changes the native surface size.
                     val stage = if (landscape) Modifier.weight(1f) else Modifier.fillMaxWidth().height(portraitStageHeight)
                     Box(stage.background(Color.Black)) {
-                        Box(Modifier.fillMaxSize().padding(bottom = if (landscape) 0.dp else 96.dp)) {
+                        Box(Modifier.fillMaxSize().padding(bottom = if (landscape) 0.dp else 116.dp)) {
                             AndroidView(factory = { VLCVideoLayout(it).also(model.player::attach) }, modifier = Modifier.fillMaxSize())
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"
@@ -187,17 +192,18 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     onLongPress = {},
                                     onPress = {
                                         if (!exploration && model.state.value.selected == file && liveState.playing && !model.state.value.busy) coroutineScope {
-                                            val temporary = HeldPlaybackRate({ model.player.state.value.rate }, model.player::rate)
+                                            var temporaryEpoch: Long? = null
                                             val hold = launch {
                                                 delay(viewConfiguration.longPressTimeoutMillis)
                                                 if (model.state.value.selected == file && liveState.playing && !model.state.value.busy) {
-                                                    temporary.start(liveHoldRate); holding = true
+                                                    temporaryEpoch = model.player.beginTemporaryRate(liveHoldRate)
+                                                    holding = temporaryEpoch != null
                                                 }
                                             }
                                             try { tryAwaitRelease() }
                                             finally {
                                                 hold.cancel()
-                                                if (model.state.value.selected == file) temporary.release()
+                                                temporaryEpoch?.let(model.player::restoreRate)
                                                 holding = false
                                             }
                                         }
@@ -205,20 +211,20 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             })
                             if (holding) Text("${holdRate}× 倍速播放", Modifier.align(Alignment.TopCenter).padding(top = 20.dp)
                                 .clip(RoundedCornerShape(8.dp)).background(PlayerPanel).padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 13.sp)
-                            val failure = state.error ?: client.error
+                            val failure = if (client.busy) null else client.error ?: state.error
                             if (failure != null) {
                                 Column(Modifier.align(Alignment.Center).widthIn(max = 360.dp).padding(20.dp)
                                     .clip(RoundedCornerShape(10.dp)).background(PlayerPanel).padding(16.dp),
                                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Text(failure, fontSize = 14.sp, lineHeight = 20.sp, color = Color(0xFFFFA0AC))
                                     PlayerLabel("重试", "重试播放") {
-                                        if (state.error != null) model.open(file) else model.togglePlayback()
+                                        model.retryPlayback()
                                     }
                                 }
-                            } else if (showRequest) {
+                            } else if (client.busy) {
                                 Row(Modifier.align(Alignment.Center).clip(RoundedCornerShape(10.dp)).background(PlayerPanel).padding(start = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    CircularProgressIndicator(Modifier.size(18.dp), color = PlayerAccent, strokeWidth = 2.dp)
+                                    if (showRequest) CircularProgressIndicator(Modifier.size(18.dp), color = PlayerAccent, strokeWidth = 2.dp)
                                     Text("正在加载", fontSize = 13.sp)
                                     PlayerLabel("取消", "取消播放请求") { model.cancel() }
                                 }
@@ -240,14 +246,20 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 "播放进度", state.seekable && state.durationMs > 0,
                                 { seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() },
                                 clock((seek ?: state.positionMs.toFloat()).toLong()) + "，共 " + clock(state.durationMs))
+                            if (!landscape) Row(Modifier.fillMaxWidth().height(20.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(clock((seek ?: state.positionMs.toFloat()).toLong()), color = PlayerSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+                                Text(if (state.durationMs > 0) clock(state.durationMs) else "--:--", color = PlayerSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                PlayerIcon(R.drawable.ic_skip_previous, "上一个视频", { touch(); model.previousMedia() }, queue?.hasPrevious == true)
+                                if (landscape) PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { touch(); model.player.seek(state.positionMs - 10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(if (state.playing) R.drawable.art_pause else R.drawable.art_play, if (state.playing) "暂停播放" else "开始播放", { touch(); model.togglePlayback() }, !client.busy)
-                                if (landscape) {
-                                    PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { touch(); model.player.seek(state.positionMs - 10_000) }, state.seekable)
-                                    PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { touch(); model.player.seek(state.positionMs + 10_000) }, state.seekable)
-                                }
-                                Text(clock((seek ?: state.positionMs.toFloat()).toLong()) + " / " + if (state.durationMs > 0) clock(state.durationMs) else "--:--",
+                                if (landscape) PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { touch(); model.player.seek(state.positionMs + 10_000) }, state.seekable && !client.busy)
+                                PlayerIcon(R.drawable.ic_skip_next, "下一个视频", { touch(); model.nextMedia() }, queue?.hasNext == true)
+                                if (landscape) Text(clock((seek ?: state.positionMs.toFloat()).toLong()) + " / " + if (state.durationMs > 0) clock(state.durationMs) else "--:--",
                                     color = Color(0xFFDADADA), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
+                                else Spacer(Modifier.weight(1f))
+                                PlayerIcon(R.drawable.ic_playlist_play, "播放列表", { touch(); sheet = PlayerSheet.QUEUE }, queue != null)
                                 if (landscape) {
                                     PlayerLabel("音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
                                     PlayerLabel("字幕", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
@@ -284,8 +296,20 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                     }
                 }
                 SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp))
-                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; PlayerSheet.EXTERNAL -> "外挂字幕"; else -> "播放来源" }, { sheet = null; touch() }) {
+                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
+                        PlayerSheet.QUEUE -> queue?.let { snapshot ->
+                            Column {
+                                Text("${snapshot.source.label} · ${snapshot.index + 1} / ${snapshot.items.size}", Modifier.padding(horizontal = 24.dp, vertical = 12.dp), color = PlayerSecondary, fontSize = 13.sp)
+                                LazyColumn(state = rememberLazyListState(initialFirstVisibleItemIndex = snapshot.index), contentPadding = PaddingValues(bottom = 20.dp)) {
+                                    itemsIndexed(snapshot.items, key = { _, item -> item.mediaKey }) { index, item ->
+                                        Choice(item.name, "${index + 1} · ${item.path.substringBeforeLast('/').ifEmpty { "/" }}", index == snapshot.index) {
+                                            model.navigateMedia(index); sheet = null; touch()
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         PlayerSheet.AUDIO, PlayerSheet.SUBTITLE -> {
                             val audio = sheet == PlayerSheet.AUDIO
                             TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle,
@@ -349,8 +373,12 @@ private val PlayerAccent = Color(0xFFFF80A6)
 private val PlayerSecondary = Color(0xFFB5B5BE)
 
 @Composable private fun PlayerIcon(icon: Int, label: String, click: () -> Unit, enabled: Boolean = true) {
-    IconButton(onClick = click, enabled = enabled, modifier = Modifier.size(48.dp)) {
-        Icon(painterResource(icon), label, Modifier.size(22.dp), tint = Color.White.copy(alpha = if (enabled) 0.94f else 0.38f))
+    IconButton(onClick = click, enabled = enabled, modifier = Modifier.size(48.dp).clearAndSetSemantics {
+        contentDescription = label
+        role = Role.Button
+        if (enabled) onClick { click(); true } else disabled()
+    }) {
+        Icon(painterResource(icon), null, Modifier.size(22.dp), tint = Color.White.copy(alpha = if (enabled) 0.94f else 0.38f))
     }
 }
 @Composable private fun PlayerLabel(text: String, label: String, enabled: Boolean = true, click: () -> Unit) {

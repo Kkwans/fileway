@@ -33,6 +33,11 @@ class SearchController(private val scope: CoroutineScope, private val isCurrent:
     private var searchJob: Job? = null
     private var selectionJob: Job? = null
 
+    fun mediaSnapshot(): List<ResourceRef> {
+        val input = mutable.value
+        return input.items.mapNotNull { it.resource(input.resultBasePath, input.resultBaseWirePath) }
+    }
+
     fun open(context: SessionContext, path: String, wirePath: String) {
         close()
         if (!isCurrent(context)) return
