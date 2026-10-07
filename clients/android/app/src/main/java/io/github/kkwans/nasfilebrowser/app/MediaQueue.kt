@@ -8,7 +8,7 @@ enum class MediaQueueSource(val label: String) { DIRECTORY("当前目录"), SEAR
 fun ResourceRef.mediaKind(): MediaKind? {
     if (directory) return null
     return when {
-        type == "video" || name.substringAfterLast('.').lowercase(Locale.ROOT) in setOf("mkv", "mp4", "webm", "avi", "mov", "m2ts", "ts") -> MediaKind.VIDEO
+        type == "video" || name.substringAfterLast('.').lowercase(Locale.ROOT) in setOf("mkv", "mp4", "m4v", "webm", "avi", "mov", "m2ts", "ts") -> MediaKind.VIDEO
         type == "image" || name.substringAfterLast('.').lowercase(Locale.ROOT) in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif") -> MediaKind.IMAGE
         else -> null
     }

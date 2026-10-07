@@ -30,6 +30,7 @@ import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.FileCategory
+import io.github.kkwans.nasfilebrowser.app.mediaKind
 
 /** Official reference: restrained chrome, cover-led content and compact directory entries. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -100,7 +101,7 @@ import io.github.kkwans.nasfilebrowser.app.FileCategory
     val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open,
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
     @Composable fun artwork(modifier: Modifier) {
-        val media = !file.directory && (file.type in setOf("image", "video") || file.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "webm", "jpg", "jpeg", "png", "webp"))
+        val media = file.mediaKind() != null
         if (media) MediaThumbnail(model, file, modifier.clip(RoundedCornerShape(6.dp)),
             showStatusText = layout == FileLayout.COVER || layout == FileLayout.DETAIL,
             contentScale = if (layout == FileLayout.UNBOUNDED) ContentScale.Fit else ContentScale.Crop,
