@@ -23,11 +23,11 @@ class SettingsScreenTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
-    private fun action(label: String): UiObject2 {
+    private fun action(label: String, direction: Direction = Direction.DOWN): UiObject2 {
         repeat(6) {
             device.findObject(By.text(label))?.let { return it }
             val content = device.wait(Until.findObject(By.desc("设置内容")), 5000) ?: error("Settings missing")
-            if (!content.scroll(Direction.DOWN, .6f)) return@repeat
+            if (!content.scroll(direction, .6f)) return@repeat
         }
         error("Settings action missing: $label")
     }
@@ -88,7 +88,8 @@ class SettingsScreenTest {
             nav("设置").click(); device.pressBack()
             assertTrue(device.wait(Until.hasObject(By.desc("文件网格")), 5000))
             assertTrue(model.state.value.connected)
-            nav("设置").click(); action("服务器").click()
+            // Settings restores its scroll position after visiting another tab.
+            nav("设置").click(); action("服务器", Direction.UP).click()
             withTimeout(5000) { model.state.first { !it.connected } }
         } catch (error: Throwable) { capture("settings-failure"); throw error }
         finally { withContext(Dispatchers.Main) { model.disconnect() }; store.remove(profile); source.close() }

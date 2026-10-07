@@ -17,8 +17,9 @@ import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
-@Composable internal fun CacheSettingsPanel(model: ClientModel) {
+@Composable internal fun CacheSettingsPanel(model: ClientModel, feedback: (String) -> Unit) {
     val state by model.cache.state.collectAsStateWithLifecycle()
     val settings = state.settings
     val scope = rememberCoroutineScope()
@@ -29,7 +30,6 @@ import kotlinx.coroutines.launch
     var clear by remember { mutableStateOf<String?>(null) }
     var manage by remember { mutableStateOf(false) }
     var items by remember { mutableStateOf<List<CachedImage>>(emptyList()) }
-    var feedback by remember { mutableStateOf<String?>(null) }
     val enabled = !state.loading && !state.busy
     LaunchedEffect(Unit) { model.cache.refresh() }
     fun edit(key: String, value: Long) { number = key; input = value.toString(); error = null }
@@ -47,7 +47,7 @@ import kotlinx.coroutines.launch
             SettingsAction("默认图片质量", settings.imageQuality.label, R.drawable.ic_visibility, enabled) { quality = true }
             SettingsAction("图片缓存容量", "${settings.imageMB} MB · 已用 ${readableSize(state.images)} · 0 为关闭", R.drawable.ic_storage, enabled) { edit("image", settings.imageMB) }
             SettingsAction("缓存图片管理", "查看当前账号的图片缓存，可单独删除", R.drawable.ic_folder, enabled) {
-                scope.launch { try { items = model.cache.cachedImages(model.cacheAccount()); manage = true } catch (_: Exception) { feedback = "无法读取图片缓存，请重试" } }
+                scope.launch { try { items = model.cache.cachedImages(model.cacheAccount()); manage = true } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { feedback("无法读取图片缓存，请重试") } }
             }
             SettingsAction("清理图片缓存", "清除本机图片缓存，不删除服务器文件", R.drawable.ic_refresh, enabled) { clear = "image" }
         }
@@ -56,7 +56,6 @@ import kotlinx.coroutines.launch
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { model.cache.retry() }, enabled = enabled) { Text("重试缓存初始化") }
         }
-        feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
     number?.let { kind ->
         val title = when (kind) { "thumbnail" -> "缩略图容量上限"; "playback" -> "视频缓存容量上限"; "image" -> "图片缓存容量上限"; else -> "自动清理周期" }
@@ -89,7 +88,7 @@ import kotlinx.coroutines.launch
         text = { Text(if (kind == "playback") "仅清理未在播放的缓存，服务器文件不受影响。" else "仅清理本机缓存，服务器文件不受影响。") },
         confirmButton = { TextButton(onClick = {
             clear = null
-            scope.launch { try { model.cache.clear(kind); feedback = if (kind == "playback" && model.cache.state.value.protected > 0) "已清理，正在播放的缓存已保留" else "缓存已清理" } catch (_: Exception) { feedback = "清理失败，请重试" } }
+            scope.launch { try { model.cache.clear(kind); feedback(if (kind == "playback" && model.cache.state.value.protected > 0) "已清理，正在播放的缓存已保留" else "缓存已清理") } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { feedback("清理失败，请重试") } }
         }) { Text("清理") } }, dismissButton = { TextButton(onClick = { clear = null }) { Text("取消") } }) }
     if (manage) AlertDialog(onDismissRequest = { manage = false }, shape = RoundedCornerShape(12.dp), title = { Text("缓存图片") }, text = {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -100,7 +99,7 @@ import kotlinx.coroutines.launch
                     Text(readableSize(image.bytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row {
                         TextButton(onClick = { manage = false; model.open(ResourceRef(image.path, image.wirePath, image.name, false, "image", image.size, image.modified)) }) { Text("查看") }
-                        TextButton(onClick = { scope.launch { try { model.cache.removeImage(image.key, model.cacheAccount()); items = model.cache.cachedImages(model.cacheAccount()) } catch (_: Exception) { feedback = "删除缓存失败，请重试" } } }) { Text("删除缓存") }
+                        TextButton(onClick = { scope.launch { try { model.cache.removeImage(image.key, model.cacheAccount()); items = model.cache.cachedImages(model.cacheAccount()) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { feedback("删除缓存失败，请重试") } } }) { Text("删除缓存") }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }

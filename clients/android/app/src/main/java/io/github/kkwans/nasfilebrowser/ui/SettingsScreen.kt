@@ -125,7 +125,12 @@ import kotlinx.coroutines.launch
                         SettingsAction("应用内 Tailscale", network.label, R.drawable.ic_network) { networkDetails = true }
                     }
                 }
-                item { CacheSettingsPanel(model) }
+                item { CacheSettingsPanel(model) { message ->
+                    scope.launch {
+                        snackbar.currentSnackbarData?.dismiss()
+                        snackbar.showSnackbar(message, withDismissAction = true)
+                    }
+                } }
                 item {
                     SettingsGroup("应用") {
                         SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
