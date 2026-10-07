@@ -6,6 +6,8 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.view.accessibility.AccessibilityManager
+import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -67,6 +69,7 @@ import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.player.NativeTrack
+import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
 import kotlinx.coroutines.delay
 import org.videolan.libvlc.util.VLCVideoLayout
 
@@ -96,6 +99,10 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     val accessibility = remember(context) { context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager }
     var exploration by remember { mutableStateOf(accessibility.isTouchExplorationEnabled) }
     var visible by remember(file) { mutableStateOf(true) }
+    var touchLocked by remember(file) { mutableStateOf(false) }
+    var orientationBeforeLock by remember { mutableStateOf<Int?>(null) }
+    val gestureSeek = remember(file) { SeekGestureAccumulator() }
+    var gestureMessage by remember(file) { mutableStateOf<String?>(null) }
     var interaction by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf<PlayerSheet?>(null) }
     var seek by remember(file) { mutableStateOf<Float?>(null) }
@@ -115,7 +122,25 @@ private tailrec fun Context.activity(): Activity? = when (this) {
         }
     }
     val blocked = state.error != null || client.error != null || client.busy || !state.playing || state.phase != "正在播放"
+    val liveBlocked by rememberUpdatedState(blocked)
     fun touch() { visible = true; interaction++ }
+    fun step(delta: Long) { gestureSeek.reset(); touch(); model.player.seek(liveState.positionMs + delta) }
+    fun lockTouch() { touchLocked = true; sheet = null; gestureSeek.reset() }
+    fun lockOrientation() {
+        val owner = context.activity() ?: return
+        val previous = orientationBeforeLock
+        if (previous == null) {
+            orientationBeforeLock = owner.requestedOrientation
+            owner.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        } else {
+            owner.requestedOrientation = previous
+            orientationBeforeLock = null
+        }
+        touch()
+    }
+    BackHandler(touchLocked) { touchLocked = false; touch() }
+    LaunchedEffect(exploration) { if (exploration) touchLocked = false }
+    LaunchedEffect(gestureMessage, interaction) { if (gestureMessage != null) { delay(1_000); gestureMessage = null } }
     DisposableEffect(accessibility) {
         val listener = AccessibilityManager.TouchExplorationStateChangeListener { exploration = it }
         accessibility.addTouchExplorationStateChangeListener(listener)
@@ -157,6 +182,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     }
     fun fullscreen(landscape: Boolean) {
         touch()
+        orientationBeforeLock = null
         context.activity()?.requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
     DisposableEffect(context) {
@@ -173,6 +199,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                     if (!landscape) Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
                         Text("正在观看", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        PlayerLabel(if (orientationBeforeLock == null) "锁定方向" else "方向已锁", if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定", click = ::lockOrientation)
+                        PlayerIcon(R.drawable.ic_lock, "锁定触控", ::lockTouch, !exploration)
                         PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                     }
                     // Portrait keeps transport below the picture. Fullscreen
@@ -185,13 +213,28 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"
                                 onClick("显示播放控制") { touch(); true }
-                            }.pointerInput(file, blocked, exploration) {
+                            }.pointerInput(file, exploration, touchLocked) {
                                 detectTapGestures(
-                                    onTap = { if (!blocked && !exploration) visible = !visible else touch(); interaction++ },
-                                    onDoubleTap = { touch(); if (!model.state.value.busy) model.togglePlayback() },
+                                    onTap = { if (!liveBlocked && !exploration) visible = !visible else touch(); interaction++ },
+                                    onDoubleTap = { point ->
+                                        if (!exploration && !touchLocked && !model.state.value.busy && model.state.value.selected == file) {
+                                            touch()
+                                            val delta = when {
+                                                point.x < size.width / 3f -> -10_000L
+                                                point.x > size.width * 2f / 3f -> 10_000L
+                                                else -> 0L
+                                            }
+                                            if (delta == 0L) { gestureSeek.reset(); model.togglePlayback() }
+                                            else if (liveState.seekable && liveState.durationMs > 0) {
+                                                val target = gestureSeek.next(liveState.positionMs, liveState.durationMs, delta, SystemClock.elapsedRealtime())
+                                                model.player.seek(target)
+                                                gestureMessage = (if (delta < 0) "后退" else "快进") + " · " + clock(target)
+                                            }
+                                        }
+                                    },
                                     onLongPress = {},
                                     onPress = {
-                                        if (!exploration && model.state.value.selected == file && liveState.playing && !model.state.value.busy) coroutineScope {
+                                        if (!exploration && !touchLocked && model.state.value.selected == file && liveState.playing && !model.state.value.busy) coroutineScope {
                                             var temporaryEpoch: Long? = null
                                             val hold = launch {
                                                 delay(viewConfiguration.longPressTimeoutMillis)
@@ -211,6 +254,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             })
                             if (holding) Text("${holdRate}× 倍速播放", Modifier.align(Alignment.TopCenter).padding(top = 20.dp)
                                 .clip(RoundedCornerShape(8.dp)).background(PlayerPanel).padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 13.sp)
+                            gestureMessage?.let { message -> Text(message, Modifier.align(Alignment.Center)
+                                .clip(RoundedCornerShape(8.dp)).background(PlayerPanel).padding(12.dp), fontSize = 14.sp) }
                             val failure = if (client.busy) null else client.error ?: state.error
                             if (failure != null) {
                                 Column(Modifier.align(Alignment.Center).widthIn(max = 360.dp).padding(20.dp)
@@ -239,12 +284,14 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         if (visible && landscape) Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent))).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
                             Text(file.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+                            PlayerLabel(if (orientationBeforeLock == null) "锁定方向" else "方向已锁", if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定", click = ::lockOrientation)
+                            PlayerIcon(R.drawable.ic_lock, "锁定触控", ::lockTouch, !exploration)
                             PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                         }
                         if (visible) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000)))).padding(horizontal = if (landscape) 20.dp else 12.dp)) {
                             PlayerSlider(seek ?: state.positionMs.toFloat().coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)), state.durationMs.toFloat().coerceAtLeast(1f),
                                 "播放进度", state.seekable && state.durationMs > 0,
-                                { seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() },
+                                { gestureSeek.reset(); seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() },
                                 clock((seek ?: state.positionMs.toFloat()).toLong()) + "，共 " + clock(state.durationMs))
                             if (!landscape) Row(Modifier.fillMaxWidth().height(20.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(clock((seek ?: state.positionMs.toFloat()).toLong()), color = PlayerSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
@@ -252,9 +299,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 PlayerIcon(R.drawable.ic_skip_previous, "上一个视频", { touch(); model.previousMedia() }, queue?.hasPrevious == true)
-                                if (landscape) PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { touch(); model.player.seek(state.positionMs - 10_000) }, state.seekable && !client.busy)
+                                if (landscape) PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { step(-10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(if (state.playing) R.drawable.art_pause else R.drawable.art_play, if (state.playing) "暂停播放" else "开始播放", { touch(); model.togglePlayback() }, !client.busy)
-                                if (landscape) PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { touch(); model.player.seek(state.positionMs + 10_000) }, state.seekable && !client.busy)
+                                if (landscape) PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { step(10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(R.drawable.ic_skip_next, "下一个视频", { touch(); model.nextMedia() }, queue?.hasNext == true)
                                 if (landscape) Text(clock((seek ?: state.positionMs.toFloat()).toLong()) + " / " + if (state.durationMs > 0) clock(state.durationMs) else "--:--",
                                     color = Color(0xFFDADADA), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
@@ -282,9 +329,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         }
                         HorizontalDivider(color = Color(0xFF29292C))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            JumpAction(R.drawable.ic_replay_10, "后退十秒", state.seekable) { touch(); model.player.seek(state.positionMs - 10_000) }
-                            Text("双击暂停 · 长按倍速", color = PlayerSecondary, fontSize = 12.sp)
-                            JumpAction(R.drawable.ic_forward_10, "快进十秒", state.seekable) { touch(); model.player.seek(state.positionMs + 10_000) }
+                            JumpAction(R.drawable.ic_replay_10, "后退十秒", state.seekable && !client.busy) { step(-10_000) }
+                            Text("左右双击跳转 · 中间暂停", color = PlayerSecondary, fontSize = 12.sp)
+                            JumpAction(R.drawable.ic_forward_10, "快进十秒", state.seekable && !client.busy) { step(10_000) }
                         }
                         Column(Modifier.clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
                             DetailAction(R.drawable.ic_audio, "音轨", state.audio.firstOrNull { it.id == state.selectedAudio }?.title ?: "暂无音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
@@ -296,6 +343,15 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                     }
                 }
                 SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp))
+                if (touchLocked) {
+                    // The topmost input layer covers controls as well as the picture. System Back unlocks first.
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f))
+                        .clearAndSetSemantics { contentDescription = "触控已锁定" }
+                        .pointerInput(Unit) { detectTapGestures(onTap = {}, onDoubleTap = {}, onLongPress = {}) })
+                    Box(Modifier.align(Alignment.CenterEnd).padding(12.dp).clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
+                        PlayerLabel("解锁", "解除触控锁定") { touchLocked = false; touch() }
+                    }
+                }
                 if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
                         PlayerSheet.QUEUE -> queue?.let { snapshot ->
@@ -386,7 +442,7 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
         contentDescription = label
         stateDescription = text
         role = Role.Button
-        if (!enabled) disabled()
+        if (enabled) onClick { click(); true } else disabled()
     }.padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
         Text(text, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = if (enabled) 0.94f else 0.38f))
     }
