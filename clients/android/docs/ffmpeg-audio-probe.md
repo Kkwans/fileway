@@ -52,6 +52,18 @@ Use that exact checkout for the surrounding Gradle project and wrapper.
 
 ## Acceptance boundary
 
+An artifact may be enabled in the **test APK only** with
+`-PfilewayFfmpegProbeManifest=/absolute/path/ffmpeg-probe.json`. Configuration
+checks the input/recipe and AAR hashes against this checkout. The adjacent AAR is
+required; no candidate is downloaded or selected automatically. This enables the
+additional `src/ffmpegProbeTest` source set and `FfmpegAudioProbeTest`.
+
+The audio test selects the owned TrueHD/AAC/FLAC/Opus tones through one Go lease,
+verifies the actual FFmpeg decoder and PCM frequency/energy, and repeats TrueHD
+after intervening codec, seek and paused-rate changes. Its TeeAudioProcessor is
+before Sonic/output routing: it proves decoded PCM content, not actual speaker
+sound, pitch preservation after time stretching, or end-to-end switching latency.
+
 `packagingVerified` is a binary/source check. `runtimeVerified` remains false:
 the library still has to load through an explicitly selected test candidate and
 decode the owned TrueHD/AAC/FLAC/Opus fixtures. Actual output, track/rate/seek

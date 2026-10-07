@@ -1,3 +1,7 @@
+import groovy.json.JsonSlurper
+import java.io.File
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -70,4 +74,19 @@ dependencies {
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     // Comparison harness only: no Media3 runtime is added to the product APK.
     androidTestImplementation("androidx.media3:media3-exoplayer:1.11.1")
+    providers.gradleProperty("filewayFfmpegProbeManifest").orNull?.let { manifestPath ->
+        val manifestFile = file(manifestPath).canonicalFile
+        val manifest = JsonSlurper().parse(manifestFile) as Map<*, *>
+        fun hash(input: File) = MessageDigest.getInstance("SHA-256").digest(input.readBytes())
+            .joinToString("") { "%02x".format(it) }
+        require(manifest["schema"] == 1 && manifest["packagingVerified"] == true)
+        require(manifest["media3Version"] == "1.11.1") { "Probe must match the pinned Media3 runtime" }
+        require(manifest["inputLockSha256"] == hash(rootProject.file("native/media3-ffmpeg.lock.json"))) { "Probe inputs differ from the source lock" }
+        require(manifest["recipeSha256"] == hash(rootProject.file("scripts/prepare-ffmpeg-probe.py"))) { "Probe recipe differs from this checkout" }
+        require(manifest["aarFile"] == "fileway-media3-ffmpeg-probe.aar")
+        val aar = manifestFile.resolveSibling("fileway-media3-ffmpeg-probe.aar").canonicalFile
+        require(aar.parentFile == manifestFile.parentFile && hash(aar) == manifest["aarSha256"]) { "Probe AAR hash/path mismatch" }
+        androidTestImplementation(files(aar))
+        android.sourceSets.getByName("androidTest").kotlin.srcDir("src/ffmpegProbeTest/java")
+    }
 }
