@@ -137,6 +137,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var interaction by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf<PlayerSheet?>(null) }
     var seek by remember(file) { mutableStateOf<Float?>(null) }
+    val seekPreview = rememberSeekPreview(model, file, state.mediaGeneration, seek != null)
     var showRequest by remember(file) { mutableStateOf(false) }
     val feedback = remember { SnackbarHostState() }
     var documentGeneration by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -404,6 +405,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                         }
                         if (visible) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000)))).padding(horizontal = if (landscape) 20.dp else 12.dp)) {
+                            SeekPreview(seekPreview, seek?.toLong())
                             PlayerSlider(seek ?: state.positionMs.toFloat().coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)), state.durationMs.toFloat().coerceAtLeast(1f),
                                 "播放进度", state.seekable && state.durationMs > 0,
                                 { gestureSeek.reset(); seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() },

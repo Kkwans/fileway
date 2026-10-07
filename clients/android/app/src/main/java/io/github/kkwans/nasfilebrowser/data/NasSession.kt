@@ -19,12 +19,12 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         check(parseIdentity(token).id == identity.id) { "服务器账号已变化，请重新登录" }
         return token
     }
-    private suspend fun response(method: String, endpoint: String, body: JSONObject? = null): String {
+    private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200)): String {
         val command = JSONObject().put("op", "request").put("session", id).put("method", method).put("endpoint", endpoint)
         body?.let { command.put("body", it) }
         val result = native(command) as JSONObject
         when (result.getInt("status")) {
-            200 -> { token(); return result.getString("body") }
+            in accepted -> { token(); return result.getString("body") }
             401 -> throw ServiceException(401, "登录已过期，请重新登录")
             403 -> throw ServiceException(403, "当前账号没有访问权限")
             404 -> throw ServiceException(404, "文件、目录或服务功能不存在")
@@ -32,6 +32,20 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         }
     }
     suspend fun request(method: String, endpoint: String, body: JSONObject? = null) = JSONObject(response(method, endpoint, body))
+    suspend fun spriteMetadata(path: String): JSONObject {
+        require(path.startsWith('/'))
+        val query = java.net.URLEncoder.encode(path, "UTF-8")
+        return JSONObject(response("GET", "/api/media/sprite?path=$query", accepted = setOf(200, 202)))
+    }
+    suspend fun spriteImage(path: String): PreviewLease {
+        require(path.startsWith('/'))
+        token()
+        // The API's returned URL is never trusted as another origin. The existing
+        // authenticated broker supplies this same-service asset, including tsnet.
+        val endpoint = "/api/media/sprite.jpg?path=" + java.net.URLEncoder.encode(path, "UTF-8")
+        val url = native(JSONObject().put("op", "asset").put("session", id).put("endpoint", endpoint)) as String
+        return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
+    }
     suspend fun array(endpoint: String) = JSONArray(response("GET", endpoint))
     fun search(path: String, wirePath: String, query: String, scope: SearchScope): Flow<SearchUpdate> =
         searchFlow(path, wirePath, query, scope, identity = { token(); Unit }) { command -> native(command.put("session", id)) }

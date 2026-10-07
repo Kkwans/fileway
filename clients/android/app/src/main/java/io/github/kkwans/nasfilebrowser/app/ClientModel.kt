@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
 import coil3.memory.MemoryCache
+import coil3.request.allowHardware
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
 import io.github.kkwans.nasfilebrowser.core.EmbeddedNetwork
 import io.github.kkwans.nasfilebrowser.core.NetworkState
@@ -371,6 +372,42 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             runCatching { asset.release() }.onFailure { error.addSuppressed(it) }
             throw error
         }
+    }
+    suspend fun videoSprite(file: ResourceRef): Pair<VideoSprite, android.graphics.Bitmap>? {
+        val binding = playback ?: return null
+        if (binding.file.mediaKey != file.mediaKey) return null
+        fun current() = playback === binding && context == binding.context
+        val metadata = kotlinx.coroutines.withTimeoutOrNull(180_000) {
+            var ready: VideoSprite? = null
+            while (ready == null) {
+                currentCoroutineContext().ensureActive()
+                check(current()) { "播放来源已切换" }
+                val result = binding.context.api.spriteMetadata(file.path)
+                check(current()) { "播放来源已切换" }
+                when (result.optString("state")) {
+                    "ready" -> ready = VideoSprite.from(result)
+                    "preparing" -> delay(2000)
+                    else -> return@withTimeoutOrNull null
+                }
+            }
+            ready
+        }
+        val sprite = metadata ?: return null
+        val lease = binding.context.api.spriteImage(file.path)
+        try {
+            check(current()) { "播放来源已切换" }
+            val key = thumbnailKey(file) + "/sprite"
+            val result = cache.thumbnailLoader.value.execute(coil3.request.ImageRequest.Builder(getApplication<Application>())
+                .data(lease.url).size(sprite.sheetWidth, sprite.sheetHeight).allowHardware(false)
+                .memoryCacheKey(key).diskCacheKey(key)
+                .diskCachePolicy(if (cache.state.value.settings.thumbnailMB == 0L) coil3.request.CachePolicy.DISABLED else coil3.request.CachePolicy.ENABLED)
+                .build())
+            currentCoroutineContext().ensureActive()
+            check(current()) { "播放来源已切换" }
+            val image = (result as? coil3.request.SuccessResult)?.image as? coil3.BitmapImage ?: return null
+            if (image.bitmap.width != sprite.sheetWidth || image.bitmap.height != sprite.sheetHeight) return null
+            return sprite to image.bitmap
+        } finally { withContext(kotlinx.coroutines.NonCancellable) { lease.release() } }
     }
     suspend fun subtitleFiles(path: String, wirePath: String): List<ResourceRef> {
         val binding = playback ?: error("视频尚未打开")
