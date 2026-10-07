@@ -178,7 +178,7 @@ import io.github.kkwans.nasfilebrowser.app.FileCategory
 }
 
 @Composable internal fun FileDetailsDialog(file: ResourceRef, showSize: Boolean = true, onOpen: (() -> Unit)? = null,
-    openEnabled: Boolean = true, onDismiss: () -> Unit) {
+    openEnabled: Boolean = true, onLocation: (() -> Unit)? = null, onDismiss: () -> Unit) {
     @Composable fun field(label: String, value: String) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -193,6 +193,7 @@ import io.github.kkwans.nasfilebrowser.app.FileCategory
             field("修改时间", displayModified(file.modified) ?: "未提供")
         } }
     }, confirmButton = {
+        if (onLocation != null) TextButton(onClick = onLocation, enabled = openEnabled) { Text("打开所在目录") }
         if (onOpen == null) TextButton(onClick = onDismiss) { Text("关闭") }
         else TextButton(onClick = onOpen, enabled = openEnabled) { Text("打开") }
     }, dismissButton = { if (onOpen != null) TextButton(onClick = onDismiss) { Text("关闭") } })

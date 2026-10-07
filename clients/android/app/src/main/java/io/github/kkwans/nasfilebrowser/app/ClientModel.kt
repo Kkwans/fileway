@@ -86,6 +86,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var startupJob: Job? = null
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val navigation = ArrayDeque<Pair<String, String>>()
+    private var pendingDirectory: Pair<String, String>? = null
     private var playback: PlaybackBinding? = null
     private var saveTimer: Job? = null
     private var transferTimer: Job? = null
@@ -227,7 +228,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }.sortedWith(compareByDescending<ResourceRef> { it.directory }.thenBy { it.name.lowercase() })
         if (generation == bound.generation && context == bound) {
             store.saveDirectory(bound.account, path, wire)
-            if (generation == bound.generation && context == bound) mutable.value = mutable.value.copy(busy = false, stage = "", path = path, wirePath = wire, files = files, error = null)
+            if (generation == bound.generation && context == bound) {
+                if (pendingDirectory == (path to wire)) pendingDirectory = null
+                mutable.value = mutable.value.copy(busy = false, stage = "", path = path, wirePath = wire, files = files, error = null)
+            }
         }
     }
 
@@ -319,6 +323,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     private fun browse(path: String, wire: String) {
         val bound = context ?: return
+        pendingDirectory = path to wire
         search.close()
         operation?.cancel(); val expected = generation
         mutable.value = mutable.value.copy(busy = true, stage = "正在读取目录", error = null)
@@ -328,7 +333,20 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun retry() { browse(mutable.value.path, mutable.value.wirePath) }
+    fun retry() {
+        val target = pendingDirectory ?: (mutable.value.path to mutable.value.wirePath)
+        browse(target.first, target.second)
+    }
+    fun openContainingDirectory(file: ResourceRef) {
+        val current = mutable.value
+        if (!current.connected || current.busy) return
+        val parent = file.path.substringBeforeLast('/').ifEmpty { "/" }
+        val wire = file.wirePath.ifEmpty { SearchResult.encodePath(file.path) }
+            .substringBeforeLast('/').ifEmpty { "/" }
+        if (parent != current.path || wire != current.wirePath) navigation.addLast(current.path to current.wirePath)
+        mutable.value = current.copy(tab = "files", fileCategory = FileCategory.ALL)
+        browse(parent, wire)
+    }
     fun jumpDirectory(crumb: DirectoryCrumb) {
         if (mutable.value.busy || crumb.path == mutable.value.path || crumb.wirePath == null) return
         if (directoryTrail(mutable.value.path, mutable.value.wirePath).none { it == crumb }) return
@@ -388,6 +406,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (!mutable.value.busy && mutable.value.selected == null) search.open(bound, mutable.value.path, mutable.value.wirePath)
     }
     fun cancel() {
+        pendingDirectory = null
         startupJob?.cancel()
         operation?.cancel()
         resumeOperation?.cancel()
@@ -550,6 +569,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun closeSession() {
+        pendingDirectory = null
         mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false
         previewImageLoader.memoryCache?.clear()
         search.close()

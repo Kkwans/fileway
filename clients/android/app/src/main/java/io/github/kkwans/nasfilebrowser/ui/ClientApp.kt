@@ -105,7 +105,8 @@ import java.util.Locale
                     }
                 }
             }
-            details?.let { FileDetailsDialog(it, showSize = false, onDismiss = { details = null }) }
+            details?.let { file -> FileDetailsDialog(file, showSize = false, openEnabled = !state.busy,
+                onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
         }
     }
 }
