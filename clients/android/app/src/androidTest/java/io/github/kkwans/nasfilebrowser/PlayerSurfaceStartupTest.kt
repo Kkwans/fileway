@@ -18,14 +18,14 @@ import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import org.videolan.libvlc.LibVLC
 
 /** Repeated real input starts with a laid-out video Surface, not metadata-only readiness. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlayerSurfaceStartupTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
     private suspend fun hasVideo(): Boolean {
         fun find(view: View): SurfaceView? {
-            if (view is SurfaceView && runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull() == "surface_video") return view
+            if (view is io.github.kkwans.nasfilebrowser.player.PlayerViewport) return view.video
             if (view is ViewGroup) for (i in 0 until view.childCount) find(view.getChildAt(i))?.let { return it }
             return null
         }
@@ -51,7 +51,7 @@ class PlayerSurfaceStartupTest {
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         try {
-            android.util.Log.i("FilewayNativeGate", "libVLC=${LibVLC.version()} changeset=${LibVLC.changeset()} verbose=${BuildConfig.NATIVE_VERBOSE}")
+            android.util.Log.i("FilewayNativeGate", "Media3=${androidx.media3.common.MediaLibraryInfo.VERSION}")
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
             repeat(3) { iteration ->

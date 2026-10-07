@@ -74,7 +74,8 @@ internal class EngineComparisonHarness(
 
     private class VlcProbe(host: EngineProbeActivity) : Probe {
         private val player = LibVlcReferencePlayer(host)
-        override val view = VLCVideoLayout(host)
+        // libVLC resources now live in the test APK, not the product APK.
+        override val view = VLCVideoLayout(InstrumentationRegistry.getInstrumentation().context)
         override val version get() = "${LibVLC.version()}/${LibVLC.changeset()}"
         override val position get() = player.state.value.positionMs
         override val duration get() = player.state.value.durationMs
