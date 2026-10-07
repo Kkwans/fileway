@@ -126,6 +126,7 @@ class NativePlayer(context: Context) {
         layer = subtitles
         viewport?.subtitles(subtitles)
         val decoderKinds = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val decoderRequests = java.util.concurrent.ConcurrentHashMap<String, Pair<Boolean, Boolean>>()
         val recoverWithSoftware = java.util.concurrent.atomic.AtomicBoolean(false)
         var softwareDecoderReadyAt = Long.MAX_VALUE
         var recoveryCompleted = false
@@ -139,6 +140,7 @@ class NativePlayer(context: Context) {
                 val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
                 if (MimeTypes.isVideo(mime)) decoders.forEach {
                     decoderKinds[it.name] = when { it.hardwareAccelerated -> "硬件"; it.softwareOnly -> "软件"; else -> "未知" }
+                    decoderRequests[it.name] = secure to tunneling
                 }
                 if (!MimeTypes.isVideo(mime)) decoders else when (videoDecodePolicy) {
                     VideoDecodePolicy.AUTO -> if (recoverWithSoftware.get()) decoders.filter { it.softwareOnly }
@@ -195,7 +197,10 @@ class NativePlayer(context: Context) {
                 if (videoDecodePolicy == VideoDecodePolicy.AUTO && !recoverWithSoftware.get() &&
                     failedCodec != null && failedCodec.hardwareAccelerated && MimeTypes.isVideo(failedCodec.mimeType)) {
                     val available = runCatching {
-                        MediaCodecSelector.DEFAULT.getDecoderInfos(failedCodec.mimeType, failedCodec.secure, failedCodec.tunneling).any { it.softwareOnly }
+                        // CodecInfo flags describe supported features, not the
+                        // secure/tunneling mode requested for this playback.
+                        val requested = decoderRequests[failedCodec.name] ?: return@runCatching false
+                        MediaCodecSelector.DEFAULT.getDecoderInfos(failedCodec.mimeType, requested.first, requested.second).any { it.softwareOnly }
                     }.getOrDefault(false)
                     if (available && recoverWithSoftware.compareAndSet(false, true)) {
                         mutable.value = mutable.value.copy(playing = false, firstFrameRendered = false,
