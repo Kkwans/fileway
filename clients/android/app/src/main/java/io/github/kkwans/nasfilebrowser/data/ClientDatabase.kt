@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
+import io.github.kkwans.nasfilebrowser.download.DownloadRecord
+import io.github.kkwans.nasfilebrowser.download.DownloadDao
+import io.github.kkwans.nasfilebrowser.download.DownloadMigration
 
 enum class BackendKind { NAS, WINDOWS }
 enum class ConnectionMode { DIRECT, TAILNET }
@@ -85,11 +88,12 @@ data class PlaybackSnapshot(
     @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
 }
 
-@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class], version = 5, exportSchema = true)
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class, DownloadRecord::class], version = 6, exportSchema = true)
 abstract class ClientDatabase : RoomDatabase() {
     abstract fun profiles(): ProfileDao
     abstract fun playback(): PlaybackDao
     abstract fun preferences(): PreferenceDao
+    abstract fun downloads(): DownloadDao
     companion object {
         @Volatile private var instance: ClientDatabase? = null
         fun get(context: Context): ClientDatabase = instance ?: synchronized(this) {
@@ -98,7 +102,7 @@ abstract class ClientDatabase : RoomDatabase() {
                 .addMigrations(HistoryMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
                     AppearanceMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
                     FileLayoutMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
-                    ActiveSessionMigration(java.io.File(context.noBackupFilesDir, "state-backups")))
+                    ActiveSessionMigration(java.io.File(context.noBackupFilesDir, "state-backups")), DownloadMigration())
                 // Never silently delete state when a future migration is missing.
                 .build().also { instance = it }
         }

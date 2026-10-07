@@ -29,6 +29,7 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
     }
 
     suspend fun profile(id: String) = dao.profile(id)
+    suspend fun account(key: String) = dao.account(key)
     suspend fun active(): Pair<ServerProfile, AccountRecord>? = database.withTransaction {
         val key = dao.activeSession()?.accountKey ?: return@withTransaction null
         val account = dao.account(key) ?: return@withTransaction null
