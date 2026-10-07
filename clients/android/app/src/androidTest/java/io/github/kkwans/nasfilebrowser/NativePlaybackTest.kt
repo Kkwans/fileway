@@ -32,6 +32,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import androidx.media3.common.MediaLibraryInfo
+import android.media.AudioManager
+import kotlin.math.roundToInt
 import java.io.Closeable
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -50,6 +52,8 @@ class NativePlaybackTest {
 
     @Test fun mkvResumeSeekPauseRecentAndReplacementUseRealNativePlayer() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val audioManager = instrumentation.targetContext.getSystemService(AudioManager::class.java)
+        val originalVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         val arguments = InstrumentationRegistry.getArguments()
         arguments.getString("nfbFontScale")?.toFloat()?.let { expected ->
             assertEquals("The actual app must use the requested font scale", expected, instrumentation.targetContext.resources.configuration.fontScale, 0.01f)
@@ -155,16 +159,16 @@ class NativePlaybackTest {
             // At large font sizes this real action sits below the visible
             // details area. Scroll the native page, never bypass its UI.
             for (attempt in 0 until 4) {
-                val target = device.findObject(By.desc("播放器音量"))
+                val target = device.findObject(By.desc("媒体系统音量"))
                 if (target != null && target.visibleBounds.height() >= (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt()) break
                 device.findObject(By.desc("播放详情"))?.scroll(Direction.DOWN, 0.7f)
             }
-            val volumeAction = device.findObject(By.desc("播放器音量"))
+            val volumeAction = device.findObject(By.desc("媒体系统音量"))
             assertNotNull("Volume must be reachable after scrolling", volumeAction)
             volumeAction.click()
             assertTrue(device.wait(Until.hasObject(By.desc("关闭播放设置")), 3000))
             fun adjustable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-                if (node.contentDescription?.toString() == "播放器音量" && node.rangeInfo != null) return node
+                if (node.contentDescription?.toString() == "媒体系统音量" && node.rangeInfo != null) return node
                 for (index in 0 until node.childCount) node.getChild(index)?.let { child -> adjustable(child)?.let { return it } }
                 return null
             }
@@ -182,10 +186,12 @@ class NativePlaybackTest {
                 instrumentation.uiAutomation.rootInActiveWindow?.let(::inspect)
             }
             assertNotNull("The volume slider must expose an accessible range", slider)
-            val progress = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 35f) }
+            val expectedVolume = (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * .35f).roundToInt()
+            val progress = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, expectedVolume.toFloat()) }
             assertTrue(slider!!.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, progress))
-            waitUntil { model.player.state.value.volume == 35 }
-            assertEquals(35, model.player.state.value.volume)
+            waitUntil { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == expectedVolume }
+            assertEquals(expectedVolume, audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
+            assertEquals("System volume must not alter the engine gain", 100, model.player.state.value.volume)
             assertEquals(1.25f, model.player.state.value.rate, 0.001f)
             capture("player-volume-sheet")
             device.findObject(By.desc("关闭播放设置")).click()
@@ -273,6 +279,7 @@ class NativePlaybackTest {
             }.onFailure { error.addSuppressed(it) }
             throw error
         } finally {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0)
             source.releaseRead.countDown()
             onMain { model.disconnect() }
             storage.remove(profile)

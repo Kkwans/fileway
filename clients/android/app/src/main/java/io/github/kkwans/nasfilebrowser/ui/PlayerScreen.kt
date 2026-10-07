@@ -7,6 +7,8 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.view.accessibility.AccessibilityManager
 import android.os.SystemClock
+import android.media.AudioManager
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -40,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -64,6 +67,10 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlin.math.roundToInt
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
@@ -73,7 +80,7 @@ import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
 import kotlinx.coroutines.delay
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 
-private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, SOURCE, EXTERNAL, QUEUE }
+private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE }
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.activity()
@@ -96,6 +103,14 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var subtitleOffset by remember(file) { mutableStateOf("") }
     var subtitleOffsetError by remember(file) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
+    val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
+    val maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+    var mediaVolume by remember { mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val gestureEdge = with(LocalDensity.current) { 24.dp.toPx() }
+    var draggingVertical by remember(file) { mutableStateOf(false) }
+    var dragLeft by remember(file) { mutableStateOf(false) }
+    var dragStart by remember(file) { mutableFloatStateOf(0f) }
     val landscapeOrientation = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val view = LocalView.current
     val accessibility = remember(context) { context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager }
@@ -148,8 +163,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
         accessibility.addTouchExplorationStateChangeListener(listener)
         onDispose { accessibility.removeTouchExplorationStateChangeListener(listener) }
     }
-    LaunchedEffect(visible, interaction, sheet, seek != null, blocked, exploration) {
-        if (blocked || exploration || sheet != null || seek != null) visible = true
+    LaunchedEffect(visible, interaction, sheet, seek != null, blocked, exploration, draggingVertical) {
+        if (blocked || exploration || sheet != null || seek != null || draggingVertical) visible = true
         else if (visible) {
             val timeout = accessibility.getRecommendedTimeoutMillis(3000,
                 AccessibilityManager.FLAG_CONTENT_CONTROLS or AccessibilityManager.FLAG_CONTENT_TEXT or AccessibilityManager.FLAG_CONTENT_ICONS)
@@ -158,6 +173,34 @@ private tailrec fun Context.activity(): Activity? = when (this) {
         }
     }
     val window = context.activity()?.window
+    var brightness by remember(window) { mutableFloatStateOf(window?.attributes?.screenBrightness ?: -1f) }
+    fun actualBrightness(): Float = brightness.takeIf { it >= 0f }
+        ?: (Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255f).coerceIn(.02f, 1f)
+    fun changeBrightness(value: Float) {
+        window?.let { owner ->
+            brightness = if (value < 0) -1f else value.coerceIn(.02f, 1f)
+            owner.attributes = owner.attributes.apply { screenBrightness = brightness }
+        }
+    }
+    fun changeVolume(value: Float) {
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, value.roundToInt().coerceIn(0, maximumVolume), 0)
+        mediaVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+    }
+    LaunchedEffect(audioManager, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { mediaVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC); delay(500) }
+        }
+    }
+    DisposableEffect(window) {
+        val previous = window?.attributes?.screenBrightness
+        val owner = context.activity()
+        val oldStream = owner?.volumeControlStream
+        owner?.volumeControlStream = AudioManager.STREAM_MUSIC
+        onDispose {
+            if (window != null && previous != null) window.attributes = window.attributes.apply { screenBrightness = previous }
+            if (owner != null && oldStream != null) owner.volumeControlStream = oldStream
+        }
+    }
     DisposableEffect(window, model.player) {
         val oldKeep = view.keepScreenOn
         val controller = window?.let { WindowCompat.getInsetsController(it, view) }
@@ -215,7 +258,22 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"
                                 onClick("显示播放控制") { touch(); true }
-                            }.pointerInput(file, exploration, touchLocked) {
+                            }.playerVerticalGestures(file.mediaKey, !exploration && !touchLocked && !holding && !client.busy, gestureEdge,
+                                start = { left ->
+                                    dragLeft = left; draggingVertical = true; touch()
+                                    dragStart = if (left) actualBrightness() else audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maximumVolume
+                                }, change = { delta ->
+                                    val next = (dragStart + delta).coerceIn(0f, 1f)
+                                    if (dragLeft) {
+                                        changeBrightness(next)
+                                        gestureMessage = "亮度 ${(brightness * 100).roundToInt()}%"
+                                    } else if (!audioManager.isVolumeFixed) {
+                                        changeVolume(next * maximumVolume)
+                                        gestureMessage = "媒体音量 ${(mediaVolume * 100f / maximumVolume).roundToInt()}%"
+                                    } else gestureMessage = "此设备使用固定音量"
+                                    interaction++
+                                }, finish = { draggingVertical = false; touch() })
+                                .pointerInput(file, exploration, touchLocked) {
                                 detectTapGestures(
                                     onTap = { if (!liveBlocked && !exploration) visible = !visible else touch(); interaction++ },
                                     onDoubleTap = { point ->
@@ -313,7 +371,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     PlayerLabel("音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
                                     PlayerLabel("字幕", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
                                     PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
-                                    PlayerIcon(R.drawable.art_volume, "播放器音量", { touch(); sheet = PlayerSheet.VOLUME })
+                                    PlayerIcon(R.drawable.art_volume, "媒体系统音量", { touch(); sheet = PlayerSheet.VOLUME })
+                                    PlayerLabel("亮度", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
                                 } else PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
                                 PlayerIcon(if (landscape) R.drawable.art_fullscreen_off else R.drawable.art_fullscreen_on, if (landscape) "退出全屏" else "横屏全屏", { fullscreen(landscape) })
                             }
@@ -340,7 +399,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
                             DetailAction(R.drawable.ic_subtitles, "字幕", state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.title ?: "关闭", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
-                            DetailAction(R.drawable.art_volume, "音量", "${state.volume}%", "播放器音量") { touch(); sheet = PlayerSheet.VOLUME }
+                            DetailAction(R.drawable.art_volume, "媒体音量", "${(mediaVolume * 100f / maximumVolume).roundToInt()}%", "媒体系统音量") { touch(); sheet = PlayerSheet.VOLUME }
+                            HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
+                            DetailAction(R.drawable.ic_visibility, "画面亮度", if (brightness < 0) "跟随系统" else "${(brightness * 100).roundToInt()}%", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
                         }
                     }
                 }
@@ -354,7 +415,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         PlayerLabel("解锁", "解除触控锁定") { touchLocked = false; touch() }
                     }
                 }
-                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "播放器音量"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
+                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "媒体系统音量"; PlayerSheet.BRIGHTNESS -> "窗口亮度"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
                         PlayerSheet.QUEUE -> queue?.let { snapshot ->
                             Column {
@@ -427,10 +488,17 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                         }
                         PlayerSheet.VOLUME -> Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Text("${state.volume}%", fontSize = 32.sp, fontWeight = FontWeight.Medium)
-                            PlayerSlider(state.volume.toFloat(), 100f, "播放器音量", true, { model.player.volume(it.toInt()) })
-                            Text("设备音量仍可通过音量键调整。", fontSize = 13.sp, color = PlayerSecondary)
+                            Text("${(mediaVolume * 100f / maximumVolume).roundToInt()}%", fontSize = 32.sp, fontWeight = FontWeight.Medium)
+                            PlayerSlider(mediaVolume.toFloat(), maximumVolume.toFloat(), "媒体系统音量", !audioManager.isVolumeFixed,
+                                { changeVolume(it) }, description = "${mediaVolume}，共 $maximumVolume 档")
+                            Text(if (audioManager.isVolumeFixed) "此设备使用固定音量。" else "与设备媒体音量键同步，右侧上下滑动也可调整。", fontSize = 13.sp, color = PlayerSecondary)
                             Spacer(Modifier.height(8.dp))
+                        }
+                        PlayerSheet.BRIGHTNESS -> Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Text(if (brightness < 0) "跟随系统" else "${(brightness * 100).roundToInt()}%", fontSize = 28.sp)
+                            PlayerSlider(actualBrightness() * 100, 100f, "窗口亮度", window != null, { changeBrightness(it / 100) })
+                            Text("仅调整当前播放窗口，退出后恢复。左侧上下滑动也可调整。", fontSize = 13.sp, color = PlayerSecondary)
+                            TextButton(onClick = { changeBrightness(-1f) }) { Text("恢复系统亮度") }
                         }
                         PlayerSheet.SOURCE -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             item { SourceField("文件", file.name) }
