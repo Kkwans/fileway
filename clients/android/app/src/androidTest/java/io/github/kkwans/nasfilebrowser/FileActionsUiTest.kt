@@ -1,0 +1,39 @@
+package io.github.kkwans.nasfilebrowser
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.uiautomator.By
+import io.github.kkwans.nasfilebrowser.data.FileLayout
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/** Explicit actions are independently discoverable; long-press coverage remains separate. */
+@RunWith(AndroidJUnit4::class)
+internal class FileActionsUiTest : LibraryUiHarness() {
+    @Test fun explicitMenuOpensInEveryLayoutAndSavesServerTags(): Unit = runBlocking {
+        val data = LibraryFixtureData(); val path = "/中文 #? %.png"
+        data.file(path)
+        data.tags.put(JSONObject().put("id", "tag-owned").put("name", "本次测试").put("color", "#3F72D8").put("paths", JSONArray()))
+        fixture(data) {
+            for (layout in FileLayout.entries) {
+                main { model.fileLayout(layout) }
+                withTimeout(5000) { model.state.first { it.fileLayout == layout } }
+                val menu = action("文件操作：${path.substringAfterLast('/')}")
+                assertTrue("The explicit menu must be an accessible click action", menu.isClickable)
+                assertTrue("The button must retain a 48dp target", menu.visibleBounds.width() >= (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt() - 2)
+                menu.click(); text("文件详情"); action("设置文件标签")
+                capture("file-actions-${layout.name.lowercase()}")
+                text("关闭").click()
+            }
+            action("文件操作：${path.substringAfterLast('/')}").click(); text("文件详情")
+            action("设置文件标签").click(); text("本次测试").click(); text("保存标记").click()
+            withTimeout(5000) { model.tags.state.first { !it.changing && it.items.singleOrNull()?.paths?.contains(path) == true } }
+            assertTrue(data.mutations.contains("POST" to "/api/tags/tag-owned/paths"))
+            assertFalse(data.mutations.any { it.first == "DELETE" })
+        }
+    }
+}

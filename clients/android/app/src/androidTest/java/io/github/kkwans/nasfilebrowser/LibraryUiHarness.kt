@@ -31,7 +31,9 @@ internal open class LibraryUiHarness {
     }
     protected suspend fun fixture(data: LibraryFixtureData, block: suspend (ClientSearchTest.Fixture) -> Unit) {
         val source = ClientSearchTest.Fixture(data.files.keys.filter { it.substringBeforeLast('/').isEmpty() }.map { it.substringAfterLast('/') }, library = data)
-        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previous = database.profiles().activeSession()
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Owned library UI fixture", address = source.url))
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         try {
@@ -41,7 +43,10 @@ internal open class LibraryUiHarness {
                 while (true) { var focused = false; activity.scenario.onActivity { focused = it.hasWindowFocus() }; if (focused) break; delay(50) }
             }
             block(source)
-        } finally { withContext(NonCancellable) { main { model.disconnect() }; store.remove(profile); source.close() } }
+        } finally { withContext(NonCancellable) {
+            main { model.disconnect() }; store.remove(profile); source.close()
+            previous?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+        } }
     }
     protected fun capture(name: String) {
         device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
