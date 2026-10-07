@@ -31,11 +31,22 @@ class FavoritesUiTest {
         val profile = store.save(ServerProfile(name = "Favorites UI fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
-        fun text(label: String) = device.wait(Until.findObject(By.text(label)), 5000) ?: error("Missing visible $label")
-        fun action(label: String) = device.wait(Until.findObject(By.desc(label)), 5000) ?: error("Missing action $label")
+        fun text(label: String) = device.wait(Until.findObject(By.text(label)), 5000) ?: error("Missing visible $label; tab=${model.state.value.tab}, loading=${model.favorites.state.value.loading}")
+        fun action(label: String): androidx.test.uiautomator.UiObject2 {
+            device.waitForIdle()
+            return device.wait(Until.findObject(By.desc(label)), 5000) ?: error("Missing action $label")
+        }
         try {
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            withTimeout(5000) {
+                while (true) {
+                    var focused = false
+                    activity.scenario.onActivity { focused = it.hasWindowFocus() }
+                    if (focused) break
+                    delay(50)
+                }
+            }
             action("资料库导航").click()
             text("收藏夹"); text("网页已有收藏")
             assertEquals("web-owned-id", model.favorites.state.value.items.single().id)
