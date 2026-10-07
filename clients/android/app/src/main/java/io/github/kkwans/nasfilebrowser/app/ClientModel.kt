@@ -257,7 +257,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val file = mutable.value.selected ?: return
         openQueued(file, mutable.value.mediaQueue)
     }
-    private fun openQueued(file: ResourceRef, queue: MediaQueue?) {
+    suspend fun changeVideoDecoder(value: VideoDecodePolicy) {
+        val binding = playback ?: return
+        val queue = mutable.value.mediaQueue
+        val wasPlaying = player.state.value.let { it.playing || it.waitingForBuffer || it.error != null }
+        playbackPreferences.saveVideoDecodePolicy(value)
+        if (playback === binding && context == binding.context) openQueued(binding.file, queue, wasPlaying)
+    }
+    private fun openQueued(file: ResourceRef, queue: MediaQueue?, autoplay: Boolean = true) {
         if (file.directory) {
             navigation.addLast(mutable.value.path to mutable.value.wirePath)
             browse(file.path, file.wirePath)
@@ -304,7 +311,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                     pendingOpenFromPlayer = false
                     lastSaved = null
                     mutable.value = mutable.value.copy(selected = file, busy = false, stage = "", progressStatus = null)
-                    player.open(url, resume, autoplay = foreground)
+                    player.open(url, resume, autoplay = foreground && autoplay, videoDecodePolicy = playbackPreferences.videoDecodePolicy.value)
                     observeTransfer(bound, url)
                     saveTimer?.cancel()
                     saveTimer = viewModelScope.launch { while (true) { delay(10_000); if (player.state.value.playing) saveProgress() } }

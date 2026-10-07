@@ -12,11 +12,22 @@ data class TextSubtitleAppearance(val scale: Float = 1f, val bottomPadding: Floa
     init { require(scale.isFinite() && scale in .5f..2f && bottomPadding.isFinite() && bottomPadding in 0f.. .4f) }
 }
 
+enum class VideoDecodePolicy(val label: String) {
+    AUTO("自动：硬件优先"), HARDWARE("仅硬件"), SOFTWARE("软件")
+}
+
 /** Device preference; no account, token or playback snapshot is stored here. */
 class PlaybackPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("playback_preferences", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(prefs.getFloat("hold_rate", 3f).takeIf { it.isFinite() && it in .1f..5f } ?: 3f)
     val holdRate = mutable.asStateFlow()
+    private val decoderWrites = Mutex()
+    private val decoderMutable = MutableStateFlow(VideoDecodePolicy.entries.firstOrNull { it.name == prefs.getString("video_decoder", "AUTO") } ?: VideoDecodePolicy.AUTO)
+    val videoDecodePolicy = decoderMutable.asStateFlow()
+    suspend fun saveVideoDecodePolicy(value: VideoDecodePolicy) = decoderWrites.withLock {
+        withContext(Dispatchers.IO) { check(prefs.edit().putString("video_decoder", value.name).commit()) { "无法保存解码策略" } }
+        decoderMutable.value = value
+    }
     private val subtitleWrites = Mutex()
     private val subtitleMutable = MutableStateFlow(TextSubtitleAppearance(
         prefs.getFloat("subtitle_scale", 1f).takeIf { it.isFinite() && it in .5f..2f } ?: 1f,

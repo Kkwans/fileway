@@ -23,6 +23,8 @@ import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.text.SubtitleParser
 import io.github.kkwans.nasfilebrowser.BuildConfig
 import io.github.kkwans.nasfilebrowser.data.TextSubtitleAppearance
+import io.github.kkwans.nasfilebrowser.data.VideoDecodePolicy
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +45,8 @@ data class PlayerState(
     val sourceVideoCodec: String = "未知", val sourceDynamicRange: String = "未知",
     val sourceColorSpace: String = "未知",
     val waitingForBuffer: Boolean = false,
+    val videoDecodePolicy: VideoDecodePolicy = VideoDecodePolicy.AUTO,
+    val videoDecoderKind: String = "未知",
 )
 
 /** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
@@ -102,26 +106,38 @@ class NativePlayer(context: Context) {
         viewport = null
         trace.record(PlaybackTraceAction.DETACH)
     }
-    fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true) {
+    fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true, videoDecodePolicy: VideoDecodePolicy = VideoDecodePolicy.AUTO) {
         if (released) return
         disposeMedia()
         val epoch = session.open(autoplay)
         temporaryRate = null; seekTarget = null
         choices.clear(); ids.clear(); external.clear(); selectedExternal = null
         subtitleDisabled = false
-        mutable.value = PlayerState(phase = "正在打开视频", rate = session.preferredRate, mediaGeneration = epoch)
+        mutable.value = PlayerState(phase = "正在打开视频", rate = session.preferredRate, mediaGeneration = epoch, videoDecodePolicy = videoDecodePolicy)
         trace.beginOpen(positionMs)
         val subtitles = MediaSubtitleLayer(context).also { current ->
             current.failed = { if (session.accepts(epoch)) mutable.value = mutable.value.copy(subtitleLoading = false, operationError = "字幕渲染失败，请重试或选择其他字幕") }
         }
         layer = subtitles
         viewport?.subtitles(subtitles)
+        val decoderKinds = java.util.concurrent.ConcurrentHashMap<String, String>()
         val factory = object : DefaultRenderersFactory(context) {
             override fun buildMiscellaneousRenderers(context: Context, eventHandler: Handler, extensionRendererMode: Int, out: ArrayList<Renderer>) {
                 super.buildMiscellaneousRenderers(context, eventHandler, extensionRendererMode, out)
                 out.add(MediaSubtitleLayer.Clock(subtitles))
             }
         }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON).setEnableDecoderFallback(true)
+            .setMediaCodecSelector { mime, secure, tunneling ->
+                val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
+                if (MimeTypes.isVideo(mime)) decoders.forEach {
+                    decoderKinds[it.name] = when { it.hardwareAccelerated -> "硬件"; it.softwareOnly -> "软件"; else -> "未知" }
+                }
+                if (!MimeTypes.isVideo(mime)) decoders else when (videoDecodePolicy) {
+                    VideoDecodePolicy.AUTO -> decoders.sortedByDescending { it.hardwareAccelerated }
+                    VideoDecodePolicy.HARDWARE -> decoders.filter { it.hardwareAccelerated }
+                    VideoDecodePolicy.SOFTWARE -> decoders.filter { it.softwareOnly }
+                }
+            }
         val extractors = ExtractorsFactory {
             DefaultExtractorsFactory().createExtractors().map {
                 if (it is MatroskaExtractor) MediaSubtitleExtractor(subtitles) else it
@@ -172,13 +188,13 @@ class NativePlayer(context: Context) {
         })
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
-                if (current()) mutable.value = mutable.value.copy(videoDecoder = decoderName)
+                if (current()) mutable.value = mutable.value.copy(videoDecoder = decoderName, videoDecoderKind = decoderKinds[decoderName] ?: "未知")
             }
             override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                 if (current()) mutable.value = mutable.value.copy(audioDecoder = decoderName)
             }
             override fun onVideoDecoderReleased(eventTime: AnalyticsListener.EventTime, decoderName: String) {
-                if (current() && mutable.value.videoDecoder == decoderName) mutable.value = mutable.value.copy(videoDecoder = "未知")
+                if (current() && mutable.value.videoDecoder == decoderName) mutable.value = mutable.value.copy(videoDecoder = "未知", videoDecoderKind = "未知")
             }
             override fun onAudioDecoderReleased(eventTime: AnalyticsListener.EventTime, decoderName: String) {
                 if (current() && mutable.value.audioDecoder == decoderName) mutable.value = mutable.value.copy(audioDecoder = "未知")

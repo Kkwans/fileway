@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import io.github.kkwans.nasfilebrowser.data.parsePlaybackRate
 import io.github.kkwans.nasfilebrowser.data.TextSubtitleAppearance
+import io.github.kkwans.nasfilebrowser.data.VideoDecodePolicy
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
@@ -112,6 +113,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var customRate by remember { mutableStateOf("") }
     var customHold by remember { mutableStateOf("") }
     var speedError by remember { mutableStateOf<String?>(null) }
+    var changingDecoder by remember { mutableStateOf(false) }
     var subtitleOffset by remember(file) { mutableStateOf("") }
     var subtitleOffsetError by remember(file) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
@@ -594,7 +596,29 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             item { SourceField("画质", "原画 · 直接读取原文件") }
                             if (state.width > 0) item { SourceField("源分辨率", "${state.width} × ${state.height}") }
                             item { SourceField("视频编码", state.sourceVideoCodec) }
+                            item { SourceField("请求的视频解码策略", state.videoDecodePolicy.label) }
+                            item { SourceField("实际视频解码方式", state.videoDecoderKind) }
                             item { SourceField("实际视频解码器", state.videoDecoder) }
+                            item {
+                                Column {
+                                    Text("切换策略会保存进度并重新打开当前视频，后续视频也使用此设置。", style = MaterialTheme.typography.bodySmall, color = PlayerSecondary)
+                                    VideoDecodePolicy.entries.forEach { policy ->
+                                        Choice(policy.label, when (policy) {
+                                            VideoDecodePolicy.AUTO -> "优先硬件，初始化失败时尝试其他可用解码器"
+                                            VideoDecodePolicy.HARDWARE -> "只使用硬件视频解码器"
+                                            VideoDecodePolicy.SOFTWARE -> "使用设备提供的软件视频解码器"
+                                        }, state.videoDecodePolicy == policy, enabled = !changingDecoder && !client.busy && state.videoDecodePolicy != policy) {
+                                            changingDecoder = true
+                                            uiScope.launch {
+                                                try { model.changeVideoDecoder(policy); sheet = null }
+                                                catch (cancelled: CancellationException) { throw cancelled }
+                                                catch (_: Exception) { feedback.showSnackbar("无法切换解码策略，请重试") }
+                                                finally { changingDecoder = false }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             item { SourceField("实际音频解码器", state.audioDecoder) }
                             item { SourceField("片源动态范围", state.sourceDynamicRange) }
                             item { SourceField("片源色彩空间", state.sourceColorSpace) }
@@ -714,9 +738,9 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
         }
     }
 }
-@Composable private fun Choice(title: String, detail: String, selected: Boolean, choose: () -> Unit) {
+@Composable private fun Choice(title: String, detail: String, selected: Boolean, enabled: Boolean = true, choose: () -> Unit) {
     Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(if (selected) PlayerAccent.copy(alpha = 0.10f) else Color.Transparent)
-        .selectable(selected, role = Role.RadioButton, onClick = choose).padding(horizontal = 12.dp, vertical = 14.dp).heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        .selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = choose).padding(horizontal = 12.dp, vertical = 14.dp).heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, fontSize = 15.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal, color = if (selected) PlayerAccent else Color.White)
             if (detail.isNotBlank()) Text(detail, fontSize = 12.sp, color = PlayerSecondary)

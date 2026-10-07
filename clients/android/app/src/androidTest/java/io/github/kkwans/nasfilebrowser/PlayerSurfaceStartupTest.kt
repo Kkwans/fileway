@@ -68,4 +68,44 @@ class PlayerSurfaceStartupTest {
             assertEquals(0, source.unexpected.get())
         } finally { withContext(Dispatchers.Main) { model.disconnect() }; store.remove(profile); source.close() }
     }
+
+    @Test fun softwareDecoderSwitchKeepsPausedPositionAndRendersPixels(): Unit = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
+        val source = NativePlaybackTest.Fixture(media)
+        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val profile = store.save(ServerProfile(name = "Decoder policy fixture", address = source.url))
+        lateinit var model: ClientModel
+        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        val original = model.playbackPreferences.videoDecodePolicy.value
+        try {
+            withContext(Dispatchers.Main) {
+                model.playbackPreferences.saveVideoDecodePolicy(VideoDecodePolicy.AUTO)
+                model.selectProfile(profile)
+                model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct")
+            }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            withContext(Dispatchers.Main) { model.open(ResourceRef("/fixture.mkv", "/fixture.mkv", "Owned decoder.mkv", false, "video", media.size.toLong())) }
+            withTimeout(20_000) { model.player.state.first { it.playing && it.positionMs >= 3000 }; while (!hasVideo()) delay(100) }
+            withContext(Dispatchers.Main) { model.pausePlayback() }
+            val before = model.player.state.value
+            withContext(Dispatchers.Main) { model.changeVideoDecoder(VideoDecodePolicy.SOFTWARE) }
+            withTimeout(20_000) {
+                model.player.state.first { it.mediaGeneration > before.mediaGeneration && it.videoDecoderKind == "软件" && it.firstFrameRendered }
+                while (!hasVideo()) delay(100)
+            }
+            val after = model.player.state.value
+            assertFalse(after.playing)
+            assertEquals(VideoDecodePolicy.SOFTWARE, after.videoDecodePolicy)
+            assertTrue("Changing decoder must preserve the saved position", kotlin.math.abs(after.positionMs - before.positionMs) < 1500)
+            assertEquals(VideoDecodePolicy.SOFTWARE, PlaybackPreferences(instrumentation.targetContext).videoDecodePolicy.value)
+            assertEquals(0, source.unexpected.get())
+        } finally {
+            withContext(NonCancellable + Dispatchers.Main) {
+                model.playbackPreferences.saveVideoDecodePolicy(original)
+                model.disconnect()
+            }
+            store.remove(profile); source.close()
+        }
+    }
 }
