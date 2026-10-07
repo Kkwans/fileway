@@ -4,8 +4,8 @@ Native Android client for Fileway's Linux/Windows servers. Windows desktop is
 planned as a later delivery in this same repository.
 
 Android 10+ / arm64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
-and an embedded Go/tsnet transport. The published v0.3 preview still uses libVLC;
-the engine migration in this checkout is not yet a validated release.
+and an embedded Go/tsnet transport. The published 0.4 preview uses this native
+playback chain; hardware HDR, audible continuity and long-play acceptance remain open.
 
 ## Status
 
@@ -16,11 +16,29 @@ plans and device-specific test evidence are maintained outside this repository.
 
 ## Install the UI preview
 
-[Android v0.3 preview — download APK](https://github.com/Kkwans/nas-file-browser-client/releases/download/android-preview-0.3.0-35eee1f/nas-file-browser-android-preview-35eee1f.apk)
+[Android 0.4.0 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.4.0-dbeea50/fileway-android-0.4.0-preview.apk)
 
-Includes embedded-network startup fixes, session restoration, grouped connection/settings cards, clickable breadcrumbs, five shared browser/search layouts, original-ratio waterfall thumbnails with complete filenames, playback gestures/custom rates, configurable disk caches and image viewing/cache management. VersionCode 4 uses the original dedicated certificate for covering upgrades. Source `35eee1f0a350a271fc7feaaa674798a6818b74e9`.
+Includes Media3/FFmpeg/libass playback, subtitle time offset and text appearance,
+local/NAS external subtitles, audio-track confirmation, decoder selection, image/video
+queues, image zoom and paging, player gestures and locks, loading progress and transfer
+speed, file filters and ordering, and the 栖卷 name and blue layered storage icon.
+VersionCode 6 keeps the original package and certificate for covering upgrades.
+Source `dbeea50b81ea7e8c9b25214a90900755ae2b4854`.
 
-This is a signed debug preview delivered for user acceptance. Linux build/cache race, local build/lint/logic tests and package signature/alignment checks passed; comprehensive acceptance of the new interactions/caches/UI and phone covering upgrades was not performed. Service-side search history, ASS/initial decode, real-device/HDR/external-tailnet and full-release gates remain open. See [release notes](https://github.com/Kkwans/nas-file-browser-client/releases/tag/android-preview-0.3.0-35eee1f) and [installation scope](docs/preview-0.3.md).
+This is a signed debug preview. Build/lint/unit/package checks and selected Xiaomi
+media/UI tests passed, including an automatic covering install with the same key.
+Those results do not certify every media format, actual HDR output, audible switching
+continuity, long-play performance or full API35/API37 regression. See the scoped
+[release notes and native corresponding sources](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.4.0-dbeea50).
+Favorites, tags, trash, server tasks, storage tools and local downloads are subsequent
+development work and are not part of this published APK.
+
+Preview releases follow product significance: substantial feature groups advance the
+minor version (0.4, 0.5); important fixes advance the patch version (0.4.1, 0.4.2).
+Each delivered APK increases versionCode, preserves signing identity and names the
+successfully pushed source SHA. Small routine changes need not publish a preview.
+Release notes separate verified behavior from pending acceptance; preview publication
+never implies the overall media/UI Goal is complete.
 
 ## Build
 
