@@ -9,7 +9,10 @@ import android.view.accessibility.AccessibilityManager
 import android.os.SystemClock
 import android.media.AudioManager
 import android.provider.Settings
+import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,6 +35,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,7 +83,9 @@ import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 
 private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE }
@@ -130,6 +136,37 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var seek by remember(file) { mutableStateOf<Float?>(null) }
     var showRequest by remember(file) { mutableStateOf(false) }
     val feedback = remember { SnackbarHostState() }
+    var documentGeneration by rememberSaveable { mutableStateOf<Long?>(null) }
+    var readingDocument by remember(file) { mutableStateOf(false) }
+    val subtitleDocument = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val requestedGeneration = documentGeneration
+        documentGeneration = null
+        if (uri != null && requestedGeneration == model.player.state.value.mediaGeneration) {
+            uiScope.launch {
+                readingDocument = true
+                try {
+                    // Only the URI selected by the user is read. No storage-wide
+                    // permission or persisted URI grant is needed for this session.
+                    val name = withContext(Dispatchers.IO) {
+                        require(uri.scheme == "content")
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+                        } ?: error("Missing subtitle filename")
+                    }
+                    if (requestedGeneration != model.player.state.value.mediaGeneration) return@launch
+                    if (name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) !in setOf("srt", "vtt", "ass", "ssa", "ttml", "dfxp")) {
+                        feedback.showSnackbar("请选择 SRT、VTT、ASS、SSA 或 TTML 字幕")
+                    } else if (!model.player.addSubtitle(uri.toString(), name)) {
+                        feedback.showSnackbar("视频仍在加载，请稍后重试添加字幕")
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) {
+                    if (requestedGeneration == model.player.state.value.mediaGeneration) feedback.showSnackbar("无法读取所选字幕，请重新选择文件")
+                } finally { readingDocument = false }
+            }
+        }
+    }
     LaunchedEffect(state.operationError) {
         state.operationError?.let { message -> feedback.showSnackbar(message); model.player.clearOperationError(message) }
     }
@@ -439,6 +476,15 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle,
                                 header = if (audio) null else { {
                                     DetailAction(R.drawable.ic_folder, "选择外挂字幕", if (state.subtitleLoading) "正在读取字幕" else "浏览当前服务器的字幕文件", "选择外挂字幕", !state.subtitleLoading) { sheet = PlayerSheet.EXTERNAL; touch() }
+                                    DetailAction(R.drawable.ic_subtitles, "选择本地字幕", "从手机或文档提供方选择字幕", "选择本地字幕", !readingDocument && !state.subtitleLoading) {
+                                        documentGeneration = model.player.state.value.mediaGeneration
+                                        touch()
+                                        try { subtitleDocument.launch(arrayOf("*/*")) }
+                                        catch (_: android.content.ActivityNotFoundException) {
+                                            documentGeneration = null
+                                            uiScope.launch { feedback.showSnackbar("此设备没有可用的文件选择器") }
+                                        }
+                                    }
                                     Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Text("字幕时间 · " + when {
                                             state.subtitleDelayMs > 0 -> "延后 ${state.subtitleDelayMs / 1000.0} 秒"
