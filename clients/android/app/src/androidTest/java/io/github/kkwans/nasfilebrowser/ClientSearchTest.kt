@@ -173,7 +173,7 @@ class ClientSearchTest {
     }
 
     internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null,
-        private val modified: String = "") : Closeable {
+        private val modified: String = "", private val imageBodies: Map<String, ByteArray> = emptyMap()) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -185,6 +185,10 @@ class ClientSearchTest {
         val previewSeen = CountDownLatch(1)
         val previewPaths = ConcurrentHashMap.newKeySet<String>()
         val searchRequests = ConcurrentHashMap.newKeySet<String>()
+        val rawImages = ConcurrentHashMap.newKeySet<String>()
+        @Volatile var heldImage: String? = null
+        val imageStarted = CountDownLatch(1)
+        val releaseImage = CountDownLatch(1)
         private val acceptor = Thread({
             while (!server.isClosed) {
                 val socket = try { server.accept() } catch (_: Exception) { break }
@@ -211,6 +215,24 @@ class ClientSearchTest {
                 return
             }
             check(headers["x-auth"].orEmpty().count { it == '.' } == 2)
+            if (uri.path.startsWith("/api/raw/") && imageBodies.containsKey(uri.path.removePrefix("/api/raw/"))) {
+                val name = uri.path.removePrefix("/api/raw/")
+                rawImages.add(name)
+                if (heldImage == name) { imageStarted.countDown(); releaseImage.await(10, TimeUnit.SECONDS) }
+                val bytes = imageBodies.getValue(name)
+                socket.getOutputStream().apply {
+                    write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                    write(bytes); flush()
+                }
+                return
+            }
+            if (uri.path.startsWith("/api/resources/") && imageBodies.containsKey(uri.path.removePrefix("/api/resources/"))) {
+                val name = uri.path.removePrefix("/api/resources/")
+                reply(socket, JSONObject().put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
+                    .put("name", name).put("isDir", false).put("type", "image").put("size", imageBodies.getValue(name).size)
+                    .put("modified", modified).toString())
+                return
+            }
             if (uri.path.startsWith("/api/preview/thumb/")) {
                 previewPaths.add(uri.path)
                 previewSeen.countDown()
@@ -254,7 +276,7 @@ class ClientSearchTest {
                 if (uri.path == "/api/resources/") directoryItems.forEach { name ->
                     val image = name.endsWith(".png")
                     items.put(JSONObject().put("name", name).put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
-                        .put("isDir", !image && !name.endsWith(".mkv")).put("type", if (image) "image" else if (name.endsWith(".mkv")) "video" else "").put("size", 104857600).put("modified", modified))
+                        .put("isDir", !image && !name.endsWith(".mkv")).put("type", if (image) "image" else if (name.endsWith(".mkv")) "video" else "").put("size", imageBodies[name]?.size ?: 104857600).put("modified", modified))
                 }
                 reply(socket, JSONObject().put("items", items).toString())
             }
@@ -263,6 +285,6 @@ class ClientSearchTest {
             val bytes = body.toByteArray()
             socket.getOutputStream().apply { write("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
         }
-        override fun close() { releasePlayback.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
+        override fun close() { releaseImage.countDown(); releasePlayback.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
     }
 }

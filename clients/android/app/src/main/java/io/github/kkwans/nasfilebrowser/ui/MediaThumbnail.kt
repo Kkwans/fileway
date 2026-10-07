@@ -65,7 +65,7 @@ import kotlinx.coroutines.awaitCancellation
                     }, onError = { phase = "暂无预览" })
             }
             if (phase != "预览已加载") {
-                Icon(painterResource(R.drawable.art_play), null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(painterResource(if (file.type == "image" || file.name.substringAfterLast('.').lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif")) R.drawable.ic_image else R.drawable.art_play), null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (showStatusText && phase == "暂无预览") Text(phase, modifier = Modifier.align(Alignment.BottomCenter).padding(4.dp),
                     style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

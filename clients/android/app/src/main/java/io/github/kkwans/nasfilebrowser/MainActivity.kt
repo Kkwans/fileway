@@ -5,7 +5,6 @@ import android.graphics.Color
 import androidx.activity.SystemBarStyle
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.DisposableEffect
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -31,14 +30,13 @@ class MainActivity : ComponentActivity() {
                 AppTheme.LIGHT -> false
                 AppTheme.DARK -> true
             }
-            DisposableEffect(dark) {
-                val style = if (dark) SystemBarStyle.dark(Color.TRANSPARENT)
-                    else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
-                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
-                onDispose { }
-            }
             SideEffect {
-                val lightBars = !dark && client.selected == null
+                val lightBars = !dark && client.selected == null && client.image == null
+                // Apply the window style and icon appearance together. A separate
+                // theme effect can otherwise restore light-page icons over media.
+                val style = if (lightBars) SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                    else SystemBarStyle.dark(Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 val bars = WindowCompat.getInsetsController(window, window.decorView)
                 bars.isAppearanceLightStatusBars = lightBars
                 bars.isAppearanceLightNavigationBars = lightBars

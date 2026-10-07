@@ -67,7 +67,7 @@ class CacheController(private val context: Context, private val scope: Coroutine
             try {
                 val settings = withContext(Dispatchers.IO) { readCacheSettings(context) }
                 NativeTransport.call(cacheCommand(context, settings))
-                withContext(Dispatchers.IO) { resize(settings); scheduleCacheCleanup(context, settings.cleanupHours) }
+                withContext(Dispatchers.IO) { TemporaryImages.cleanupAbandoned(context); resize(settings); scheduleCacheCleanup(context, settings.cleanupHours) }
                 mutable.value = CacheState(settings, loading = false, revision = mutable.value.revision + 1)
                 ready.complete(Unit)
                 refresh()

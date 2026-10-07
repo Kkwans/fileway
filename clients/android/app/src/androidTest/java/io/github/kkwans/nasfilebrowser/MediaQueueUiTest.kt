@@ -1,13 +1,17 @@
 package io.github.kkwans.nasfilebrowser
 
+import android.graphics.Bitmap
+import android.graphics.Color
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
+import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -15,10 +19,13 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
-/** Owned-emulator queue controls. Does not assert decoded output or actual sound. */
+/** Owned-emulator fixtures: real authenticated image bytes, gallery pixels and queue controls.
+ * The cache-off case changes disposable cache state; do not run it on a personal installation. */
 @RunWith(AndroidJUnit4::class)
 class MediaQueueUiTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
@@ -31,12 +38,114 @@ class MediaQueueUiTest {
         return result
     }
     private fun store() = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+    private fun original(): ByteArray {
+        val bitmap = Bitmap.createBitmap(1600, 1200, Bitmap.Config.ARGB_8888)
+        return try {
+            bitmap.eraseColor(Color.rgb(25, 170, 80))
+            ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        } finally { bitmap.recycle() }
+    }
+    private suspend fun renderedColor(red: Int, green: Int, blue: Int) = withTimeout(15_000) {
+        while (true) {
+            val shot = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
+            val bitmap = shot.copy(Bitmap.Config.ARGB_8888, false)
+            val matches = try {
+                var hit = 0; var count = 0
+                for (y in bitmap.height * 2 / 5 until bitmap.height * 3 / 5 step 16) {
+                    for (x in bitmap.width / 4 until bitmap.width * 3 / 4 step 16) {
+                        val pixel = bitmap.getPixel(x, y); count++
+                        if (abs(Color.red(pixel) - red) < 10 && abs(Color.green(pixel) - green) < 10 && abs(Color.blue(pixel) - blue) < 10) hit++
+                    }
+                }
+                hit > count * .7
+            } finally { bitmap.recycle(); shot.recycle() }
+            if (matches) break
+            delay(100)
+        }
+    }
     private fun capture(name: String) {
         device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
         device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$name.png")
         // Use this instrumentation's UiAutomation connection; a concurrent shell
         // uiautomator dump would steal the connection and invalidate the test.
         device.dumpWindowHierarchy(File(instrumentation.targetContext.getExternalFilesDir(null), "$name.xml"))
+    }
+
+    @Test fun galleryPreservesPreviewCancelsOriginalPagesAndRestoresListPosition(): Unit = runBlocking {
+        val names = (1..24).map { "%02d.png".format(it) }
+        val bytes = original()
+        val source = ClientSearchTest.Fixture(names + "movie.mkv", ownedPreviewPng(), imageBodies = names.associateWith { bytes })
+        source.heldImage = "12.png"
+        val model = model(); val store = store()
+        val profile = store.save(ServerProfile(name = "Gallery fixture", address = source.url))
+        model.cache.awaitReady(); val originalSettings = model.cache.state.value.settings
+        try {
+            main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            main { model.fileLayout(FileLayout.LIST); model.cache.save(originalSettings.copy(imageQuality = ImageQuality.ORIGINAL)) }
+            withTimeout(5000) { model.state.first { it.fileLayout == FileLayout.LIST }; model.cache.state.first { !it.busy && it.settings.imageQuality == ImageQuality.ORIGINAL } }
+            repeat(8) {
+                val area = device.findObject(By.desc("文件列表"))
+                val target = device.findObject(By.text("12.png"))
+                if (target == null || area == null || target.visibleBounds.bottom >= area.visibleBounds.bottom - 8) area?.scroll(Direction.DOWN, .5f)
+            }
+            val item = device.wait(Until.findObject(By.text("12.png")), 5000) ?: error("Gallery entry missing")
+            val beforeTop = item.visibleBounds.top
+            item.click()
+            withTimeout(5000) { model.state.first { it.image?.name == "12.png" } }
+            assertEquals(24, model.state.value.mediaQueue!!.items.size)
+            assertTrue(withContext(Dispatchers.IO) { source.imageStarted.await(10, TimeUnit.SECONDS) })
+            renderedColor(30, 180, 220)
+            assertEquals(setOf("12.png"), source.rawImages.toSet())
+            capture("gallery-preview-loading")
+            device.findObject(By.text("取消读取")).click()
+            assertTrue(device.wait(Until.hasObject(By.text("已保留预览图")), 5000))
+            assertNotNull(model.state.value.image)
+            source.releaseImage.countDown()
+            renderedColor(30, 180, 220)
+            device.findObject(By.desc("下一张图片")).click()
+            withTimeout(5000) { model.state.first { it.image?.name == "13.png" } }
+            renderedColor(25, 170, 80)
+            assertEquals(setOf("12.png", "13.png"), source.rawImages.toSet())
+            capture("gallery-original")
+            val x = device.displayWidth / 2; val y = device.displayHeight / 2
+            device.click(x, y); delay(80); device.click(x, y); delay(500)
+            device.swipe(device.displayWidth * 4 / 5, y, device.displayWidth / 5, y, 20)
+            delay(300)
+            assertEquals("Zoomed panning must not turn the page", "13.png", model.state.value.image?.name)
+            device.pressBack()
+            assertTrue(device.wait(Until.hasObject(By.desc("文件列表")), 5000))
+            val returned = device.wait(Until.findObject(By.text("12.png")), 5000) ?: error("List position was lost")
+            assertTrue("Returning from media must preserve the list offset", abs(returned.visibleBounds.top - beforeTop) <= 4)
+        } finally {
+            source.releaseImage.countDown()
+            main { model.closeImage(); model.cache.save(originalSettings) }
+            withTimeout(5000) { model.cache.state.first { !it.busy && it.settings == originalSettings } }
+            main { model.disconnect() }; store.remove(profile); source.close()
+        }
+    }
+
+    @Test fun cacheDisabledOriginalUsesOwnedWorkingFileAndRemovesItOnExit(): Unit = runBlocking {
+        val source = ClientSearchTest.Fixture(listOf("photo.png"), ownedPreviewPng(), imageBodies = mapOf("photo.png" to original()))
+        val model = model(); val store = store(); val profile = store.save(ServerProfile(name = "Temporary image fixture", address = source.url))
+        model.cache.awaitReady(); val old = model.cache.state.value.settings
+        val work = File(instrumentation.targetContext.cacheDir, "image-viewer-work")
+        try {
+            main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            main { model.cache.save(old.copy(imageMB = 0, imageQuality = ImageQuality.ORIGINAL)) }
+            withTimeout(5000) { model.cache.state.first { !it.busy && it.settings.imageMB == 0L && it.settings.imageQuality == ImageQuality.ORIGINAL } }
+            main { model.open(model.state.value.files.single()) }
+            renderedColor(25, 170, 80)
+            assertTrue(work.listFiles().orEmpty().any { it.isFile && it.length() > 0 })
+            assertTrue(model.cache.cachedImages(model.cacheAccount()).isEmpty())
+            main { model.closeImage() }
+            withTimeout(5000) { while (work.listFiles().orEmpty().any { it.name.startsWith("viewer-") }) delay(50) }
+        } finally {
+            main { model.closeImage(); model.cache.save(old) }
+            withTimeout(5000) { model.cache.state.first { !it.busy && it.settings == old } }
+            main { model.disconnect() }; store.remove(profile); source.close()
+        }
     }
 
     /** Validates paused queue binding and late metadata isolation, not decoded output. */
