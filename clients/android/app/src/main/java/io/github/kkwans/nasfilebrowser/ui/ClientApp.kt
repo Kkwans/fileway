@@ -65,6 +65,7 @@ import java.util.Locale
                 state.tab == "library" -> when (state.librarySection) {
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.FAVORITES -> FavoritesScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TAGS -> TagsScreen(model, state)
+                    io.github.kkwans.nasfilebrowser.app.LibrarySection.TASKS -> ServerTasksScreen(model, state)
                 }
                 else -> RecentScreen(model, state, recent)
             }

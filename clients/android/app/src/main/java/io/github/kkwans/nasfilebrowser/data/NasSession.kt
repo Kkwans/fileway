@@ -8,7 +8,7 @@ import org.json.JSONObject
 import org.json.JSONArray
 import kotlinx.coroutines.flow.Flow
 
-data class AccountIdentity(val id: Long, val username: String, val hostname: String)
+data class AccountIdentity(val id: Long, val username: String, val hostname: String, val permissions: ServerPermissions = ServerPermissions())
 class ServiceException(val status: Int, message: String) : Exception(message)
 
 /** One immutable server/account context. Never reuse a handle for another login. */
@@ -19,6 +19,7 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         check(parseIdentity(token).id == identity.id) { "服务器账号已变化，请重新登录" }
         return token
     }
+    suspend fun permissions(): ServerPermissions = parseIdentity(token()).permissions
     private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200)): String {
         val command = JSONObject().put("op", "request").put("session", id).put("method", method).put("endpoint", endpoint)
         body?.let { command.put("body", it) }
@@ -89,7 +90,10 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
                 val id = rawId.toString().toLongOrNull() ?: error("invalid id")
                 val name = user.get("username") as? String ?: error("invalid username")
                 require(id >= 0 && name.isNotBlank())
-                return AccountIdentity(id, name, payload.optJSONObject("instance")?.optString("hostname").orEmpty())
+                val perm = user.optJSONObject("perm")
+                return AccountIdentity(id, name, payload.optJSONObject("instance")?.optString("hostname").orEmpty(),
+                    ServerPermissions(perm != null, perm?.optBoolean("admin") == true, perm?.optBoolean("create") == true,
+                        perm?.optBoolean("delete") == true, perm?.optBoolean("modify") == true, perm?.optBoolean("download") == true))
             } catch (_: Exception) { error("服务器返回了不支持的账号格式") }
         }
         suspend fun login(profile: ServerProfile, username: String, password: String,
