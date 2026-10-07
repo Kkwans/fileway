@@ -93,6 +93,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var customRate by remember { mutableStateOf("") }
     var customHold by remember { mutableStateOf("") }
     var speedError by remember { mutableStateOf<String?>(null) }
+    var subtitleOffset by remember(file) { mutableStateOf("") }
+    var subtitleOffsetError by remember(file) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val landscapeOrientation = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val view = LocalView.current
@@ -369,7 +371,31 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         PlayerSheet.AUDIO, PlayerSheet.SUBTITLE -> {
                             val audio = sheet == PlayerSheet.AUDIO
                             TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle,
-                                header = if (audio) null else { { DetailAction(R.drawable.ic_folder, "选择外挂字幕", "浏览当前服务器的字幕文件", "选择外挂字幕") { sheet = PlayerSheet.EXTERNAL; touch() } } }) {
+                                header = if (audio) null else { {
+                                    DetailAction(R.drawable.ic_folder, "选择外挂字幕", if (state.subtitleLoading) "正在读取字幕" else "浏览当前服务器的字幕文件", "选择外挂字幕", !state.subtitleLoading) { sheet = PlayerSheet.EXTERNAL; touch() }
+                                    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text("字幕时间 · " + when {
+                                            state.subtitleDelayMs > 0 -> "延后 ${state.subtitleDelayMs / 1000.0} 秒"
+                                            state.subtitleDelayMs < 0 -> "提前 ${-state.subtitleDelayMs / 1000.0} 秒"
+                                            else -> "无偏移"
+                                        }, fontSize = 14.sp)
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            TextButton(onClick = { model.player.subtitleDelay(state.subtitleDelayMs - 500) }) { Text("提前 0.5 秒") }
+                                            TextButton(onClick = { model.player.subtitleDelay(0); subtitleOffset = "" }) { Text("归零") }
+                                            TextButton(onClick = { model.player.subtitleDelay(state.subtitleDelayMs + 500) }) { Text("延后 0.5 秒") }
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            OutlinedTextField(subtitleOffset, { subtitleOffset = it; subtitleOffsetError = null }, Modifier.weight(1f),
+                                                label = { Text("偏移秒数，正数延后") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                                            TextButton(onClick = {
+                                                val seconds = subtitleOffset.trim().toDoubleOrNull()
+                                                if (seconds == null || !seconds.isFinite() || seconds !in -600.0..600.0) subtitleOffsetError = "请输入 -600 到 600 秒"
+                                                else { model.player.subtitleDelay((seconds * 1000).toLong()); subtitleOffsetError = null }
+                                            }) { Text("应用") }
+                                        }
+                                        subtitleOffsetError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                    }
+                                } }) {
                                 if (audio) model.player.audio(it) else model.player.subtitle(it)
                                 sheet = null; touch()
                             }
