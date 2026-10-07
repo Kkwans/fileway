@@ -37,15 +37,10 @@ class DownloadTarget(private val context: Context) {
         if (record.treeUri.isEmpty()) check(resolver.update(Uri.parse(record.localUri), ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) == 1) { "文件已经写入，但无法完成下载目录登记，请重试" }
     }
     fun delete(record: DownloadRecord): Boolean = if (record.treeUri.isNotEmpty()) DocumentsContract.deleteDocument(resolver, Uri.parse(record.localUri)) else resolver.delete(Uri.parse(record.localUri), null, null) > 0
-    fun directoryIntent(record: DownloadRecord): Intent {
-        if (record.treeUri.isNotEmpty()) {
-            val tree = Uri.parse(record.treeUri)
-            return Intent(Intent.ACTION_VIEW).setDataAndType(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree)), DocumentsContract.Document.MIME_TYPE_DIR)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        // DocumentsUI/providers differ in direct-folder support. Use the system
-        // picker with the exact location when no directory VIEW is available.
-        val folder = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download/fileway")
-        return Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder)
-    }
+    private fun directoryUri(treeUri: String): Uri = if (treeUri.isEmpty())
+        DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download/fileway")
+        else Uri.parse(treeUri).let { DocumentsContract.buildDocumentUriUsingTree(it, DocumentsContract.getTreeDocumentId(it)) }
+    fun directoryIntent(treeUri: String): Intent = Intent(Intent.ACTION_VIEW).setDataAndType(directoryUri(treeUri), DocumentsContract.Document.MIME_TYPE_DIR)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    fun directoryPicker(treeUri: String): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).putExtra(DocumentsContract.EXTRA_INITIAL_URI, directoryUri(treeUri))
 }
