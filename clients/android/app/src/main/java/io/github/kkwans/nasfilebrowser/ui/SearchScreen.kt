@@ -34,12 +34,14 @@ import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
+import io.github.kkwans.nasfilebrowser.app.FileCategory
 import io.github.kkwans.nasfilebrowser.data.SearchEnding
 import io.github.kkwans.nasfilebrowser.data.SearchResult
 import io.github.kkwans.nasfilebrowser.data.SearchScope
 
 @Composable internal fun SearchScreen(model: ClientModel, client: ClientState) {
     val state by model.search.state.collectAsStateWithLifecycle()
+    val displayed = remember(state.items, state.category) { state.visibleItems }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val colors = MaterialTheme.colorScheme.copy(
         primary = if (dark) Color(0xFFFF80A6) else Color(0xFFC63262),
@@ -92,8 +94,12 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                                 style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             FileLayoutMenu(client.fileLayout, enabled = !client.busy, select = model::fileLayout)
                     }
-                    FileCollection(state.items, client.fileLayout, Modifier.weight(1f), "搜索结果",
-                        resetKey = Triple(client.previewScope, state.resultBaseWirePath, state.query to state.scope), keyOf = { it.relativePath }, header = {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        FileCategoryMenu(state.category, !client.busy, model.search::category)
+                        if (state.category != FileCategory.ALL) Text("当前结果 ${displayed.size} / ${state.items.size} 项", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                    }
+                    FileCollection(displayed, client.fileLayout, Modifier.weight(1f), "搜索结果",
+                        resetKey = Triple(client.previewScope, state.resultBaseWirePath, Triple(state.query, state.scope, state.category)), keyOf = { it.relativePath }, header = {
                         Column {
                         Column {
                             Row(Modifier.fillMaxWidth().padding(top = 4.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -136,6 +142,10 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
                             if (!active && state.items.isEmpty() && state.message == null && client.error == null) {
                                 Text(if (state.ending == SearchEnding.COMPLETED) "没有匹配的文件。试试更短的关键词或扩大范围。" else if (state.scope == SearchScope.GLOBAL) "输入文件名，查找账号可访问的全部文件。" else "输入文件名，查找这个目录中的文件。",
                                     style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 16.dp))
+                            }
+                            if (!active && state.items.isNotEmpty() && displayed.isEmpty()) {
+                                Text("当前搜索结果中没有此类型的文件。", color = colors.onSurfaceVariant)
+                                TextButton(onClick = { model.search.category(FileCategory.ALL) }) { Text("显示全部结果") }
                             }
                         }
                         }

@@ -41,6 +41,7 @@ data class ClientState(
     val serverLabel: String = "", val accountName: String = "", val path: String = "/", val wirePath: String = "/", val files: List<ResourceRef> = emptyList(),
     val error: String? = null, val selected: ResourceRef? = null, val image: ResourceRef? = null,
     val mediaQueue: MediaQueue? = null,
+    val fileCategory: FileCategory = FileCategory.ALL, val fileOrder: FileOrder = FileOrder.NAME,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
@@ -228,7 +229,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun open(file: ResourceRef) = openFrom(file, mutable.value.files, MediaQueueSource.DIRECTORY)
+    fun directoryItems(): List<ResourceRef> = mutable.value.let { presentFiles(it.files, it.fileCategory, it.fileOrder) }
+    fun fileCategory(value: FileCategory) { mutable.value = mutable.value.copy(fileCategory = value) }
+    fun fileOrder(value: FileOrder) { mutable.value = mutable.value.copy(fileOrder = value) }
+    fun open(file: ResourceRef) = openFrom(file, directoryItems(), MediaQueueSource.DIRECTORY)
     private fun openSearchResult(file: ResourceRef) = openFrom(file, search.mediaSnapshot(), MediaQueueSource.SEARCH)
     private fun openFrom(file: ResourceRef, candidates: List<ResourceRef>, source: MediaQueueSource) {
         val bound = context ?: return

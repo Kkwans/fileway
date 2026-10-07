@@ -29,6 +29,7 @@ import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
+import io.github.kkwans.nasfilebrowser.app.FileCategory
 
 /** Official reference: restrained chrome, cover-led content and compact directory entries. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -44,6 +45,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
         outlineVariant = if (dark) Color(0xFF34343A) else Color(0xFFE9E9ED),
     )
     val layout = state.fileLayout
+    val displayed = remember(state.files, state.fileCategory, state.fileOrder) { model.directoryItems() }
     var details by remember(state.wirePath) { mutableStateOf<ResourceRef?>(null) }
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
@@ -59,6 +61,11 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     }
                 }
                 if (state.path != "/") DirectoryBreadcrumbs(state.path, state.wirePath, state.busy, { model.back() }, model::jumpDirectory)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FileCategoryMenu(state.fileCategory, !state.busy, model::fileCategory)
+                    Spacer(Modifier.weight(1f))
+                    FileOrderMenu(state.fileOrder, !state.busy, model::fileOrder)
+                }
                 state.error?.let { message ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(message, modifier = Modifier.weight(1f), color = colors.error, style = MaterialTheme.typography.bodyMedium)
@@ -70,11 +77,14 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
                     CircularProgressIndicator(Modifier.size(18.dp), color = colors.primary, strokeWidth = 2.dp)
                     Text(state.stage, Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyMedium)
                     TextButton(onClick = model::cancel) { Text("取消") }
-                } else Text(if (state.path == "/") "全部文件 · ${state.files.size} 项" else "${state.files.size} 项", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                if (!state.busy && state.files.isEmpty() && state.error == null) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("这个目录还没有文件。", color = colors.onSurfaceVariant)
-                } else FileCollection(state.files, layout, Modifier.weight(1f), layout.collectionDescription(),
-                    resetKey = state.previewScope to state.wirePath, keyOf = { it.wirePath.ifEmpty { it.path } }) { file ->
+                } else Text(if (state.fileCategory != FileCategory.ALL) "${state.fileCategory.label} · ${displayed.size} / ${state.files.size} 项" else if (state.path == "/") "全部文件 · ${state.files.size} 项" else "${state.files.size} 项", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                if (!state.busy && displayed.isEmpty() && state.error == null) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (state.files.isEmpty()) "这个目录还没有文件。" else "当前目录没有此类型的文件。", color = colors.onSurfaceVariant)
+                        if (state.fileCategory != FileCategory.ALL) TextButton(onClick = { model.fileCategory(FileCategory.ALL) }) { Text("显示全部文件") }
+                    }
+                } else FileCollection(displayed, layout, Modifier.weight(1f), layout.collectionDescription(),
+                    resetKey = listOf(state.previewScope, state.wirePath, state.fileCategory, state.fileOrder), keyOf = { it.wirePath.ifEmpty { it.path } }) { file ->
                     FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
                 }
             }
