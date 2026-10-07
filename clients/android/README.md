@@ -3,7 +3,9 @@
 Native Android client for Fileway's Linux/Windows servers. Windows desktop is
 planned as a later delivery in this same repository.
 
-Android 10+ / arm64. Kotlin, Compose, libVLC and an embedded Go/tsnet transport.
+Android 10+ / arm64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
+and an embedded Go/tsnet transport. The published v0.3 preview still uses libVLC;
+the engine migration in this checkout is not yet a validated release.
 
 ## Status
 
@@ -24,7 +26,15 @@ This is a signed debug preview delivered for user acceptance. Linux build/cache 
 
 Use JDK 17 and Go 1.26.6 on a supported Linux x64 build host. Install Android platform 37.0, build tools 36.0.0, CMake 3.22.1 and NDK 28.2.13676358. Native dependencies must be compiled before Gradle packages the app.
 
+Generate the pinned FFmpeg AAR and adjacent manifest using the
+[native build recipe](docs/ffmpeg-audio-probe.md). Set the following variable to
+that manifest's absolute path for every App Gradle invocation, including emulator
+checks. CI produces this artifact in its reusable native-library job and verifies
+the input lock, recipe and AAR hashes before consuming it. Alternatively, a Linux
+source build can supply `-PfilewayFfmpegWorkDir` to use the prepared native module.
+
 ```sh
+export ORG_GRADLE_PROJECT_filewayFfmpegManifest="$PROBE_OUTPUT/ffmpeg-probe.json"
 bash scripts/build-native.sh
 ./gradlew :app:assembleDebug :app:lintDebug
 ```

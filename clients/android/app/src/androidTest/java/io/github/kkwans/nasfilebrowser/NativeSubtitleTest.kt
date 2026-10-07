@@ -1,12 +1,9 @@
 package io.github.kkwans.nasfilebrowser
 
+import android.graphics.Canvas
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
-import android.os.Handler
-import android.os.Looper
-import android.view.PixelCopy
-import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import androidx.lifecycle.ViewModelProvider
@@ -23,50 +20,43 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.videolan.libvlc.LibVLC
-import java.util.concurrent.atomic.AtomicBoolean
+import androidx.media3.common.MediaLibraryInfo
+import androidx.media3.ui.SubtitleView
+import io.github.kkwans.nasfilebrowser.player.MediaSubtitleLayer
 
 /** Real native subtitle pixels from an owned MKV; metadata alone cannot pass. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
 class NativeSubtitleTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
-    private var samples = 0
     private var activeModel: ClientModel? = null
     private val diagnostic = InstrumentationRegistry.getArguments().getString("nfbSubtitleDiagnostic") == "true"
 
     private suspend fun pixels(): IntArray? {
-        var surface: SurfaceView? = null
+        var frame: IntArray? = null
         activity.scenario.onActivity { owner ->
+            val layers = mutableListOf<View>()
             fun find(view: View) {
-                if (view is SurfaceView) {
-                    val name = runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull()
-                    if (samples < 3) android.util.Log.i("NfbSubtitleAcceptance", "Surface=$name valid=${view.holder.surface.isValid} size=${view.width}x${view.height}")
-                    if (view.holder.surface.isValid && name == "surface_subtitles") surface = view
-                }
+                if (view is SubtitleView || view is MediaSubtitleLayer) layers.add(view)
                 if (view is ViewGroup) for (index in 0 until view.childCount) find(view.getChildAt(index))
             }
             find(owner.window.decorView)
-        }
-        val target = surface ?: run { samples++; return null }
-        val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
-        val completed = AtomicBoolean()
-        try {
-            val result = suspendCancellableCoroutine<Int> { continuation ->
-                try {
-                    PixelCopy.request(target, bitmap, { status ->
-                        completed.set(true)
-                        if (continuation.isActive) continuation.resumeWith(Result.success(status)) else bitmap.recycle()
-                    }, Handler(Looper.getMainLooper()))
-                } catch (_: IllegalArgumentException) {
-                    completed.set(true); continuation.resumeWith(Result.success(PixelCopy.ERROR_SOURCE_INVALID))
+            if (layers.isEmpty() || layers.any { it.width <= 0 || it.height <= 0 }) return@onActivity
+            val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = Canvas(bitmap)
+                layers.forEach { layer ->
+                    canvas.save()
+                    canvas.scale(320f / layer.width, 180f / layer.height)
+                    layer.draw(canvas)
+                    canvas.restore()
                 }
-            }
-            val frame = if (result == PixelCopy.SUCCESS) IntArray(320 * 180).also { bitmap.getPixels(it, 0, 320, 0, 0, 320, 180) } else null
-            if (samples++ < 3) android.util.Log.i("NfbSubtitleAcceptance", "PixelCopy=$result alpha=${frame?.count { Color.alpha(it) > 100 }} white=${frame?.count { Color.red(it)>200 && Color.green(it)>200 && Color.blue(it)>200 }}")
-            return frame
-        } finally { if (completed.get()) bitmap.recycle() }
+                frame = IntArray(320 * 180).also { bitmap.getPixels(it, 0, 320, 0, 0, 320, 180) }
+            } finally { bitmap.recycle() }
+        }
+        return frame
     }
 
     private fun matches(pixel: Int, rgb: List<Int>): Boolean {
@@ -79,7 +69,7 @@ class NativeSubtitleTest {
         var bounds: Rect? = null
         activity.scenario.onActivity { owner ->
             fun find(view: View) {
-                if (view is SurfaceView && runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull() == "surface_subtitles") {
+                if (view is MediaSubtitleLayer) {
                     val visible = Rect()
                     if (view.getGlobalVisibleRect(visible) && !visible.isEmpty) bounds = visible
                 }
@@ -108,8 +98,8 @@ class NativeSubtitleTest {
         var attempts = 0
         while (true) {
             val frame = pixels()
-            // A Surface buffer can arrive before presentation. Require the
-            // same content in the actual compositor's visible video viewport.
+            // Inspect actual subtitle layers and independently require the same
+            // content in the system compositor, including video blending.
             val nativeMatches = frame != null && (nativeCheck ?: check)(frame)
             if (nativeMatches || diagnostic) {
                 val composed = composedPixels()
@@ -148,10 +138,7 @@ class NativeSubtitleTest {
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         checking = "$label native start"
         try {
-            InstrumentationRegistry.getArguments().getString("nfbVlcChangeset")?.let {
-                assertEquals("Installed native SDK must be the recorded trial", it, LibVLC.changeset())
-            }
-            android.util.Log.i("NfbSubtitleAcceptance", "Gate=$label SDK=${LibVLC.version()} changeset=${LibVLC.changeset()}")
+            android.util.Log.i("NfbSubtitleAcceptance", "Gate=$label Media3=${MediaLibraryInfo.VERSION}")
             onMain { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
             onMain { model.open(ResourceRef("/fixture.mkv", "/fixture.mkv", "Owned subtitle fixture.mkv", false, "video", media.size.toLong())) }
@@ -217,6 +204,30 @@ class NativeSubtitleTest {
             select(model, "NFB Text")
             textPixels()
             capture("text")
+        }
+    }
+
+    @Test fun subtitleDelayUpdatesPausedPixelsWithoutSeekingOrResuming(): Unit = runBlocking {
+        withFixture("delay") { model ->
+            select(model, "NFB Text")
+            textPixels()
+            onMain { model.player.pause() }
+            withTimeout(5000) { model.player.state.first { !it.playing } }
+            val paused = model.player.state.value.positionMs
+            val generation = model.player.state.value.mediaGeneration
+            onMain { model.player.subtitleDelay(20_000) }
+            rendered("delayed cue is not yet due") { frame ->
+                frame.count { Color.alpha(it) > 100 && maxOf(Color.red(it), Color.green(it), Color.blue(it)) > 100 } < 10
+            }
+            onMain { model.player.subtitleDelay(-1000) }
+            textPixels()
+            onMain { model.player.subtitleDelay(0) }
+            textPixels()
+            val after = model.player.state.value
+            assertEquals(0L, after.subtitleDelayMs)
+            assertEquals(generation, after.mediaGeneration)
+            assertFalse("Subtitle timing must preserve the user's pause", after.playing)
+            assertTrue("Subtitle timing must not seek video", kotlin.math.abs(after.positionMs - paused) < 250)
         }
     }
 

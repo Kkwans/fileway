@@ -8,7 +8,8 @@ ABI. Do not add the separate `ass` AAR redundantly.
 
 Enable explicitly with `-PfilewayLibassProbeAar=/absolute/path/ass-kt-0.5.1.aar`
 and the verified `-PfilewayFfmpegProbeManifest=...` audio artifact. The application
-does not acquire a libass dependency; only the instrumentation APK changes.
+now supplies the same pinned libass runtime; this option enables only the extra
+comparison test sources and does not package a second libass AAR.
 
 The Fileway test adapter uses public Matroska/TrackOutput APIs for fonts and ASS
 packets. A serial worker owns native calls and coalesces frame requests; a separate

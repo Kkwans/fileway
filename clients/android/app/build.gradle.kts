@@ -7,7 +7,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
-// Explicit comparison build only. Normal debug and every release keep the accepted dependency pin.
+// libVLC is retained only by the reference instrumentation harness.
 val vlcProbeVersion = providers.gradleProperty("filewayVlcProbeVersion").orNull
 require(vlcProbeVersion == null || vlcProbeVersion == "3.7.7") { "Only the pinned libVLC 3.7.7 comparison is supported" }
 android {
@@ -19,8 +19,8 @@ android {
         applicationId = "io.github.kkwans.nasfilebrowser"
         minSdk = 29
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.3.0-preview"
+        versionCode = 5
+        versionName = "0.4.0-preview"
         buildConfigField("boolean", "NATIVE_VERBOSE", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // External control-plane acceptance runs explicitly through adb.
@@ -66,8 +66,10 @@ dependencies {
     implementation("me.saket.telephoto:zoomable-image-coil3:0.19.0")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    debugImplementation("org.videolan.android:libvlc-all:${vlcProbeVersion ?: "3.7.6"}")
-    releaseImplementation("org.videolan.android:libvlc-all:3.7.6")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
+    implementation("io.github.peerless2012:ass-kt:0.5.1")
+    androidTestImplementation("org.videolan.android:libvlc-all:${vlcProbeVersion ?: "3.7.6"}")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("androidx.room:room-runtime:2.8.5")
@@ -77,8 +79,6 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
-    // Comparison harness only: no Media3 runtime is added to the product APK.
-    androidTestImplementation("androidx.media3:media3-exoplayer:1.11.1")
     providers.gradleProperty("filewayMpvProbeAar").orNull?.let { path ->
         require(!providers.gradleProperty("filewayLibassProbeAar").isPresent && !providers.gradleProperty("filewayFfmpegProbeManifest").isPresent) {
             "Use separate comparison APKs for the published mpv and enhanced Media3 native payloads"
@@ -95,11 +95,19 @@ dependencies {
         val aar = file(path)
         val actual = MessageDigest.getInstance("SHA-256").digest(aar.readBytes()).joinToString("") { "%02x".format(it) }
         require(actual == "1051212faf98ef956e06992b002d43cfdc81b6c60dcd32662e8d3ff52d584d65") { "Unverified libass comparison AAR" }
-        androidTestImplementation(files(aar))
-        androidTestImplementation("androidx.media3:media3-ui:1.11.1")
+        // The product already supplies the same pinned libass runtime.
         android.sourceSets.getByName("androidTest").kotlin.srcDir("src/libassProbeTest/java")
     }
-    providers.gradleProperty("filewayFfmpegProbeManifest").orNull?.let { manifestPath ->
+    val ffmpegManifest = providers.gradleProperty("filewayFfmpegManifest")
+        .orElse(providers.gradleProperty("filewayFfmpegProbeManifest"))
+    if (providers.gradleProperty("filewayFfmpegWorkDir").isPresent) {
+        // Also permits building the native library itself without requiring its output first.
+        implementation(project(":ffmpeg-probe"))
+    } else {
+        require(ffmpegManifest.isPresent) {
+            "Provide -PfilewayFfmpegManifest=<verified ffmpeg-probe.json> or build from filewayFfmpegWorkDir"
+        }
+        val manifestPath = ffmpegManifest.get()
         val manifestFile = file(manifestPath).canonicalFile
         val manifest = JsonSlurper().parse(manifestFile) as Map<*, *>
         fun hash(input: File) = MessageDigest.getInstance("SHA-256").digest(input.readBytes())
@@ -111,7 +119,9 @@ dependencies {
         require(manifest["aarFile"] == "fileway-media3-ffmpeg-probe.aar")
         val aar = manifestFile.resolveSibling("fileway-media3-ffmpeg-probe.aar").canonicalFile
         require(aar.parentFile == manifestFile.parentFile && hash(aar) == manifest["aarSha256"]) { "Probe AAR hash/path mismatch" }
-        androidTestImplementation(files(aar))
+        implementation(files(aar))
+    }
+    if (providers.gradleProperty("filewayFfmpegProbeManifest").isPresent) {
         android.sourceSets.getByName("androidTest").kotlin.srcDir("src/ffmpegProbeTest/java")
     }
 }

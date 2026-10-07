@@ -31,7 +31,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.videolan.libvlc.LibVLC
+import androidx.media3.common.MediaLibraryInfo
 import java.io.Closeable
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -42,7 +42,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** Actual libVLC -> localhost Go lease -> HTTP fixture, not a player mock. */
+/** Actual Media3 -> localhost Go lease -> HTTP fixture, not a player mock. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
 class NativePlaybackTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
@@ -72,8 +73,7 @@ class NativePlaybackTest {
             }
         }
         try {
-            android.util.Log.i("FilewayNativeGate", "libVLC=${LibVLC.version()} changeset=${LibVLC.changeset()} verbose=${BuildConfig.NATIVE_VERBOSE}")
-            arguments.getString("nfbVlcChangeset")?.let { expected -> assertEquals("Actual native SDK must match the trial", expected, LibVLC.changeset()) }
+            android.util.Log.i("FilewayNativeGate", "Media3=${MediaLibraryInfo.VERSION}")
             onMain { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             waitUntil { model.state.value.connected && !model.state.value.busy }
             onMain { model.open(file) }
@@ -213,7 +213,7 @@ class NativePlaybackTest {
             activity.scenario.onActivity { owner ->
                 var videoSurface: SurfaceView? = null
                 fun findVideo(view: View) {
-                    if (view is SurfaceView && runCatching { view.resources.getResourceEntryName(view.id) }.getOrNull() == "surface_video") videoSurface = view
+                    if (view is SurfaceView && view.holder.surface.isValid) videoSurface = view
                     if (view is ViewGroup) for (index in 0 until view.childCount) findVideo(view.getChildAt(index))
                 }
                 findVideo(owner.window.decorView)
@@ -288,6 +288,10 @@ class NativePlaybackTest {
         val subtitleRequests = AtomicInteger()
         val unexpected = AtomicInteger()
         val stallNextRead = AtomicBoolean()
+        val stallNextSubtitle = AtomicBoolean()
+        val subtitleRead = CountDownLatch(1)
+        val releaseSubtitle = CountDownLatch(1)
+        val subtitleReturned = CountDownLatch(1)
         @Volatile var resumeRead = CountDownLatch(1)
         @Volatile var releaseRead = CountDownLatch(1)
         @Volatile var position = 3.0
@@ -338,7 +342,11 @@ class NativePlaybackTest {
                 }
                 endpoint.startsWith("/api/raw/") && subtitles.containsKey(endpoint.removePrefix("/api/raw/")) -> {
                     subtitleRequests.incrementAndGet()
-                    send(subtitles.getValue(endpoint.removePrefix("/api/raw/")), "text/plain; charset=utf-8")
+                    val stalled = stallNextSubtitle.compareAndSet(true, false)
+                    try {
+                        if (stalled) { subtitleRead.countDown(); check(releaseSubtitle.await(10, TimeUnit.SECONDS)) }
+                        send(subtitles.getValue(endpoint.removePrefix("/api/raw/")), "text/plain; charset=utf-8")
+                    } finally { if (stalled) subtitleReturned.countDown() }
                 }
                 endpoint.substringBefore('?').removePrefix("/api/preview/thumb/") in videos -> send(ByteArray(0), status = 404)
                 endpoint.startsWith("/api/media/playback") -> {
@@ -361,6 +369,6 @@ class NativePlaybackTest {
                 else -> { unexpected.incrementAndGet(); send(ByteArray(0), status = 404) }
             }
         }
-        override fun close() { server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
+        override fun close() { releaseSubtitle.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
     }
 }

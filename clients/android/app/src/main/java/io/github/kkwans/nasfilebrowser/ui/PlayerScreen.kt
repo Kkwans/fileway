@@ -71,7 +71,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
 import kotlinx.coroutines.delay
-import org.videolan.libvlc.util.VLCVideoLayout
+import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 
 private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, SOURCE, EXTERNAL, QUEUE }
 private tailrec fun Context.activity(): Activity? = when (this) {
@@ -209,7 +209,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                     val stage = if (landscape) Modifier.weight(1f) else Modifier.fillMaxWidth().height(portraitStageHeight)
                     Box(stage.background(Color.Black)) {
                         Box(Modifier.fillMaxSize().padding(bottom = if (landscape) 0.dp else 116.dp)) {
-                            AndroidView(factory = { VLCVideoLayout(it).also(model.player::attach) }, modifier = Modifier.fillMaxSize())
+                            AndroidView(factory = { PlayerViewport(it).also(model.player::attach) }, modifier = Modifier.fillMaxSize())
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"
                                 onClick("显示播放控制") { touch(); true }

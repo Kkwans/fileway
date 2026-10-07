@@ -23,7 +23,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
 import io.github.kkwans.nasfilebrowser.data.NasSession
 import io.github.kkwans.nasfilebrowser.data.ServerProfile
-import io.github.kkwans.nasfilebrowser.player.NativePlayer
+import io.github.kkwans.nasfilebrowser.player.LibVlcReferencePlayer
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -73,7 +73,7 @@ internal class EngineComparisonHarness(
     }
 
     private class VlcProbe(host: EngineProbeActivity) : Probe {
-        private val player = NativePlayer(host)
+        private val player = LibVlcReferencePlayer(host)
         override val view = VLCVideoLayout(host)
         override val version get() = "${LibVLC.version()}/${LibVLC.changeset()}"
         override val position get() = player.state.value.positionMs

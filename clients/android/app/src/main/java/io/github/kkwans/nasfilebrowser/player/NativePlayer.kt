@@ -2,15 +2,31 @@ package io.github.kkwans.nasfilebrowser.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.view.ViewGroup
+import androidx.media3.common.*
+import androidx.media3.common.text.CueGroup
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.mkv.MatroskaExtractor
+import androidx.media3.extractor.text.DefaultSubtitleParserFactory
+import androidx.media3.extractor.text.SubtitleParser
 import io.github.kkwans.nasfilebrowser.BuildConfig
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.videolan.libvlc.LibVLC
-import org.videolan.libvlc.Media
-import org.videolan.libvlc.MediaPlayer
-import org.videolan.libvlc.interfaces.IMedia
-import org.videolan.libvlc.util.VLCVideoLayout
+import java.io.ByteArrayOutputStream
+import java.util.Locale
 
 data class NativeTrack(val id: Int, val title: String, val codec: String = "", val language: String = "")
 data class PlayerState(
@@ -20,238 +36,333 @@ data class PlayerState(
     val selectedAudio: Int = -1, val selectedSubtitle: Int = -1, val width: Int = 0, val height: Int = 0,
     val error: String? = null, val rate: Float = 1f, val volume: Int = 100,
     val mediaGeneration: Long = 0, val operationError: String? = null,
+    val subtitleDelayMs: Long = 0, val subtitleLoading: Boolean = false,
+    val firstFrameRendered: Boolean = false, val bufferedPositionMs: Long = 0,
+    val videoDecoder: String = "未知", val audioDecoder: String = "未知",
 )
 
+/** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
+@androidx.annotation.OptIn(UnstableApi::class)
 class NativePlayer(context: Context) {
+    private val context = context.applicationContext
+    private val session = PlaybackSession()
     private val trace = PlaybackTrace(SystemClock::elapsedRealtime, enabled = BuildConfig.DEBUG)
-    private val vlc = LibVLC(context.applicationContext, arrayListOf("--audio-time-stretch", "--no-video-title-show").apply {
-        if (BuildConfig.DEBUG && BuildConfig.NATIVE_VERBOSE) add("--verbose=2")
-    }).also { trace.record(PlaybackTraceAction.ENGINE_READY) }
-    private val player = MediaPlayer(vlc).also { trace.record(PlaybackTraceAction.PLAYER_READY) }
+    private val handler = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mutable = MutableStateFlow(PlayerState())
     val state = mutable.asStateFlow()
     var checkpoint: (() -> Unit)? = null
-    private var attached = false
-    private val session = PlaybackSession()
+    private var engine: ExoPlayer? = null
+    private var viewport: PlayerViewport? = null
+    private var layer: MediaSubtitleLayer? = null
     private var released = false
-    private var seekTarget: Long? = null
-    private var resumeTarget: Long? = null
-    private val externalSubtitleLabels = mutableMapOf<Int, String>()
-    private var pendingSubtitle: Pair<String, Set<Int>>? = null
-    private var hasPlaybackClock = false
-    private var bufferBucket = -1
     private var temporaryRate: Float? = null
-    val canAddExternalSubtitle get() = !released && hasPlaybackClock
-    fun diagnosticSnapshot(): List<PlaybackTraceEntry> = trace.snapshot()
-
-    init {
-        // A portrait page embeds a landscape video viewport. libVLC's default
-        // activity-orientation heuristic swaps those bounds and shrinks video.
-        player.setUseOrientationFromBounds(true)
+    private var seekTarget: Long? = null
+    private var externalJob: Job? = null
+    private var externalRequest = 0L
+    private var selectedExternal: Int? = null
+    private data class Choice(val group: TrackGroup, val index: Int, val type: Int)
+    private val choices = mutableMapOf<Int, Choice>()
+    private val ids = mutableMapOf<Pair<TrackGroup, Int>, Int>()
+    private val external = linkedMapOf<Int, NativeTrack>()
+    private var nextId = 1 // IDs are never reused across media generations.
+    private var textIsAss = false
+    private var textIsCollected = false
+    private val ticker = object : Runnable {
+        override fun run() { if (engine != null && !released) { publish(); handler.postDelayed(this, 200) } }
     }
+    val canAddExternalSubtitle get() = !released && session.active && engine?.playbackState == Player.STATE_READY
+    fun diagnosticSnapshot() = trace.snapshot()
 
-    private fun bindEvents(epoch: Long) {
-        player.setEventListener { event ->
-            if (released || !session.accepts(epoch)) return@setEventListener
-            if (event.type == MediaPlayer.Event.Playing && !session.wantsPlay) {
-                player.pause()
-                mutable.value = mutable.value.copy(playing = false, phase = if (mutable.value.phase == "播放完毕") "播放完毕" else "已暂停")
-                return@setEventListener
-            }
-            if (event.type == MediaPlayer.Event.EndReached || event.type == MediaPlayer.Event.EncounteredError) session.pause()
-            val targetRate = temporaryRate ?: session.preferredRate
-            if (event.type == MediaPlayer.Event.Playing && kotlin.math.abs(player.rate - targetRate) > .001f) {
-                applyRate(targetRate)
-            }
-            when (event.type) {
-                MediaPlayer.Event.Opening -> trace.record(PlaybackTraceAction.OPENING)
-                MediaPlayer.Event.Buffering -> {
-                    val bucket = event.buffering.toInt() / 25
-                    if (bucket != bufferBucket) { bufferBucket = bucket; trace.record(PlaybackTraceAction.BUFFERING, event.buffering.toDouble()) }
-                }
-                MediaPlayer.Event.Playing -> trace.record(PlaybackTraceAction.PLAYING)
-                MediaPlayer.Event.Paused -> trace.record(PlaybackTraceAction.PAUSED)
-                MediaPlayer.Event.Vout -> trace.record(PlaybackTraceAction.VIDEO_OUTPUT)
-                MediaPlayer.Event.EndReached -> trace.record(PlaybackTraceAction.ENDED)
-                MediaPlayer.Event.EncounteredError -> trace.record(PlaybackTraceAction.ERROR)
-            }
-            val old = mutable.value
-            mutable.value = when (event.type) {
-                MediaPlayer.Event.Opening -> old.copy(phase = "正在打开视频", error = null)
-                MediaPlayer.Event.Buffering -> old.copy(buffering = event.buffering, phase = if (old.phase == "播放完毕" || old.error != null) old.phase else if (event.buffering < 100) "正在缓冲" else if (old.playing) "正在播放" else "已暂停")
-                MediaPlayer.Event.Playing -> old.copy(playing = true, phase = "正在播放", error = null)
-                MediaPlayer.Event.Paused -> old.copy(playing = false, phase = "已暂停")
-                MediaPlayer.Event.TimeChanged -> {
-                    if (event.timeChanged > 0 && !hasPlaybackClock) trace.record(PlaybackTraceAction.FIRST_CLOCK, event.timeChanged.toDouble())
-                    if (event.timeChanged > 0) hasPlaybackClock = true
-                    val reached = seekTarget?.let { kotlin.math.abs(event.timeChanged - it) <= 1500 } == true
-                    if (reached) { trace.record(PlaybackTraceAction.SEEK_REACHED, event.timeChanged.toDouble()); seekTarget = null }
-                    old.copy(positionMs = event.timeChanged.coerceAtLeast(0), phase = if (reached) { if (old.playing) "正在播放" else "已暂停" } else old.phase)
-                }
-                MediaPlayer.Event.LengthChanged -> old.copy(durationMs = event.lengthChanged.coerceAtLeast(0))
-                MediaPlayer.Event.SeekableChanged -> old.copy(seekable = event.seekable)
-                MediaPlayer.Event.EndReached -> old.copy(playing = false, positionMs = old.durationMs.takeIf { it > 0 } ?: old.positionMs, phase = "播放完毕")
-                MediaPlayer.Event.EncounteredError -> old.copy(playing = false, phase = "无法播放", error = "视频读取或解码失败，可重试或选择其他音轨。")
-                else -> old
-            }
-            if (event.type in listOf(MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected, MediaPlayer.Event.Playing, MediaPlayer.Event.Vout)) refreshTracks()
-            val resume = resumeTarget
-            // Seekability describes the input, not a ready decoder/output.
-            // Resume only after the first advancing playback clock event.
-            if (resume != null && event.type == MediaPlayer.Event.TimeChanged && event.timeChanged > 0 && mutable.value.playing && mutable.value.seekable && mutable.value.durationMs > 0) {
-                resumeTarget = null
-                seek(resume)
-            }
-            if (event.type == MediaPlayer.Event.Paused || event.type == MediaPlayer.Event.EndReached) checkpoint?.invoke()
-        }
-    }
-
-    fun attach(view: VLCVideoLayout) {
+    fun attach(view: ViewGroup) {
         if (released) return
+        detach()
+        val target = if (view is PlayerViewport) view else PlayerViewport(view.context).also {
+            view.addView(it, ViewGroup.LayoutParams(-1, -1))
+        }
+        viewport = target
+        target.subtitles(layer)
+        engine?.let { target.videoSize(it.videoSize.width, it.videoSize.height, it.videoSize.pixelWidthHeightRatio); it.setVideoSurfaceView(target.video) }
         trace.record(PlaybackTraceAction.ATTACH)
-        if (attached) player.detachViews()
-        player.attachViews(view, null, true, false)
-        attached = true
-        if (session.wantsPlay) { trace.record(PlaybackTraceAction.PLAY_REQUEST); player.play() }
     }
-    fun detach() { if (!released && attached) { trace.record(PlaybackTraceAction.DETACH); player.detachViews(); attached = false } }
+    fun detach() {
+        viewport?.let { engine?.clearVideoSurfaceView(it.video); it.subtitles(null) }
+        viewport = null
+        trace.record(PlaybackTraceAction.DETACH)
+    }
     fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true) {
         if (released) return
+        disposeMedia()
         val epoch = session.open(autoplay)
-        temporaryRate = null
-        // VLCObject removes queued Java event callbacks when replacing its listener.
-        // Unbind before stopping the old input, then bind a generation-specific listener.
-        player.setEventListener(null)
+        temporaryRate = null; seekTarget = null
+        choices.clear(); ids.clear(); external.clear(); selectedExternal = null
+        mutable.value = PlayerState(phase = "正在打开视频", rate = session.preferredRate, mediaGeneration = epoch)
         trace.beginOpen(positionMs)
-        trace.record(PlaybackTraceAction.STOP_REQUEST)
-        player.stop()
-        trace.record(PlaybackTraceAction.STOP_RETURNED)
-        bufferBucket = -1
-        externalSubtitleLabels.clear(); pendingSubtitle = null; hasPlaybackClock = false
-        seekTarget = null
-        resumeTarget = positionMs.takeIf { it > 0 }
-        mutable.value = PlayerState(phase = if (autoplay) "正在打开视频" else "已暂停", volume = player.volume.takeIf { it >= 0 }?.coerceAtMost(100) ?: mutable.value.volume,
-            rate = session.preferredRate, mediaGeneration = epoch)
-        bindEvents(epoch)
-        val media = Media(vlc, Uri.parse(url))
-        media.setHWDecoderEnabled(true, false)
-        media.addOption(":network-caching=1500")
-        player.media = media
+        val subtitles = MediaSubtitleLayer(context).also { current ->
+            current.failed = { if (session.accepts(epoch)) mutable.value = mutable.value.copy(subtitleLoading = false, operationError = "字幕渲染失败，请重试或选择其他字幕") }
+        }
+        layer = subtitles
+        viewport?.subtitles(subtitles)
+        val factory = object : DefaultRenderersFactory(context) {
+            override fun buildMiscellaneousRenderers(context: Context, eventHandler: Handler, extensionRendererMode: Int, out: ArrayList<Renderer>) {
+                super.buildMiscellaneousRenderers(context, eventHandler, extensionRendererMode, out)
+                out.add(MediaSubtitleLayer.Clock(subtitles))
+            }
+        }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON).setEnableDecoderFallback(true)
+        val extractors = ExtractorsFactory {
+            DefaultExtractorsFactory().createExtractors().map {
+                if (it is MatroskaExtractor) MediaSubtitleExtractor(subtitles) else it
+            }.toTypedArray()
+        }
+        val player = ExoPlayer.Builder(context, factory)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractors)).build()
+        engine = player
+        trace.record(PlaybackTraceAction.ENGINE_READY); trace.record(PlaybackTraceAction.PLAYER_READY)
+        fun current() = !released && engine === player && session.accepts(epoch)
+        player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+        player.setHandleAudioBecomingNoisy(true)
+        player.addListener(object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) { if (current()) publish() }
+            override fun onTracksChanged(tracks: Tracks) { if (current()) refreshTracks() }
+            override fun onRenderedFirstFrame() {
+                if (current()) { mutable.value = mutable.value.copy(firstFrameRendered = true); trace.record(PlaybackTraceAction.VIDEO_OUTPUT); publish() }
+            }
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (current()) {
+                    subtitles.storageWidth = videoSize.width; subtitles.storageHeight = videoSize.height
+                    viewport?.videoSize(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
+                }
+            }
+            override fun onCues(cueGroup: CueGroup) {
+                if (current() && !textIsAss && !textIsCollected && selectedExternal == null) viewport?.text?.setCues(cueGroup.cues)
+            }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!current()) return
+                if (!playWhenReady) session.pause()
+                else if (!session.wantsPlay) player.pause()
+                if (!playWhenReady) { publish(); checkpoint?.invoke() }
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (current() && playbackState == Player.STATE_ENDED) { session.pause(); publish(); checkpoint?.invoke() }
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                if (!current()) return
+                session.pause()
+                trace.record(PlaybackTraceAction.ERROR, error.errorCode.toDouble())
+                mutable.value = mutable.value.copy(playing = false, phase = "播放失败", error = when (error.errorCode) {
+                    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络读取失败，请检查连接后重试"
+                    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "这条视频或音轨暂时无法解码，请尝试其他音轨"
+                    else -> "视频无法继续播放，请重试或选择其他文件"
+                })
+            }
+        })
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                if (current()) mutable.value = mutable.value.copy(videoDecoder = decoderName)
+            }
+            override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
+                if (current()) mutable.value = mutable.value.copy(audioDecoder = decoderName)
+            }
+        })
+        viewport?.let { player.setVideoSurfaceView(it.video) }
+        player.setPlaybackSpeed(session.preferredRate)
+        player.setMediaItem(MediaItem.fromUri(url), positionMs.coerceAtLeast(0))
         trace.record(PlaybackTraceAction.MEDIA_SET)
-        media.release()
-        if (attached && session.wantsPlay) { trace.record(PlaybackTraceAction.PLAY_REQUEST); player.play() }
+        player.prepare(); player.playWhenReady = autoplay
+        if (autoplay) trace.record(PlaybackTraceAction.PLAY_REQUEST)
+        handler.post(ticker)
+    }
+    private fun publish() {
+        val player = engine ?: return
+        val previous = mutable.value
+        if (previous.error != null) return
+        if (seekTarget != null && player.playbackState == Player.STATE_READY && kotlin.math.abs(player.currentPosition - requireNotNull(seekTarget)) < 1000) {
+            trace.record(PlaybackTraceAction.SEEK_REACHED, player.currentPosition.toDouble()); seekTarget = null
+        }
+        if (previous.positionMs == 0L && player.currentPosition > 0) trace.record(PlaybackTraceAction.FIRST_CLOCK, player.currentPosition.toDouble())
+        if (previous.playing != player.isPlaying) trace.record(if (player.isPlaying) PlaybackTraceAction.PLAYING else PlaybackTraceAction.PAUSED)
+        mutable.value = previous.copy(
+            phase = when {
+                player.playbackState == Player.STATE_ENDED -> "播放完毕"
+                seekTarget != null -> "正在跳转"
+                !player.playWhenReady -> "已暂停"
+                player.playbackState == Player.STATE_BUFFERING -> if (previous.firstFrameRendered) "正在缓冲" else "正在打开视频"
+                player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "已暂停"
+                else -> "正在播放"
+            }, playing = player.isPlaying, positionMs = player.currentPosition.coerceAtLeast(0), durationMs = player.duration.coerceAtLeast(0),
+            seekable = player.isCurrentMediaItemSeekable, buffering = player.bufferedPercentage.toFloat(), bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0),
+            width = player.videoSize.width, height = player.videoSize.height, rate = player.playbackParameters.speed, volume = (player.volume * 100).toInt(),
+        )
+    }
+    private fun refreshTracks() {
+        val player = engine ?: return
+        val audio = mutableListOf(NativeTrack(-1, "关闭")); val text = mutableListOf(NativeTrack(-1, "关闭"))
+        choices.clear()
+        var selectedAudio = -1; var selectedText = -1; var selectedFormat: Format? = null
+        for (group in player.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_AUDIO && group.type != C.TRACK_TYPE_TEXT) continue
+            for (index in 0 until group.length) {
+                val format = group.getTrackFormat(index)
+                val id = ids.getOrPut(group.mediaTrackGroup to index) { nextId++ }
+                choices[id] = Choice(group.mediaTrackGroup, index, group.type)
+                val mime = format.codecs.takeIf { format.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES } ?: format.sampleMimeType.orEmpty()
+                val item = NativeTrack(id, format.label ?: format.language ?: "轨道 ${index + 1}", mime, format.language.orEmpty())
+                if (group.type == C.TRACK_TYPE_AUDIO) { audio.add(item); if (group.isTrackSelected(index)) selectedAudio = id }
+                else { text.add(item); if (group.isTrackSelected(index)) { selectedText = id; selectedFormat = format } }
+            }
+        }
+        text.addAll(external.values)
+        val chosen = selectedExternal ?: selectedText
+        val previous = mutable.value
+        mutable.value = previous.copy(audio = audio, subtitles = text, selectedAudio = selectedAudio, selectedSubtitle = chosen)
+        if (previous.selectedAudio != selectedAudio) trace.record(PlaybackTraceAction.AUDIO_SELECTED, selectedAudio.toDouble())
+        if (previous.selectedSubtitle != chosen) trace.record(PlaybackTraceAction.SUBTITLE_SELECTED, chosen.toDouble())
+        textIsAss = selectedExternal?.let { external[it]?.codec == MimeTypes.TEXT_SSA } ?: (selectedFormat?.codecs == MimeTypes.TEXT_SSA)
+        textIsCollected = selectedExternal != null || (layer?.collecting == true && selectedFormat?.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES)
+        val sourceId = selectedExternal?.let { "external:$it" } ?: selectedFormat?.id
+        layer?.select(if (textIsAss) sourceId else null, if (!textIsAss && textIsCollected) sourceId else null, player.currentPosition)
     }
     fun toggle() {
-        if (released || !session.active) return
-        if (mutable.value.playing) pause() else { session.play(); if (attached) { trace.record(PlaybackTraceAction.PLAY_REQUEST); player.play() } }
+        val player = engine ?: return
+        if (player.playWhenReady) pause() else { session.play(); trace.record(PlaybackTraceAction.PLAY_REQUEST); player.play(); publish() }
     }
     fun pause() {
-        session.pause()
-        if (!released) {
-            trace.record(PlaybackTraceAction.PAUSE_REQUEST); player.pause()
-            if (temporaryRate != null) { temporaryRate = null; if (session.active && hasPlaybackClock) applyRate(session.preferredRate) }
-        }
+        session.pause(); temporaryRate = null
+        engine?.let { trace.record(PlaybackTraceAction.PAUSE_REQUEST); it.pause(); it.setPlaybackSpeed(session.preferredRate); publish() }
     }
     fun seek(position: Long) {
-        if (!released && session.active && mutable.value.seekable) {
-            val target = position.coerceIn(0, mutable.value.durationMs.coerceAtLeast(0))
-            trace.record(PlaybackTraceAction.SEEK_REQUEST, target.toDouble())
-            if (player.setTime(target, false) < 0) { mutable.value = mutable.value.copy(error = "这个视频暂时无法跳转"); return }
-            trace.record(PlaybackTraceAction.SEEK_ACCEPTED, target.toDouble())
-            seekTarget = target
-            mutable.value = mutable.value.copy(phase = "正在跳转")
-        }
+        val player = engine ?: return
+        if (!player.isCurrentMediaItemSeekable) return
+        val target = position.coerceIn(0, player.duration.coerceAtLeast(0))
+        seekTarget = target; trace.record(PlaybackTraceAction.SEEK_REQUEST, target.toDouble())
+        player.seekTo(target); trace.record(PlaybackTraceAction.SEEK_ACCEPTED, target.toDouble()); publish()
     }
     fun rate(value: Float) {
         if (released || !session.selectRate(value)) return
-        temporaryRate = null
-        if (session.active && hasPlaybackClock) applyRate(value)
-        else mutable.value = mutable.value.copy(rate = value)
+        temporaryRate = null; applyRate(value)
     }
-    fun beginTemporaryRate(value: Float): Long? {
-        if (released || !session.active || !mutable.value.playing || !value.isFinite() || value !in .1f..5f) return null
-        temporaryRate = value
-        applyRate(value)
-        return session.generation
-    }
-    fun restoreRate(epoch: Long) { if (!released && session.accepts(epoch)) { temporaryRate = null; applyRate(session.preferredRate) } }
     private fun applyRate(value: Float) {
-        trace.record(PlaybackTraceAction.RATE_REQUEST, value.toDouble())
-        player.rate = value
-        mutable.value = mutable.value.copy(rate = player.rate)
+        trace.record(PlaybackTraceAction.RATE_REQUEST, value.toDouble()); engine?.setPlaybackSpeed(value)
+        mutable.value = mutable.value.copy(rate = engine?.playbackParameters?.speed ?: value)
         trace.record(PlaybackTraceAction.RATE_REPORTED, mutable.value.rate.toDouble())
     }
-    fun volume(value: Int) {
-        if (released) return
-        if (player.setVolume(value.coerceIn(0, 100)) < 0) mutable.value = mutable.value.copy(error = "无法调整播放器音量，请重试")
-        else mutable.value = mutable.value.copy(volume = player.volume.coerceIn(0, 100))
+    fun beginTemporaryRate(value: Float): Long? {
+        if (!session.active || !mutable.value.playing || !value.isFinite() || value !in .1f..5f) return null
+        temporaryRate = value; applyRate(value); return session.generation
     }
-    fun audio(id: Int) {
-        if (released || !session.active) return
-        trace.record(PlaybackTraceAction.AUDIO_REQUEST, id.toDouble())
-        val accepted = player.setAudioTrack(id)
-        trace.record(PlaybackTraceAction.AUDIO_ACCEPTED, if (accepted) 1.0 else 0.0)
-        if (accepted) { mutable.value = mutable.value.copy(operationError = null); refreshTracks() }
-        else mutable.value = mutable.value.copy(operationError = "这个音轨暂时无法启用，请选择其他音轨")
+    fun restoreRate(epoch: Long) { if (session.accepts(epoch)) { temporaryRate = null; applyRate(session.preferredRate) } }
+    fun volume(value: Int) { engine?.volume = value.coerceIn(0, 100) / 100f; publish() }
+    fun audio(id: Int) = selectTrack(id, C.TRACK_TYPE_AUDIO)
+    fun subtitle(id: Int) {
+        if (engine == null) return
+        if (id != -1 && id !in external && choices[id]?.type != C.TRACK_TYPE_TEXT) {
+            mutable.value = mutable.value.copy(operationError = "轨道已变化，请重新选择")
+            return
+        }
+        // A later explicit selection supersedes any still-loading external file.
+        // Invalidate queued native parse callbacks as well as the coroutine read.
+        externalRequest++
+        externalJob?.cancel(); externalJob = null
+        mutable.value = mutable.value.copy(subtitleLoading = false, operationError = null)
+        if (id in external) {
+            selectedExternal = id
+            engine?.let { it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build() }
+            refreshTracks()
+        } else {
+            selectedExternal = null
+            selectTrack(id, C.TRACK_TYPE_TEXT)
+            // An external selection already disables TEXT. Selecting "off" can
+            // therefore produce no tracks-changed event; publish the choice now.
+            refreshTracks()
+        }
+    }
+    private fun selectTrack(id: Int, type: Int) {
+        val player = engine ?: return
+        val choice = choices[id]
+        if (id != -1 && (choice == null || choice.type != type)) { mutable.value = mutable.value.copy(operationError = "轨道已变化，请重新选择"); return }
+        val audio = type == C.TRACK_TYPE_AUDIO
+        trace.record(if (audio) PlaybackTraceAction.AUDIO_REQUEST else PlaybackTraceAction.SUBTITLE_REQUEST, id.toDouble())
+        val next = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, id == -1)
+        if (choice != null) next.addOverride(TrackSelectionOverride(choice.group, choice.index))
+        player.trackSelectionParameters = next.build()
+        mutable.value = mutable.value.copy(operationError = null)
+        trace.record(if (audio) PlaybackTraceAction.AUDIO_ACCEPTED else PlaybackTraceAction.SUBTITLE_ACCEPTED, 1.0)
+        if (id == -1 && !audio) { viewport?.text?.setCues(emptyList()); layer?.select(null, null, player.currentPosition) }
+    }
+    fun subtitleDelay(valueMs: Long) {
+        val value = valueMs.coerceIn(-600_000, 600_000)
+        mutable.value = mutable.value.copy(subtitleDelayMs = value)
+        layer?.let { it.delayMs = value; it.requestFrame(engine?.currentPosition ?: 0) }
     }
     fun addSubtitle(url: String, name: String): Boolean {
         if (!canAddExternalSubtitle) return false
-        trace.record(PlaybackTraceAction.EXTERNAL_SUBTITLE_REQUEST)
-        val previous = pendingSubtitle
-        pendingSubtitle = name to player.spuTracks.orEmpty().filter { it.id >= 0 }.map { it.id }.toSet()
-        val accepted = player.addSlave(IMedia.Slave.Type.Subtitle, Uri.parse(url), true)
-        if (!accepted) pendingSubtitle = previous else refreshTracks()
-        return accepted
-    }
-    fun subtitle(id: Int) {
-        if (released || !session.active) return
-        trace.record(PlaybackTraceAction.SUBTITLE_REQUEST, id.toDouble())
-        val accepted = player.setSpuTrack(id)
-        trace.record(PlaybackTraceAction.SUBTITLE_ACCEPTED, if (accepted) 1.0 else 0.0)
-        if (accepted) { mutable.value = mutable.value.copy(operationError = null); refreshTracks() }
-        else mutable.value = mutable.value.copy(operationError = "字幕未能切换，请重试")
+        val currentLayer = layer ?: return false
+        val epoch = session.generation; val request = ++externalRequest; val id = nextId++
+        externalJob?.cancel()
+        mutable.value = mutable.value.copy(subtitleLoading = true, operationError = null)
+        externalJob = scope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    val source = DefaultDataSource.Factory(context).createDataSource()
+                    try {
+                        source.open(DataSpec(Uri.parse(url)))
+                        val output = ByteArrayOutputStream(); val buffer = ByteArray(16 * 1024)
+                        while (true) {
+                            ensureActive(); val count = source.read(buffer, 0, buffer.size)
+                            if (count == C.RESULT_END_OF_INPUT) break
+                            check(output.size() + count <= 16 * 1024 * 1024) { "Subtitle too large" }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
+                    } finally { source.close() }
+                }
+                ensureActive()
+                if (!session.accepts(epoch) || externalRequest != request) return@launch
+                val mime = when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+                    "ass", "ssa" -> MimeTypes.TEXT_SSA
+                    "srt" -> MimeTypes.APPLICATION_SUBRIP
+                    "vtt" -> MimeTypes.TEXT_VTT
+                    "ttml", "dfxp" -> MimeTypes.APPLICATION_TTML
+                    else -> error("Unsupported external subtitle")
+                }
+                fun ready() {
+                    if (!session.accepts(epoch) || externalRequest != request) return
+                    externalJob = null
+                    external[id] = NativeTrack(id, name, mime)
+                    mutable.value = mutable.value.copy(subtitleLoading = false)
+                    subtitle(id)
+                }
+                if (mime == MimeTypes.TEXT_SSA) currentLayer.externalAss("external:$id", bytes, ::ready)
+                else {
+                    withContext(Dispatchers.IO) {
+                        val parser = DefaultSubtitleParserFactory().create(Format.Builder().setSampleMimeType(mime).build())
+                        parser.parse(bytes, SubtitleParser.OutputOptions.allCues()) { currentLayer.textCues("external:$id", it) }
+                    }
+                    ready()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (session.accepts(epoch) && externalRequest == request) mutable.value = mutable.value.copy(subtitleLoading = false, operationError = "字幕读取失败或格式暂不支持，请重试或选择其他字幕")
+            }
+        }
+        return true
     }
     fun clearOperationError(expected: String) { if (mutable.value.operationError == expected) mutable.value = mutable.value.copy(operationError = null) }
-    fun stop() {
-        session.stop()
-        temporaryRate = null
-        externalSubtitleLabels.clear(); pendingSubtitle = null; hasPlaybackClock = false; resumeTarget = null; seekTarget = null
-        if (!released) { player.setEventListener(null); trace.record(PlaybackTraceAction.STOP_REQUEST); player.stop(); trace.record(PlaybackTraceAction.STOP_RETURNED) }
-        mutable.value = PlayerState(rate = session.preferredRate, mediaGeneration = session.generation)
+    private fun disposeMedia() {
+        handler.removeCallbacks(ticker)
+        externalRequest++; externalJob?.cancel(); externalJob = null
+        val previous = engine; engine = null
+        previous?.release()
+        viewport?.subtitles(null); layer?.close(); layer = null
     }
-
-    private fun refreshTracks() {
-        val media = player.media
-        val tracks = try { if (media == null) emptyList() else (0 until media.trackCount).mapNotNull { media.getTrack(it) } } finally { media?.release() }
-        val subtitleDescriptions = player.spuTracks
-        val pending = pendingSubtitle
-        if (pending != null) {
-            val added = subtitleDescriptions.orEmpty().filter { it.id >= 0 && it.id !in pending.second }
-            // A single-file addition is named only when exactly one new engine ID is observed.
-            if (added.size == 1) { externalSubtitleLabels[added.single().id] = pending.first; pendingSubtitle = null }
-            else if (added.size > 1) pendingSubtitle = null
-        }
-        externalSubtitleLabels.keys.retainAll(subtitleDescriptions.orEmpty().map { it.id }.toSet())
-        fun describe(items: Array<MediaPlayer.TrackDescription>?, type: Int) = items.orEmpty().map { item ->
-            val track = tracks.firstOrNull { it.type == type && it.id == item.id }
-            NativeTrack(item.id, if (item.id == -1) "关闭" else (if (type == IMedia.Track.Type.Text) externalSubtitleLabels[item.id] else null) ?: item.name.orEmpty().ifBlank { "轨道 ${item.id}" }, track?.codec.orEmpty(), track?.language.orEmpty())
-        }
-        val video = tracks.filterIsInstance<IMedia.VideoTrack>().firstOrNull()
-        val previous = mutable.value
-        mutable.value = mutable.value.copy(
-            audio = describe(player.audioTracks, IMedia.Track.Type.Audio), subtitles = describe(subtitleDescriptions, IMedia.Track.Type.Text),
-            selectedAudio = player.audioTrack, selectedSubtitle = player.spuTrack,
-            width = video?.width ?: 0, height = video?.height ?: 0,
-            volume = player.volume.takeIf { it >= 0 }?.coerceAtMost(100) ?: mutable.value.volume,
-        )
-        if (previous.selectedAudio != mutable.value.selectedAudio) trace.record(PlaybackTraceAction.AUDIO_SELECTED, mutable.value.selectedAudio.toDouble())
-        if (previous.selectedSubtitle != mutable.value.selectedSubtitle) trace.record(PlaybackTraceAction.SUBTITLE_SELECTED, mutable.value.selectedSubtitle.toDouble())
+    fun stop() {
+        session.stop(); trace.record(PlaybackTraceAction.STOP_REQUEST)
+        disposeMedia(); choices.clear(); ids.clear(); external.clear(); selectedExternal = null
+        mutable.value = PlayerState(rate = session.preferredRate, mediaGeneration = session.generation)
+        trace.record(PlaybackTraceAction.STOP_RETURNED)
     }
     fun release() {
         if (released) return
-        session.stop()
-        trace.record(PlaybackTraceAction.RELEASE)
-        player.setEventListener(null)
-        detach(); player.stop(); player.release(); vlc.release(); released = true
+        stop(); released = true; viewport = null; scope.cancel(); trace.record(PlaybackTraceAction.RELEASE)
     }
 }

@@ -1,7 +1,8 @@
 # Media3 FFmpeg audio comparison build
 
-This optional library is comparison infrastructure. It is not a dependency of the
-product application or its normal test build, and does not select a product engine.
+This reproducible library now supplies the product's Media3 audio extension.
+The historical `probe` filenames are retained so the verified input lock and build
+recipe remain reproducible. Engine integration and device acceptance remain open.
 `native/media3-ffmpeg.lock.json` pins Media3 1.11.1 audio Java/JNI sources by commit
 and individual SHA256, and the FFmpeg 9.0.2 release archive by SHA256.
 Upstream sources: [Media3 decoder module](https://github.com/androidx/media/tree/1.11.1/libraries/decoder_ffmpeg)
@@ -15,7 +16,7 @@ to the separately evaluated platform-video path.
 
 ## Build
 
-Use the manual `Media3 FFmpeg comparison library` workflow, or an installed Linux
+Use the reusable/manual `Media3 FFmpeg native library` workflow, or an installed Linux
 x86_64 NDK 28.2.13676358 with JDK 17 and the project's Android SDK inputs. Refresh
 the shared migration gate before invoking builds on a host that uses the shared
 tools/caches. Approve output placement before creating a local work directory.
@@ -52,11 +53,12 @@ Use that exact checkout for the surrounding Gradle project and wrapper.
 
 ## Acceptance boundary
 
-An artifact may be enabled in the **test APK only** with
-`-PfilewayFfmpegProbeManifest=/absolute/path/ffmpeg-probe.json`. Configuration
+Supply the product artifact with
+`-PfilewayFfmpegManifest=/absolute/path/ffmpeg-probe.json`. Configuration
 checks the input/recipe and AAR hashes against this checkout. The adjacent AAR is
-required; no candidate is downloaded or selected automatically. This enables the
-additional `src/ffmpegProbeTest` source set and `FfmpegAudioProbeTest`.
+required; no candidate is downloaded or selected automatically. The legacy
+`filewayFfmpegProbeManifest` alias additionally enables the `src/ffmpegProbeTest`
+source set and `FfmpegAudioProbeTest` using the same product dependency.
 
 The audio test selects the owned TrueHD/AAC/FLAC/Opus tones through one Go lease,
 verifies the actual FFmpeg decoder and PCM frequency/energy, and repeats TrueHD

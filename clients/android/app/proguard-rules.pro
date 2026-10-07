@@ -1,2 +1,2 @@
 -keep class io.github.kkwans.nasfilebrowser.core.NativeTransport { *; }
--keep class org.videolan.libvlc.** { *; }
+-keep class io.github.peerless2012.ass.** { *; }
