@@ -86,6 +86,11 @@ class DownloadPlaybackTest {
             assertEquals(requests, source.rawRequests.get())
             device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/download-offline-phone.png")
+            // Exercise the actual notification PendingIntent while the viewer
+            // owns the foreground: the original Activity/model must navigate.
+            DownloadNotice.notification(context, complete).contentIntent.send()
+            withTimeout(5000) { model.state.first { it.tab == "downloads" && it.selected == null && it.image == null } }
+            assertTrue(device.wait(Until.hasObject(By.text("本机下载")), 5000))
         } finally {
             withContext(NonCancellable) {
                 main { model.leavePlayer(); model.disconnect() }

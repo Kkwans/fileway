@@ -615,6 +615,11 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun tab(value: String) { if (value == "downloads" && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun openDownloads() {
+        if (mutable.value.selected != null || pendingMediaOpen != null) leavePlayer()
+        if (mutable.value.image != null) closeImage()
+        tab("downloads")
+    }
     fun librarySection(value: LibrarySection) { search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value) }
     fun showServerTask(id: String) { librarySection(LibrarySection.TASKS); tasks.select(id) }
     fun showAnalysis(id: String, type: String) { librarySection(LibrarySection.TOOLS); storageTools.openReport(id, if (type == "analysis.storage") "storage" else "duplicates") }

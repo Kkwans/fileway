@@ -19,7 +19,8 @@ internal object DownloadNotice {
     fun notification(context: Context, record: DownloadRecord?, jobId: Int = record?.jobId ?: 0): Notification {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "文件下载", NotificationManager.IMPORTANCE_LOW))
-        val open = PendingIntent.getActivity(context, jobId, Intent(context, MainActivity::class.java).putExtra("open_downloads", true), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(context, jobId, Intent(context, MainActivity::class.java).putExtra("open_downloads", true)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val active = record == null || record.active
         val percent = record?.let { if (it.expectedSize > 0) (it.downloaded.toDouble() / it.expectedSize * 100).toInt().coerceIn(0, if (it.complete) 100 else 99) else 0 } ?: 0
         val text = when (record?.status) { "completed" -> "下载完成"; "paused" -> "已暂停"; "failed" -> "下载失败，可在应用中重试"; "interrupted" -> "下载中断，已保存部分保留"; else -> "$percent% · 文件下载" }
