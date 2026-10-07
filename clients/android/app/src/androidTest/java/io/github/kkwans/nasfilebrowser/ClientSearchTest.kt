@@ -186,6 +186,9 @@ class ClientSearchTest {
         val previewPaths = ConcurrentHashMap.newKeySet<String>()
         val searchRequests = ConcurrentHashMap.newKeySet<String>()
         val rawImages = ConcurrentHashMap.newKeySet<String>()
+        val favoriteRecords = JSONArray()
+        val favoriteGroups = JSONArray()
+        private val favoriteLock = Any()
         @Volatile var heldImage: String? = null
         val imageStarted = CountDownLatch(1)
         val releaseImage = CountDownLatch(1)
@@ -215,6 +218,30 @@ class ClientSearchTest {
                 return
             }
             check(headers["x-auth"].orEmpty().count { it == '.' } == 2)
+            if (uri.path.startsWith("/api/favorites")) {
+                val method = request.substringBefore(' ')
+                val response = synchronized(favoriteLock) {
+                    when {
+                        uri.path == "/api/favorites/groups" && method == "GET" -> favoriteGroups.toString()
+                        uri.path == "/api/favorites" && method == "GET" -> favoriteRecords.toString()
+                        uri.path == "/api/favorites" && method == "POST" -> JSONObject(String(body)).also {
+                            it.put("id", "server-" + java.util.UUID.randomUUID()).put("order", favoriteRecords.length())
+                            favoriteRecords.put(it)
+                        }.toString()
+                        uri.path.startsWith("/api/favorites/") && method in setOf("PUT", "DELETE") -> {
+                            val index = (0 until favoriteRecords.length()).single { favoriteRecords.getJSONObject(it).getString("id") == uri.path.substringAfterLast('/') }
+                            if (method == "DELETE") { favoriteRecords.remove(index); "{}" }
+                            else {
+                                val update = JSONObject(String(body)); val row = favoriteRecords.getJSONObject(index)
+                                update.keys().forEach { key -> row.put(key, update.get(key)) }; row.toString()
+                            }
+                        }
+                        else -> error("Unexpected fixture favorite operation")
+                    }
+                }
+                reply(socket, response)
+                return
+            }
             if (uri.path.startsWith("/api/raw/") && imageBodies.containsKey(uri.path.removePrefix("/api/raw/"))) {
                 val name = uri.path.removePrefix("/api/raw/")
                 rawImages.add(name)
