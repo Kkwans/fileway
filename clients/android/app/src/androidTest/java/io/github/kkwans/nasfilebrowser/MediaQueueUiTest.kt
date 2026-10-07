@@ -2,6 +2,9 @@ package io.github.kkwans.nasfilebrowser
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -71,6 +74,42 @@ class MediaQueueUiTest {
         device.dumpWindowHierarchy(File(instrumentation.targetContext.getExternalFilesDir(null), "$name.xml"))
     }
 
+    private suspend fun awaitLightBars(light: Boolean) = withTimeout(5000) {
+        while (true) {
+            var matches = false
+            activity.scenario.onActivity {
+                val bars = WindowCompat.getInsetsController(it.window, it.window.decorView)
+                matches = bars.isAppearanceLightStatusBars == light && bars.isAppearanceLightNavigationBars == light
+            }
+            if (matches) break
+            delay(50)
+        }
+    }
+
+    private suspend fun lightIconsOnDarkStatusBackground() = withTimeout(5000) {
+        while (true) {
+            var height = 0
+            activity.scenario.onActivity {
+                height = ViewCompat.getRootWindowInsets(it.window.decorView)?.getInsets(WindowInsetsCompat.Type.statusBars())?.top ?: 0
+            }
+            if (height > 0) {
+                val shot = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
+                val bitmap = shot.copy(Bitmap.Config.ARGB_8888, false)
+                val visible = try {
+                    var bright = 0; var dark = 0; var total = 0
+                    for (y in 0 until height.coerceAtMost(bitmap.height) step 2) for (x in 0 until bitmap.width step 2) {
+                        val pixel = bitmap.getPixel(x, y); total++
+                        if (minOf(Color.red(pixel), Color.green(pixel), Color.blue(pixel)) > 180) bright++
+                        if (maxOf(Color.red(pixel), Color.green(pixel), Color.blue(pixel)) < 60) dark++
+                    }
+                    bright >= 32 && dark > total * .7
+                } finally { bitmap.recycle(); shot.recycle() }
+                if (visible) break
+            }
+            delay(100)
+        }
+    }
+
     @Test fun galleryPreservesPreviewCancelsOriginalPagesAndRestoresListPosition(): Unit = runBlocking {
         val names = (1..24).map { "%02d.png".format(it) }
         val bytes = original()
@@ -129,21 +168,30 @@ class MediaQueueUiTest {
         val source = ClientSearchTest.Fixture(listOf("photo.png"), ownedPreviewPng(), imageBodies = mapOf("photo.png" to original()))
         val model = model(); val store = store(); val profile = store.save(ServerProfile(name = "Temporary image fixture", address = source.url))
         model.cache.awaitReady(); val old = model.cache.state.value.settings
+        val oldTheme = withTimeout(5000) { model.appearance.state.first { it.loaded } }.theme
         val work = File(instrumentation.targetContext.cacheDir, "image-viewer-work")
         try {
+            main { model.appearance.save(AppTheme.LIGHT) }
+            withTimeout(5000) { model.appearance.state.first { it.theme == AppTheme.LIGHT && !it.saving } }
             main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
             main { model.cache.save(old.copy(imageMB = 0, imageQuality = ImageQuality.ORIGINAL)) }
             withTimeout(5000) { model.cache.state.first { !it.busy && it.settings.imageMB == 0L && it.settings.imageQuality == ImageQuality.ORIGINAL } }
+            awaitLightBars(true)
             main { model.open(model.state.value.files.single()) }
             renderedColor(25, 170, 80)
+            awaitLightBars(false)
+            lightIconsOnDarkStatusBackground()
+            capture("gallery-system-bars-dark")
             assertTrue(work.listFiles().orEmpty().any { it.isFile && it.length() > 0 })
             assertTrue(model.cache.cachedImages(model.cacheAccount()).isEmpty())
             main { model.closeImage() }
+            awaitLightBars(true)
             withTimeout(5000) { while (work.listFiles().orEmpty().any { it.name.startsWith("viewer-") }) delay(50) }
         } finally {
-            main { model.closeImage(); model.cache.save(old) }
+            main { model.closeImage(); model.cache.save(old); model.appearance.save(oldTheme) }
             withTimeout(5000) { model.cache.state.first { !it.busy && it.settings == old } }
+            withTimeout(5000) { model.appearance.state.first { it.theme == oldTheme && !it.saving } }
             main { model.disconnect() }; store.remove(profile); source.close()
         }
     }
