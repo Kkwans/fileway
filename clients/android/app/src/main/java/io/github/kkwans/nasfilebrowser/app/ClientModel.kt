@@ -34,7 +34,7 @@ import org.json.JSONObject
 import java.net.URLEncoder
 
 typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
-enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签"), TASKS("任务", "任务中心") }
+enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签"), TRASH("回收站", "回收站"), TASKS("任务", "任务中心") }
 
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
@@ -47,6 +47,7 @@ data class ClientState(
     val downloadBytesPerSecond: Long? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val librarySection: LibrarySection = LibrarySection.FAVORITES,
+    val permissions: ServerPermissions = ServerPermissions(),
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
 )
@@ -104,6 +105,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val favorites = FavoritesController(viewModelScope) { context === it && generation == it.generation }
     val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
+    val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
         viewModelScope.launch { search.state.collect { syncLibraryObservers() } }
@@ -181,9 +183,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 favorites.bind(bound)
                 tags.bind(bound)
                 tasks.bind(bound)
+                trash.bind(bound)
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
-                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username, fileLayout = directory?.fileLayout ?: FileLayout.COVER)
+                mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username, fileLayout = directory?.fileLayout ?: FileLayout.COVER, permissions = opened.identity.permissions)
                 if (directory == null || directory.path == "/") applyDirectory(root, "/", "/", bound)
                 else try { loadDirectory(directory.path, directory.wirePath, bound) } catch (error: Exception) {
                     if (error !is ServiceException || error.status !in setOf(403, 404)) throw error
@@ -540,6 +543,28 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private fun syncLibraryObservers() {
         val visible = foreground && mutable.value.connected && mutable.value.selected == null && mutable.value.image == null && !search.state.value.open
         tasks.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TASKS)
+        trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
+    }
+    private fun resourceTrashed(bound: SessionContext, file: ResourceRef) {
+        if (context !== bound) return
+        val wire = file.wirePath.ifEmpty { SearchResult.encodePath(file.path) }
+        fun removed(path: String) = path == wire || file.directory && path.startsWith(wire.trimEnd('/') + "/")
+        mutable.value.selected?.takeIf { removed(it.wirePath.ifEmpty { SearchResult.encodePath(it.path) }) }?.let { leavePlayer() }
+        mutable.value.image?.takeIf { removed(it.wirePath.ifEmpty { SearchResult.encodePath(it.path) }) }?.let { closeImage() }
+        mutable.value = mutable.value.copy(files = mutable.value.files.filterNot { removed(it.wirePath.ifEmpty { SearchResult.encodePath(it.path) }) }, notice = "已移入回收站")
+        favorites.refresh(); tags.refresh()
+        if (removed(mutable.value.wirePath)) {
+            navigation.clear()
+            mutable.value = mutable.value.copy(tab = "files", fileCategory = FileCategory.ALL)
+            browse(file.path.substringBeforeLast('/').ifEmpty { "/" }, wire.substringBeforeLast('/').ifEmpty { "/" })
+        }
+    }
+    private fun resourceRestored(bound: SessionContext, path: String) {
+        if (context !== bound) return
+        favorites.refresh(); tags.refresh()
+        // Re-read the directory before returning from the recycle bin; a
+        // restored file's favorites/tags are supplied by the server transaction.
+        if (mutable.value.path == path.substringBeforeLast('/').ifEmpty { "/" }) retry()
     }
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return
@@ -661,6 +686,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         favorites.bind(null)
         tags.bind(null)
         tasks.bind(null)
+        trash.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
         val previous = closing; val media = mediaClosing

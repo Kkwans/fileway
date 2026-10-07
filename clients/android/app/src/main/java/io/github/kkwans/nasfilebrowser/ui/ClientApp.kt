@@ -66,6 +66,7 @@ import java.util.Locale
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.FAVORITES -> FavoritesScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TAGS -> TagsScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TASKS -> ServerTasksScreen(model, state)
+                    io.github.kkwans.nasfilebrowser.app.LibrarySection.TRASH -> TrashScreen(model, state)
                 }
                 else -> RecentScreen(model, state, recent)
             }
@@ -111,7 +112,7 @@ import java.util.Locale
                 }
             }
             details?.let { file -> FileDetailsDialog(file, showSize = false, openEnabled = !state.busy,
-                actions = { FileActions(model, file) },
+                actions = { FileActions(model, file) { details = null } },
                 onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
         }
     }

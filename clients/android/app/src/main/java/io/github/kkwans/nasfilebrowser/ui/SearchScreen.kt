@@ -160,7 +160,7 @@ import io.github.kkwans.nasfilebrowser.data.SearchScope
         details?.let { result ->
             val resource = result.resource(state.resultBasePath, state.resultBaseWirePath)
             if (resource != null) FileDetailsDialog(resource, openEnabled = !client.busy,
-                actions = { FileActions(model, resource) },
+                actions = { FileActions(model, resource) { details = null } },
                 onLocation = { details = null; model.openContainingDirectory(resource) },
                 onOpen = { if (!model.state.value.busy) { details = null; model.search.openResult(result) } }, onDismiss = { details = null })
             else AlertDialog(onDismissRequest = { details = null }, shape = RoundedCornerShape(12.dp), containerColor = colors.background,

@@ -16,16 +16,29 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 
-@Composable internal fun FileActions(model: ClientModel, file: ResourceRef) {
+@Composable internal fun FileActions(model: ClientModel, file: ResourceRef, onMoved: () -> Unit = {}) {
     val tags by model.tags.state.collectAsStateWithLifecycle()
+    val trash by model.trash.state.collectAsStateWithLifecycle()
+    val client by model.state.collectAsStateWithLifecycle()
     var labeling by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
+    var moving by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
+    val enabled = !trash.changing && !client.busy
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        FavoriteFileAction(model, file)
+        FavoriteFileAction(model, file, enabled)
         val count = tags.items.count { collectionPath(file.path) in it.paths }
-        OutlinedButton({ labeling = true }, Modifier.fillMaxWidth(), enabled = !tags.changing) { Text(if (tags.loaded) "标签 · $count" else "设置标签") }
+        OutlinedButton({ labeling = true }, Modifier.fillMaxWidth(), enabled = enabled && !tags.changing) { Text(if (tags.loaded) "标签 · $count" else "设置标签") }
+        if (client.permissions.delete && file.path != "/") TextButton({ moving = true }, Modifier.fillMaxWidth(), enabled = enabled && !tags.changing) { Text("移入回收站") }
         if (!labeling) tags.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
     if (labeling) FileTagPicker(model, file) { labeling = false }
+    if (moving) AlertDialog(onDismissRequest = { moving = false }, title = { Text("移入回收站？") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(file.name); Text(file.path, style = MaterialTheme.typography.bodySmall)
+            Text("可从回收站恢复。收藏和标签会随服务端操作同步。", style = MaterialTheme.typography.bodySmall)
+            trash.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }, confirmButton = { TextButton({ model.trash.move(file) { moving = false; onMoved() } }, enabled = enabled) { Text(if (trash.changing) "正在移动" else "移入回收站") } },
+        dismissButton = { TextButton({ moving = false }, enabled = enabled) { Text("取消") } })
 }
 
 @Composable private fun FileTagPicker(model: ClientModel, file: ResourceRef, dismiss: () -> Unit) {

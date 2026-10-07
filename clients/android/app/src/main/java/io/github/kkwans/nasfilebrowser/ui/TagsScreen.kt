@@ -100,7 +100,7 @@ internal fun metadataColor(value: String, fallback: Color): Color = try { Color(
         text = { Text("这个标签的全部关联将被取消，文件保持原位。网页端也会同步此变更。") },
         confirmButton = { TextButton({ model.tags.remove(value); removing = null }, enabled = enabled) { Text("删除标签") } },
         dismissButton = { TextButton({ removing = null }) { Text("取消") } }) }
-    details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) }, onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
+    details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) { details = null } }, onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

@@ -96,7 +96,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
                 }
             }
         }
-        details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) }, onDismiss = { details = null }) }
+        details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) { details = null } }, onDismiss = { details = null }) }
     }
 }
 
