@@ -7,3 +7,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "FilewayAndroid"
 include(":app")
+// Explicit native-comparison builds only; the app does not depend on this module.
+if (providers.gradleProperty("filewayFfmpegWorkDir").isPresent) include(":ffmpeg-probe")
