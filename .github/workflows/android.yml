@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths: ['clients/android/**', 'clients/shared/core/**', '.github/workflows/android.yml']
   workflow_dispatch:
+concurrency:
+  group: android-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
