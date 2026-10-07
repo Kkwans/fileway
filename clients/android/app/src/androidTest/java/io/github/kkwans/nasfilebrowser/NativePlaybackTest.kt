@@ -235,8 +235,8 @@ class NativePlaybackTest {
             source.stallNextRead.set(true)
             onMain { model.togglePlayback() }
             assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
-            assertTrue(device.wait(Until.hasObject(By.desc("处理播放状态")), 3000))
-            device.findObject(By.desc("处理播放状态")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("取消播放请求")), 3000))
+            device.findObject(By.desc("取消播放请求")).click()
             assertFalse("Cancel must immediately leave the loading state", model.state.value.busy)
             source.releaseRead.countDown()
             delay(700)
