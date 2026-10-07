@@ -67,7 +67,7 @@ class DownloadPlaybackTest {
             assertEquals(prefix.toLong(), dao.get(id)!!.downloaded)
             assertEquals("paused", dao.get(id)!!.status)
             main { model.player.seek(8000) }
-            waitFor("range seek") { model.player.state.value.positionMs >= 7500 }
+            waitFor("range seek") { model.player.state.value.let { it.positionMs >= 7500 && it.phase != "正在跳转" && !it.waitingForBuffer && it.playing } }
             main { model.leavePlayer() }
             val resume = device.wait(Until.findObject(By.text("继续下载")), 5000)
             assertNotNull(resume); resume!!.click()
@@ -82,7 +82,7 @@ class DownloadPlaybackTest {
             main { model.openDownload(complete) }
             waitFor("offline first frame") { model.player.state.value.let { it.firstFrameRendered && it.playing && it.positionMs > 600 } }
             main { model.player.seek(4000) }
-            waitFor("offline seek") { model.player.state.value.positionMs >= 3500 }
+            waitFor("offline seek") { model.player.state.value.let { it.positionMs >= 3500 && it.phase != "正在跳转" && !it.waitingForBuffer && it.playing } }
             assertEquals(requests, source.rawRequests.get())
             device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/download-offline-phone.png")
