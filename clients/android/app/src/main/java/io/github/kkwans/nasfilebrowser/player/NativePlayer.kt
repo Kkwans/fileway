@@ -91,7 +91,9 @@ class NativePlayer(context: Context) {
     private val ticker = object : Runnable {
         override fun run() { if (engine != null && !released) { publish(); handler.postDelayed(this, 200) } }
     }
-    val canAddExternalSubtitle get() = !released && session.active && engine?.playbackState == Player.STATE_READY
+    val canAddExternalSubtitle get() = !released && session.active && layer != null && engine?.let {
+        it.playerError == null && it.playbackState in setOf(Player.STATE_BUFFERING, Player.STATE_READY, Player.STATE_ENDED)
+    } == true
     fun diagnosticSnapshot() = trace.snapshot()
 
     fun attach(view: ViewGroup) {
