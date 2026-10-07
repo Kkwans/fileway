@@ -66,6 +66,7 @@ class NativePlayer(context: Context) {
     private var externalJob: Job? = null
     private var externalRequest = 0L
     private var selectedExternal: Int? = null
+    private var subtitleDisabled = false
     private data class Choice(val group: TrackGroup, val index: Int, val type: Int)
     private val choices = mutableMapOf<Int, Choice>()
     private val ids = mutableMapOf<Pair<TrackGroup, Int>, Int>()
@@ -107,6 +108,7 @@ class NativePlayer(context: Context) {
         val epoch = session.open(autoplay)
         temporaryRate = null; seekTarget = null
         choices.clear(); ids.clear(); external.clear(); selectedExternal = null
+        subtitleDisabled = false
         mutable.value = PlayerState(phase = "正在打开视频", rate = session.preferredRate, mediaGeneration = epoch)
         trace.beginOpen(positionMs)
         val subtitles = MediaSubtitleLayer(context).also { current ->
@@ -146,7 +148,7 @@ class NativePlayer(context: Context) {
                 }
             }
             override fun onCues(cueGroup: CueGroup) {
-                if (current() && !textIsAss && !textIsCollected && selectedExternal == null) viewport?.showCues(cueGroup.cues)
+                if (current() && !subtitleDisabled && !textIsAss && !textIsCollected && selectedExternal == null) viewport?.showCues(cueGroup.cues)
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (!current()) return
@@ -248,7 +250,7 @@ class NativePlayer(context: Context) {
                     ?: "${if (group.type == C.TRACK_TYPE_AUDIO) "音轨" else "字幕"} ${index + 1}"
                 val item = NativeTrack(id, title, mime, format.language.orEmpty())
                 if (group.type == C.TRACK_TYPE_AUDIO) { audio.add(item); if (group.isTrackSelected(index)) selectedAudio = id }
-                else { text.add(item); if (group.isTrackSelected(index)) { selectedText = id; selectedFormat = format } }
+                else { text.add(item); if (!subtitleDisabled && group.isTrackSelected(index)) { selectedText = id; selectedFormat = format } }
             }
         }
         text.addAll(external.values)
@@ -305,6 +307,9 @@ class NativePlayer(context: Context) {
         externalRequest++
         externalJob?.cancel(); externalJob = null
         mutable.value = mutable.value.copy(subtitleLoading = false, operationError = null)
+        // Track notifications and cue callbacks can trail the user's command.
+        // An explicit off request wins immediately, even before renderer teardown.
+        subtitleDisabled = id == -1
         if (id in external) {
             selectedExternal = id
             engine?.let { it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build() }

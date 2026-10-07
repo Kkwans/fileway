@@ -11,6 +11,7 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.By
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
@@ -78,6 +79,10 @@ class NativeSubtitleTest {
             find(owner.window.decorView)
         }
         val rect = bounds ?: return null
+        // The permanent throughput label is UI, not subtitle pixels. Exclude only
+        // its live accessibility bounds from compositor checks; pixels() still
+        // inspects every pixel of both actual subtitle layers without a mask.
+        val speedBounds = device.findObject(By.desc("实际网络下载速度"))?.visibleBounds
         val captured = instrumentation.uiAutomation.takeScreenshot() ?: return null
         val screenshot = if (captured.config == Bitmap.Config.HARDWARE) {
             try { captured.copy(Bitmap.Config.ARGB_8888, false) ?: return null }
@@ -88,7 +93,7 @@ class NativeSubtitleTest {
             return IntArray(320 * 180) { index ->
                 val x = rect.left + ((index % 320 + .5) * rect.width() / 320).toInt()
                 val y = rect.top + ((index / 320 + .5) * rect.height() / 180).toInt()
-                screenshot.getPixel(x, y)
+                if (speedBounds?.contains(x, y) == true) Color.BLACK else screenshot.getPixel(x, y)
             }
         } finally { screenshot.recycle() }
     }
