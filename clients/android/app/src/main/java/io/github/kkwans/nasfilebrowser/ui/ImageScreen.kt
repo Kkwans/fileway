@@ -108,7 +108,8 @@ import kotlin.math.abs
     val scope = rememberCoroutineScope()
     val cache by model.cache.state.collectAsStateWithLifecycle()
     val account = model.cacheAccount()
-    val quality = cache.settings.imageQuality
+    var originalRequested by rememberSaveable(file.mediaKey) { mutableStateOf(false) }
+    val quality = if (originalRequested) ImageQuality.ORIGINAL else cache.settings.imageQuality
     val activeNow by rememberUpdatedState(active)
     var preview by remember { mutableStateOf<CoilImage?>(null) }
     var previewStatus by remember { mutableStateOf("正在读取预览") }
@@ -214,6 +215,7 @@ import kotlin.math.abs
                         forceWorkingFile = true
                     } else {
                         fetched = true; failure = null
+                        if (quality != ImageQuality.ORIGINAL && result.image is BitmapImage) preview = result.image
                         if (data is String) try {
                             model.cache.recordImage(CachedImage(cacheKey, account, current.name, current.path, current.wirePath, current.modified, current.size, 0))
                         } catch (error: Exception) { if (error is CancellationException) throw error }
@@ -229,7 +231,9 @@ import kotlin.math.abs
         canceled -> if (preview != null) "已保留预览图" else "已取消读取"
         !ready -> if (preview != null) "预览图 · $phase" else phase
         !imageState.isImageDisplayedInFullQuality -> "正在加载细节"
-        else -> quality.label
+        else -> if (quality in setOf(ImageQuality.LOW, ImageQuality.MEDIUM) &&
+            file.name.substringAfterLast('.').lowercase(java.util.Locale.ROOT) in setOf("gif", "webp"))
+            "预览图 · 如有动画请查看原图" else quality.label
     }
     Box(Modifier.fillMaxSize().semantics { contentDescription = "图片画面"; stateDescription = message }, contentAlignment = Alignment.Center) {
         if (!imageState.isImageDisplayed && !imageState.isPlaceholderDisplayed) {
@@ -256,6 +260,7 @@ import kotlin.math.abs
                 Text(message, Modifier.weight(1f, fill = false).padding(vertical = 12.dp), color = Color.White, style = MaterialTheme.typography.bodySmall)
                 if (failure != null || canceled) TextButton(onClick = { canceled = false; failure = null; attempt++ }) { Text("重试", color = Color(0xFFFF80A6)) }
                 else if (!ready) TextButton(onClick = { canceled = true }) { Text("取消读取", color = Color(0xFFFF80A6)) }
+                else if (quality != ImageQuality.ORIGINAL) TextButton(onClick = { originalRequested = true }) { Text("查看原图", color = Color(0xFFFF80A6)) }
                 else Spacer(Modifier.width(8.dp))
             }
         }

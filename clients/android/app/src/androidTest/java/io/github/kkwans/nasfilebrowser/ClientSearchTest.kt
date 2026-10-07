@@ -274,7 +274,7 @@ class ClientSearchTest {
             } else {
                 val items = JSONArray()
                 if (uri.path == "/api/resources/") directoryItems.forEach { name ->
-                    val image = name.endsWith(".png")
+                    val image = name.endsWith(".png") || imageBodies.containsKey(name)
                     items.put(JSONObject().put("name", name).put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
                         .put("isDir", !image && !name.endsWith(".mkv")).put("type", if (image) "image" else if (name.endsWith(".mkv")) "video" else "").put("size", imageBodies[name]?.size ?: 104857600).put("modified", modified))
                 }

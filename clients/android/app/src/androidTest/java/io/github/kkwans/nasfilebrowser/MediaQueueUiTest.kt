@@ -164,6 +164,33 @@ class MediaQueueUiTest {
         }
     }
 
+    @Test fun originalGifAdvancesFramesInTheActualViewer(): Unit = runBlocking {
+        // Owned 16x16 solid red/blue frames, 300/450 ms, looping. No external media.
+        val gif = android.util.Base64.decode("R0lGODlhEAAQAIEAAOYoPAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAHgAAACwAAAAAEAAQAAAIHQABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFgQEBACH5BAAtAAAALAAAAAAQABAAgR5a5gAAAAAAAAAAAAgdAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWBAQEAOw==", android.util.Base64.DEFAULT)
+        val source = ClientSearchTest.Fixture(listOf("animated.gif"), ownedPreviewPng(), imageBodies = mapOf("animated.gif" to gif))
+        val model = model(); val store = store()
+        val profile = store.save(ServerProfile(name = "Animated image fixture", address = source.url))
+        model.cache.awaitReady(); val original = model.cache.state.value.settings
+        try {
+            main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "one", "fixture-only", "direct") }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            main { model.cache.save(original.copy(imageQuality = ImageQuality.ORIGINAL)) }
+            withTimeout(5000) { model.cache.state.first { !it.busy && it.settings.imageQuality == ImageQuality.ORIGINAL } }
+            main { model.open(model.state.value.files.single()) }
+            renderedColor(230, 40, 60)
+            renderedColor(30, 90, 230)
+            renderedColor(230, 40, 60)
+            assertEquals(setOf("animated.gif"), source.rawImages.toSet())
+            capture("gallery-animated-gif")
+        } finally {
+            withContext(NonCancellable) {
+                main { model.closeImage(); model.cache.save(original) }
+                withTimeout(5000) { model.cache.state.first { !it.busy && it.settings == original } }
+                main { model.disconnect() }; store.remove(profile); source.close()
+            }
+        }
+    }
+
     @Test fun cacheDisabledOriginalUsesOwnedWorkingFileAndRemovesItOnExit(): Unit = runBlocking {
         val source = ClientSearchTest.Fixture(listOf("photo.png"), ownedPreviewPng(), imageBodies = mapOf("photo.png" to original()))
         val model = model(); val store = store(); val profile = store.save(ServerProfile(name = "Temporary image fixture", address = source.url))
