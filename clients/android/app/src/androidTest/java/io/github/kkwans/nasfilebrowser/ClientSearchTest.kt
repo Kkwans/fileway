@@ -173,7 +173,7 @@ class ClientSearchTest {
     }
 
     internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null,
-        private val modified: String = "", private val imageBodies: Map<String, ByteArray> = emptyMap()) : Closeable {
+        private val modified: String = "", private val imageBodies: Map<String, ByteArray> = emptyMap(), val library: LibraryFixtureData? = null) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -202,22 +202,35 @@ class ClientSearchTest {
         }, "nfb-search-model-listener").apply { isDaemon = true; start() }
         private fun serve(socket: Socket) {
             socket.soTimeout = 10_000
-            val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
-            val request = reader.readLine() ?: return
+            val input = socket.getInputStream()
+            fun line(): String? {
+                val value = java.io.ByteArrayOutputStream()
+                while (true) {
+                    val next = input.read(); if (next < 0) return null
+                    if (next == 10) return value.toString("UTF-8").trimEnd('\r')
+                    check(value.size() < 65536); value.write(next)
+                }
+            }
+            val request = line() ?: return
             val uri = URI(request.split(' ')[1])
             val headers = mutableMapOf<String, String>()
-            while (true) { val line = reader.readLine() ?: return; if (line.isEmpty()) break
+            while (true) { val line = line() ?: return; if (line.isEmpty()) break
                 headers[line.substringBefore(':').lowercase()] = line.substringAfter(':').trim() }
-            val body = CharArray(headers["content-length"]?.toIntOrNull() ?: 0)
+            val body = ByteArray(headers["content-length"]?.toIntOrNull() ?: 0)
             var read = 0
-            while (read < body.size) { val count = reader.read(body, read, body.size - read); if (count < 0) return; read += count }
+            while (read < body.size) { val count = input.read(body, read, body.size - read); if (count < 0) return; read += count }
             if (uri.path == "/api/login") {
                 val name = JSONObject(String(body)).getString("username")
                 val payload = JSONObject().put("user", JSONObject().put("id", if (name == "two") 2 else 1).put("username", name))
+                if (library != null) payload.getJSONObject("user").put("perm", JSONObject().put("admin", false).put("create", true).put("delete", true).put("modify", true).put("download", true))
                 reply(socket, "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature", "text/plain")
                 return
             }
             check(headers["x-auth"].orEmpty().count { it == '.' } == 2)
+            if (library?.route(request.substringBefore(' '), uri, String(body), favoriteRecords) { value, status ->
+                    val bytes = value.toByteArray()
+                    socket.getOutputStream().apply { write("HTTP/1.1 $status OK\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
+                } == true) return
             if (uri.path.startsWith("/api/favorites")) {
                 val method = request.substringBefore(' ')
                 val response = synchronized(favoriteLock) {

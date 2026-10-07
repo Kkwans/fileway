@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.ClientModel
@@ -46,7 +47,8 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
         outlineVariant = if (dark) Color(0xFF34343A) else Color(0xFFE9E9ED),
     )
     val layout = state.fileLayout
-    val displayed = remember(state.files, state.fileCategory, state.fileOrder) { model.directoryItems() }
+    val tags by model.tags.state.collectAsStateWithLifecycle()
+    val displayed = remember(state.files, state.fileCategory, state.fileOrder, tags.items, tags.filterId, tags.globalFilter) { model.directoryItems() }
     var details by remember(state.wirePath) { mutableStateOf<ResourceRef?>(null) }
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
@@ -74,6 +76,10 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
                     }
                 }
                 state.notice?.let { Text(it, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant) }
+                tags.items.firstOrNull { it.id == tags.filterId }?.let { tag -> Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("标签：${tag.name} · ${if (tags.globalFilter) "含目录关联" else "直接标记"}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton({ model.tags.filter(null) }) { Text("清除筛选") }
+                } }
                 if (state.busy) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = colors.primary, strokeWidth = 2.dp)
                     Text(state.stage, Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyMedium)
@@ -90,7 +96,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
                 }
             }
         }
-        details?.let { file -> FileDetailsDialog(file, actions = { FavoriteFileAction(model, file) }, onDismiss = { details = null }) }
+        details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) }, onDismiss = { details = null }) }
     }
 }
 

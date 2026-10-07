@@ -28,6 +28,8 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
             401 -> throw ServiceException(401, "登录已过期，请重新登录")
             403 -> throw ServiceException(403, "当前账号没有访问权限")
             404 -> throw ServiceException(404, "文件、目录或服务功能不存在")
+            400 -> throw ServiceException(400, "输入内容无效，请检查名称、路径或操作选项")
+            409 -> throw ServiceException(409, "数据状态已变化或目标已存在，请刷新后重试")
             else -> throw ServiceException(result.getInt("status"), "服务器暂时无法完成请求，请重试")
         }
     }
@@ -51,6 +53,7 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
     }
     suspend fun array(endpoint: String) = JSONArray(response("GET", endpoint))
+    suspend fun resourceBatch(paths: List<String>): JSONArray = JSONArray(response("POST", "/api/resources/batch", JSONObject().put("paths", JSONArray(paths))))
     fun search(path: String, wirePath: String, query: String, scope: SearchScope): Flow<SearchUpdate> =
         searchFlow(path, wirePath, query, scope, identity = { token(); Unit }) { command -> native(command.put("session", id)) }
     suspend fun lease(path: String, wirePath: String, cacheKey: String = ""): String {

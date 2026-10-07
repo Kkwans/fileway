@@ -39,13 +39,10 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
     LaunchedEffect(state.scope) { model.favorites.refresh() }
     LaunchedEffect(state.groups) { if (!filter.isNullOrEmpty() && state.groups.none { it.id == filter }) filter = null }
     val items = state.items.filter { filter == null || it.groupId == filter }
-    Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "library") }) { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("收藏夹", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-                TextButton(onClick = { managing = true }, enabled = enabled && state.loaded) { Text("管理分组") }
-                IconButton(onClick = model.favorites::refresh, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新收藏") }
-            }
+    LibraryScaffold(model, LibrarySection.FAVORITES, actions = {
+        TextButton(onClick = { managing = true }, enabled = enabled && state.loaded) { Text("管理分组") }
+        IconButton(onClick = model.favorites::refresh, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新收藏") }
+    }) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = .10f),
                     selectedLabelColor = MaterialTheme.colorScheme.primary, selectedLeadingIconColor = MaterialTheme.colorScheme.primary)
@@ -71,7 +68,7 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
             } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = "服务端收藏列表" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(items, key = { it.id }) { favorite ->
                     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background) {
-                        Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button) { model.openFavorite(favorite.path) }
+                        Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button) { model.openRemotePath(favorite.path) }
                             .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
                             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -87,7 +84,6 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
                     }
                 }
             }
-        }
     }
     editing?.let { item ->
         var name by remember(item.id) { mutableStateOf(item.name) }
@@ -171,14 +167,14 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
         dismissButton = { TextButton({ deleting = null }) { Text("取消") } }) }
 }
 
-@Composable internal fun FavoriteFileAction(model: ClientModel, file: ResourceRef) {
+@Composable internal fun FavoriteFileAction(model: ClientModel, file: ResourceRef, enabled: Boolean = true) {
     val state by model.favorites.state.collectAsStateWithLifecycle()
     var choosing by remember(file) { mutableStateOf(false) }
     LaunchedEffect(file, state.scope) { model.favorites.refresh() }
     val existing = model.favorites.favorite(file.path)
     Column {
         OutlinedButton(onClick = { if (existing != null) model.favorites.remove(existing) else choosing = true },
-            modifier = Modifier.fillMaxWidth(), enabled = state.loaded && !state.loading && !state.changing && state.error == null) {
+            modifier = Modifier.fillMaxWidth(), enabled = enabled && state.loaded && !state.loading && !state.changing && state.error == null) {
             Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
             Text(if (state.changing) "正在保存" else if (state.loading) "正在读取收藏" else if (existing == null) "加入收藏" else "取消收藏")
         }

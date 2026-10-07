@@ -1,0 +1,131 @@
+package io.github.kkwans.nasfilebrowser.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.kkwans.nasfilebrowser.R
+import io.github.kkwans.nasfilebrowser.app.*
+import io.github.kkwans.nasfilebrowser.app.FileLayout
+import io.github.kkwans.nasfilebrowser.data.*
+
+internal fun metadataColor(value: String, fallback: Color): Color = try { Color(android.graphics.Color.parseColor(value)) } catch (_: Exception) { fallback }
+
+@Composable internal fun TagsScreen(model: ClientModel, client: ClientState) {
+    val state by model.tags.state.collectAsStateWithLifecycle()
+    var chosen by rememberSaveable(state.scope) { mutableStateOf<String?>(null) }
+    var currentOnly by rememberSaveable(state.scope) { mutableStateOf(false) }
+    var creating by remember(state.scope) { mutableStateOf(false) }
+    var editing by remember(state.scope) { mutableStateOf<ServerTag?>(null) }
+    var removing by remember(state.scope) { mutableStateOf<ServerTag?>(null) }
+    var details by remember(state.scope) { mutableStateOf<ResourceRef?>(null) }
+    val tag = state.items.firstOrNull { it.id == chosen }
+    val enabled = !state.loading && !state.changing && !client.busy
+    LaunchedEffect(state.scope) { model.tags.refresh() }
+    LaunchedEffect(state.items) { if (state.items.none { it.id == chosen }) chosen = state.items.firstOrNull()?.id }
+    LaunchedEffect(tag, currentOnly, client.path) { tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null) } }
+    LibraryScaffold(model, LibrarySection.TAGS, actions = {
+        TextButton({ creating = true }, enabled = enabled && state.loaded) { Text("新建标签") }
+        IconButton(model.tags::refresh, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新标签") }
+    }) {
+        LibraryMessage(state.error ?: client.error, state.notice, state.loading || state.changing, model.tags::refresh)
+        if (state.items.isEmpty() && !state.loading && state.error == null) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("给文件加上自己的分类", style = MaterialTheme.typography.titleMedium)
+                Text("创建标签后，在文件详情中多选标记。颜色和关联会与网页端同步。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton({ creating = true }) { Text("新建第一个标签") }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = .10f), selectedLabelColor = MaterialTheme.colorScheme.primary)
+                state.items.forEach { value -> FilterChip(chosen == value.id, { chosen = value.id }, { Text(value.name) }, colors = colors,
+                    leadingIcon = { Box(Modifier.size(8.dp).background(metadataColor(value.color, MaterialTheme.colorScheme.primary), CircleShape)) }) }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!currentOnly, { currentOnly = false }, { Text("全部关联") }, colors = libraryChipColors())
+                FilterChip(currentOnly, { currentOnly = true }, { Text("当前目录") }, colors = libraryChipColors())
+                Spacer(Modifier.weight(1f))
+                tag?.let { TextButton({ editing = it }, enabled = enabled) { Text("编辑") } }
+            }
+            if (currentOnly) Text(client.path, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            tag?.let { selected -> Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${state.paths.size} / ${state.pathTotal} 个关联", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton({ model.tags.filter(selected.id, currentOnly.not()); model.tab("files") }, enabled = enabled) { Text("筛选文件页") }
+            } }
+            LibraryMessage(state.pathsError, null, state.pathsLoading) { tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null) } }
+            val candidates = state.paths.mapNotNull { it.file }
+            LazyColumn(Modifier.weight(1f).semantics { contentDescription = "标签关联路径" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.paths.isEmpty() && !state.pathsLoading && state.pathsError == null) item { Text(if (currentOnly) "这个目录还没有直接标记的文件。" else "还没有关联路径。从文件详情中添加标记。", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                items(state.paths, key = { it.path }) { row ->
+                    val file = row.file
+                    if (file != null) FileEntry(model, file, FileLayout.LIST, enabled, {
+                        if (file.directory) { model.tags.filter(tag?.id, true); model.tab("files") }
+                        model.openTagged(file, candidates)
+                    }, { details = file }, location = file.path.substringBeforeLast('/').ifEmpty { "/" })
+                    else Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(row.path, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            Text(row.error.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            tag?.let { value -> TextButton({ model.tags.removePath(value, row.path) }, enabled = enabled) { Text("取消此关联") } }
+                        }
+                    }
+                }
+                if (state.paths.size < state.pathTotal) item { TextButton({ tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null, true) } }, enabled = !state.pathsLoading && enabled,
+                    modifier = Modifier.fillMaxWidth()) { Text("加载更多关联") } }
+            }
+        }
+    }
+    if (creating || editing != null) TagEditor(model, editing, dismiss = { creating = false; editing = null }, remove = { removing = editing; editing = null })
+    removing?.let { value -> AlertDialog(onDismissRequest = { removing = null }, title = { Text("删除标签“${value.name}”？") },
+        text = { Text("这个标签的全部关联将被取消，文件保持原位。网页端也会同步此变更。") },
+        confirmButton = { TextButton({ model.tags.remove(value); removing = null }, enabled = enabled) { Text("删除标签") } },
+        dismissButton = { TextButton({ removing = null }) { Text("取消") } }) }
+    details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) }, onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun TagEditor(model: ClientModel, tag: ServerTag?, dismiss: () -> Unit, remove: (() -> Unit)? = null) {
+    val state by model.tags.state.collectAsStateWithLifecycle()
+    var name by remember(tag?.id) { mutableStateOf(tag?.name.orEmpty()) }
+    var color by remember(tag?.id) { mutableStateOf(tag?.color ?: TAG_COLORS.firstOrNull { model.tags.colorAvailable(it) } ?: TAG_COLORS.first()) }
+    val colorValid = color.equals(tag?.color, true) || model.tags.colorAvailable(color, tag?.id)
+    AlertDialog(onDismissRequest = dismiss, title = { Text(if (tag == null) "新建标签" else "编辑标签") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(name, { name = it }, label = { Text("标签名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            Text("选择标记颜色", style = MaterialTheme.typography.titleSmall)
+            if (!colorValid) Text("这些预设颜色已有标签使用，请先调整已有标签的颜色。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            FlowRow {
+                TAG_COLORS.forEachIndexed { index, value ->
+                    val available = model.tags.colorAvailable(value, tag?.id) || value.equals(tag?.color, true)
+                    Box(Modifier.size(48.dp).selectable(value.equals(color, true), enabled = available, role = Role.RadioButton) { color = value }
+                        .semantics { contentDescription = "标签颜色 ${index + 1}${if (!available) "，已被使用" else ""}" }, contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(28.dp).border(if (value.equals(color, true)) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape).padding(3.dp)
+                            .background(metadataColor(value, MaterialTheme.colorScheme.primary).copy(alpha = if (available) 1f else .25f), CircleShape))
+                    }
+                }
+            }
+            remove?.let { TextButton(it) { Text("删除标签") } }
+        }
+    }, confirmButton = { TextButton({ model.tags.save(tag, name, color); dismiss() }, enabled = name.isNotBlank() && colorValid && !state.changing) { Text("保存") } },
+        dismissButton = { TextButton(dismiss) { Text("取消") } })
+}

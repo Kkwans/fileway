@@ -56,13 +56,16 @@ import java.util.Locale
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (!state.connected) { ConnectionScreen(model, state); return }
-    pageState.SaveableStateProvider(if (search.open) "search" else state.tab) {
+    pageState.SaveableStateProvider(if (search.open) "search" else if (state.tab == "library") "library/${state.librarySection}" else state.tab) {
         LibraryTheme {
             when {
                 search.open -> SearchScreen(model, state)
                 state.tab == "files" -> BrowserScreen(model, state)
                 state.tab == "settings" -> SettingsScreen(model, state)
-                state.tab == "library" -> FavoritesScreen(model, state)
+                state.tab == "library" -> when (state.librarySection) {
+                    io.github.kkwans.nasfilebrowser.app.LibrarySection.FAVORITES -> FavoritesScreen(model, state)
+                    io.github.kkwans.nasfilebrowser.app.LibrarySection.TAGS -> TagsScreen(model, state)
+                }
                 else -> RecentScreen(model, state, recent)
             }
         }
@@ -107,7 +110,7 @@ import java.util.Locale
                 }
             }
             details?.let { file -> FileDetailsDialog(file, showSize = false, openEnabled = !state.busy,
-                actions = { FavoriteFileAction(model, file) },
+                actions = { FileActions(model, file) },
                 onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
         }
     }

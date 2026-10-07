@@ -98,7 +98,7 @@ import kotlin.math.abs
                 }
             }
         }
-        details?.let { FileDetailsDialog(it, onDismiss = { details = null }) }
+        details?.let { FileDetailsDialog(it, actions = { FileActions(model, it) }, onDismiss = { details = null }) }
     }
 }
 

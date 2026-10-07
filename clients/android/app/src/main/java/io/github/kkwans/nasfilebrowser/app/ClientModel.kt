@@ -34,6 +34,7 @@ import org.json.JSONObject
 import java.net.URLEncoder
 
 typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
+enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签") }
 
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
@@ -45,6 +46,7 @@ data class ClientState(
     val fileCategory: FileCategory = FileCategory.ALL, val fileOrder: FileOrder = FileOrder.NAME,
     val downloadBytesPerSecond: Long? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
+    val librarySection: LibrarySection = LibrarySection.FAVORITES,
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
 )
@@ -100,6 +102,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var layoutRequest = 0L
     val search: SearchController = SearchController(viewModelScope, { context == it && generation == it.generation }, ::openSearchResult)
     val favorites = FavoritesController(viewModelScope) { context === it && generation == it.generation }
+    val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     init {
         player.checkpoint = { saveProgress() }
         val expected = generation
@@ -173,6 +176,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 if (generation != expected) return@launch
                 context = bound
                 favorites.bind(bound)
+                tags.bind(bound)
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
                 mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username, fileLayout = directory?.fileLayout ?: FileLayout.COVER)
@@ -238,15 +242,15 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun directoryItems(): List<ResourceRef> = mutable.value.let { presentFiles(it.files, it.fileCategory, it.fileOrder) }
+    fun directoryItems(): List<ResourceRef> = mutable.value.let { presentFiles(it.files, it.fileCategory, it.fileOrder).filter { file -> tags.matches(file.path) } }
     fun fileCategory(value: FileCategory) { mutable.value = mutable.value.copy(fileCategory = value) }
     fun fileOrder(value: FileOrder) { mutable.value = mutable.value.copy(fileOrder = value) }
     fun open(file: ResourceRef) = openFrom(file, directoryItems(), MediaQueueSource.DIRECTORY)
-    fun openFavorite(path: String) {
+    fun openRemotePath(path: String) {
         val bound = context ?: return
         if (mutable.value.busy) return
         operation?.cancel()
-        mutable.value = mutable.value.copy(busy = true, stage = "正在确认收藏文件", error = null)
+        mutable.value = mutable.value.copy(busy = true, stage = "正在确认文件来源", error = null)
         operation = viewModelScope.launch {
             try {
                 val wire = SearchResult.encodePath(path)
@@ -254,7 +258,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 currentCoroutineContext().ensureActive()
                 check(context === bound && generation == bound.generation)
                 val actualPath = data.optString("path", path)
-                check(actualPath == path) { "收藏路径已变化，请重新选择" }
+                check(actualPath == path) { "文件路径已变化，请重新选择" }
                 val file = ResourceRef(path, data.optString("wirePath").ifEmpty { wire }, data.optString("name").ifEmpty { path.substringAfterLast('/') },
                     data.getBoolean("isDir"), data.optString("type"), data.optLong("size"), data.optString("modified"))
                 mutable.value = mutable.value.copy(busy = false, stage = "")
@@ -262,11 +266,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 else openQueued(file, MediaQueue.snapshot(++queueSequence, bound.account.key, file, listOf(file), MediaQueueSource.SINGLE))
             } catch (error: Exception) {
                 if (error !is CancellationException && context === bound) mutable.value = mutable.value.copy(
-                    busy = false, stage = "", error = error.message ?: "收藏文件无法打开，请重试")
+                    busy = false, stage = "", error = error.message ?: "文件无法打开，请重试")
             }
         }
     }
     private fun openSearchResult(file: ResourceRef) = openFrom(file, search.mediaSnapshot(), MediaQueueSource.SEARCH)
+    fun openTagged(file: ResourceRef, candidates: List<ResourceRef>) = openFrom(file, candidates, MediaQueueSource.TAGGED)
     private fun openFrom(file: ResourceRef, candidates: List<ResourceRef>, source: MediaQueueSource) {
         val bound = context ?: return
         openQueued(file, MediaQueue.snapshot(++queueSequence, bound.account.key, file, candidates, source))
@@ -526,6 +531,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun librarySection(value: LibrarySection) { search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value) }
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return
         if (snapshot.accountKey != bound.account.key) return
@@ -644,6 +650,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         previewImageLoader.memoryCache?.clear()
         search.close()
         favorites.bind(null)
+        tags.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
         val previous = closing; val media = mediaClosing

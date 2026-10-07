@@ -3,7 +3,7 @@ package io.github.kkwans.nasfilebrowser.app
 import java.util.Locale
 
 enum class MediaKind { IMAGE, VIDEO }
-enum class MediaQueueSource(val label: String) { DIRECTORY("当前目录"), SEARCH("当前搜索结果"), SINGLE("单个文件") }
+enum class MediaQueueSource(val label: String) { DIRECTORY("当前目录"), SEARCH("当前搜索结果"), SINGLE("单个文件"), TAGGED("当前标签结果") }
 
 fun ResourceRef.mediaKind(): MediaKind? {
     if (directory) return null
