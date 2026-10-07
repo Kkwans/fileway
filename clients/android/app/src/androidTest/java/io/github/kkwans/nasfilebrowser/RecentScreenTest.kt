@@ -83,8 +83,15 @@ class RecentScreenTest {
             theme(AppTheme.DARK); text("文件已变化"); capture("cards-dark")
             text(longName).click()
             assertTrue(withContext(Dispatchers.IO) { source.playbackStarted.await(5, TimeUnit.SECONDS) })
-            text("取消").click()
-            assertNull(model.state.value.selected)
+            val cancel = device.wait(Until.findObject(By.desc("取消播放请求")), 5000)
+                ?: throw AssertionError("Accessible playback cancel action is missing")
+            cancel.click()
+            withTimeout(5000) { model.state.first { it.selected == null && !it.busy } }
+            assertEquals("recent", model.state.value.tab)
+            assertNull(model.state.value.mediaQueue)
+            source.releasePlayback.countDown()
+            delay(250)
+            assertNull("Late history replies must not reopen a canceled recent item", model.state.value.selected)
             main { model.connectDraft(profile.name, source.url, BackendKind.NAS, "two", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy && it.accountName == "two" } }
             withTimeout(5000) { model.recent.first { it.isEmpty() } }

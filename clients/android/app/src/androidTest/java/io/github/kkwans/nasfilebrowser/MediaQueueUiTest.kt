@@ -215,6 +215,11 @@ class MediaQueueUiTest {
             source.stallNextRead.set(true)
             device.findObject(By.desc("下一个视频")).click()
             assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
+            main { model.cancel() }
+            assertFalse(model.state.value.busy)
+            assertEquals("Canceling a queue transition must keep the current queue item", "two.mkv", model.state.value.selected?.name)
+            assertEquals(snapshot, model.state.value.mediaQueue!!.snapshotId)
+            assertTrue(model.state.value.error.orEmpty().contains("已取消打开"))
             (device.wait(Until.findObject(By.desc("上一个视频").enabled(true)), 5000) ?: error("Previous queue action has not rendered")).click()
             source.releaseRead.countDown()
             withTimeout(10_000) { model.state.first { it.selected?.name == "one.mkv" && !it.busy } }
