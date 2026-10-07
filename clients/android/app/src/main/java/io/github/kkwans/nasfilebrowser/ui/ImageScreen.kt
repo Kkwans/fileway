@@ -34,11 +34,14 @@ import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.data.*
+import io.github.kkwans.nasfilebrowser.core.NativeTransport
+import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -111,6 +114,8 @@ import kotlin.math.abs
     var previewStatus by remember { mutableStateOf("正在读取预览") }
     val latestPreview by rememberUpdatedState(preview)
     var asset by remember { mutableStateOf<PreviewLease?>(null) }
+    var readingLease by remember { mutableStateOf<PreviewLease?>(null) }
+    var readProgress by remember { mutableStateOf<Float?>(null) }
     var working by remember { mutableStateOf<TemporaryImage?>(null) }
     var current by remember { mutableStateOf(file) }
     var attempt by remember { mutableIntStateOf(0) }
@@ -155,6 +160,7 @@ import kotlin.math.abs
         try {
             val result = model.image(file, quality)
             owned = result.first; current = result.second
+            readingLease = owned
             phase = if (quality == ImageQuality.ORIGINAL) "正在读取原图" else "正在读取图片"
             if (cache.settings.imageMB == 0L || forceWorkingFile) {
                 temporary = TemporaryImages.read(context, owned, if (quality == ImageQuality.ORIGINAL || quality == ImageQuality.HIGH) current.size else 0)
@@ -166,10 +172,25 @@ import kotlin.math.abs
             if (error is CancellationException) throw error
             if (requestToken == token && activeNow) failure = imageFailure(error)
         } finally {
+            if (readingLease === owned) readingLease = null
             if (asset === owned) asset = null
             if (working === temporary) working = null
             withContext(NonCancellable + Dispatchers.IO) { temporary?.close() }
             owned?.release()
+        }
+    }
+    LaunchedEffect(readingLease, active, fetched, canceled) {
+        readProgress = null
+        val source = readingLease ?: return@LaunchedEffect
+        if (!active || fetched || canceled) return@LaunchedEffect
+        while (true) {
+            try {
+                val stats = NativeTransport.call(JSONObject().put("op", "lease_stats").put("session", source.scope).put("url", source.url)) as JSONObject
+                val total = stats.getLong("currentReadTotal")
+                readProgress = if (total > 0) (stats.getLong("currentReadBytes").toDouble() / total).coerceIn(0.0, 1.0).toFloat() else null
+            } catch (cancelledRequest: CancellationException) { throw cancelledRequest }
+            catch (_: Exception) { readProgress = null }
+            delay(250)
         }
     }
     LaunchedEffect(active, imageState.zoomableState) {
@@ -225,7 +246,13 @@ import kotlin.math.abs
             shape = RoundedCornerShape(10.dp), color = Color(0xE6202023),
         ) {
             Row(Modifier.padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!canceled && failure == null && (!ready || !imageState.isImageDisplayedInFullQuality)) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFFFF80A6))
+                if (!canceled && failure == null && (!ready || !imageState.isImageDisplayedInFullQuality)) {
+                    val progress = readProgress
+                    if (progress != null && !fetched) {
+                        CircularProgressIndicator(progress = { progress }, modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color(0xFFFF80A6))
+                        Text("${(progress * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    } else CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFFFF80A6))
+                }
                 Text(message, Modifier.weight(1f, fill = false).padding(vertical = 12.dp), color = Color.White, style = MaterialTheme.typography.bodySmall)
                 if (failure != null || canceled) TextButton(onClick = { canceled = false; failure = null; attempt++ }) { Text("重试", color = Color(0xFFFF80A6)) }
                 else if (!ready) TextButton(onClick = { canceled = true }) { Text("取消读取", color = Color(0xFFFF80A6)) }
