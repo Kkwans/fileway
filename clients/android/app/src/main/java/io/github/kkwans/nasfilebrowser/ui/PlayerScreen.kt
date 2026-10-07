@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.view.Display
 import android.view.accessibility.AccessibilityManager
 import android.os.SystemClock
 import android.media.AudioManager
@@ -579,8 +580,27 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             item { SourceField("文件", file.name) }
                             item { SourceField("服务器与账号", client.serverLabel) }
                             item { SourceField("路径", file.path) }
-                            item { SourceField("播放方式", "原生播放") }
-                            if (state.width > 0) item { SourceField("画面", "${state.width} × ${state.height}") }
+                            item { SourceField("播放方式", "原生播放 · Media3") }
+                            item { SourceField("画质", "原画 · 直接读取原文件") }
+                            if (state.width > 0) item { SourceField("源分辨率", "${state.width} × ${state.height}") }
+                            item { SourceField("视频编码", state.sourceVideoCodec) }
+                            item { SourceField("实际视频解码器", state.videoDecoder) }
+                            item { SourceField("实际音频解码器", state.audioDecoder) }
+                            item { SourceField("片源动态范围", state.sourceDynamicRange) }
+                            item { SourceField("片源色彩空间", state.sourceColorSpace) }
+                            item {
+                                val supported = view.display?.hdrCapabilities?.supportedHdrTypes
+                                val names = supported?.map { type -> when (type) {
+                                    Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION -> "Dolby Vision"
+                                    Display.HdrCapabilities.HDR_TYPE_HDR10 -> "HDR10"
+                                    Display.HdrCapabilities.HDR_TYPE_HLG -> "HLG"
+                                    Display.HdrCapabilities.HDR_TYPE_HDR10_PLUS -> "HDR10+"
+                                    else -> "类型 $type"
+                                } }
+                                SourceField("当前屏幕 HDR 能力", names?.joinToString(" / ")?.ifEmpty { "系统未报告 HDR 支持" } ?: "未知")
+                            }
+                            item { SourceField("实际 HDR 输出", "尚未确认；片源标记和屏幕支持不代表已启用 HDR") }
+                            item { SourceField("引擎报告的缓冲位置", if (state.bufferedPositionMs > 0) clock(state.bufferedPositionMs) else "未知") }
                             if (state.durationMs > 0) item { SourceField("全片时长", clock(state.durationMs)) }
                             client.progressStatus?.let { item { SourceField("续播", it) } }
                         }

@@ -40,6 +40,8 @@ data class PlayerState(
     val subtitleDelayMs: Long = 0, val subtitleLoading: Boolean = false,
     val firstFrameRendered: Boolean = false, val bufferedPositionMs: Long = 0,
     val videoDecoder: String = "未知", val audioDecoder: String = "未知",
+    val sourceVideoCodec: String = "未知", val sourceDynamicRange: String = "未知",
+    val sourceColorSpace: String = "未知",
 )
 
 /** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
@@ -170,6 +172,12 @@ class NativePlayer(context: Context) {
             override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                 if (current()) mutable.value = mutable.value.copy(audioDecoder = decoderName)
             }
+            override fun onVideoDecoderReleased(eventTime: AnalyticsListener.EventTime, decoderName: String) {
+                if (current() && mutable.value.videoDecoder == decoderName) mutable.value = mutable.value.copy(videoDecoder = "未知")
+            }
+            override fun onAudioDecoderReleased(eventTime: AnalyticsListener.EventTime, decoderName: String) {
+                if (current() && mutable.value.audioDecoder == decoderName) mutable.value = mutable.value.copy(audioDecoder = "未知")
+            }
         })
         viewport?.let { player.setVideoSurfaceView(it.video) }
         player.setPlaybackSpeed(session.preferredRate)
@@ -188,6 +196,8 @@ class NativePlayer(context: Context) {
         }
         if (previous.positionMs == 0L && player.currentPosition > 0) trace.record(PlaybackTraceAction.FIRST_CLOCK, player.currentPosition.toDouble())
         if (previous.playing != player.isPlaying) trace.record(if (player.isPlaying) PlaybackTraceAction.PLAYING else PlaybackTraceAction.PAUSED)
+        val format = player.videoFormat
+        val colors = format?.colorInfo
         mutable.value = previous.copy(
             phase = when {
                 player.playbackState == Player.STATE_ENDED -> "播放完毕"
@@ -199,6 +209,20 @@ class NativePlayer(context: Context) {
             }, playing = player.isPlaying, positionMs = player.currentPosition.coerceAtLeast(0), durationMs = player.duration.coerceAtLeast(0),
             seekable = player.isCurrentMediaItemSeekable, buffering = player.bufferedPercentage.toFloat(), bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0),
             width = player.videoSize.width, height = player.videoSize.height, rate = player.playbackParameters.speed, volume = (player.volume * 100).toInt(),
+            sourceVideoCodec = format?.codecs ?: format?.sampleMimeType ?: "未知",
+            sourceDynamicRange = when {
+                format?.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION -> "Dolby Vision（片源标记）"
+                colors?.colorTransfer == C.COLOR_TRANSFER_ST2084 -> "PQ（片源标记）"
+                colors?.colorTransfer == C.COLOR_TRANSFER_HLG -> "HLG（片源标记）"
+                colors?.colorTransfer == C.COLOR_TRANSFER_SDR -> "SDR（片源标记）"
+                else -> "未知"
+            },
+            sourceColorSpace = when (colors?.colorSpace) {
+                C.COLOR_SPACE_BT2020 -> "BT.2020"
+                C.COLOR_SPACE_BT709 -> "BT.709"
+                C.COLOR_SPACE_BT601 -> "BT.601"
+                else -> "未知"
+            },
         )
     }
     private fun refreshTracks() {
@@ -213,7 +237,10 @@ class NativePlayer(context: Context) {
                 val id = ids.getOrPut(group.mediaTrackGroup to index) { nextId++ }
                 choices[id] = Choice(group.mediaTrackGroup, index, group.type)
                 val mime = format.codecs.takeIf { format.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES } ?: format.sampleMimeType.orEmpty()
-                val item = NativeTrack(id, format.label ?: format.language ?: "轨道 ${index + 1}", mime, format.language.orEmpty())
+                val title = format.label?.takeIf { it.isNotBlank() }
+                    ?: format.language?.takeUnless { it.isBlank() || it == "und" }
+                    ?: "${if (group.type == C.TRACK_TYPE_AUDIO) "音轨" else "字幕"} ${index + 1}"
+                val item = NativeTrack(id, title, mime, format.language.orEmpty())
                 if (group.type == C.TRACK_TYPE_AUDIO) { audio.add(item); if (group.isTrackSelected(index)) selectedAudio = id }
                 else { text.add(item); if (group.isTrackSelected(index)) { selectedText = id; selectedFormat = format } }
             }
