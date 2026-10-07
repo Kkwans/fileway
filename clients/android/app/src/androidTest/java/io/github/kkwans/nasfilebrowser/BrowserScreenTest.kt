@@ -60,13 +60,15 @@ class BrowserScreenTest {
                 instrumentation.waitForIdleSync()
                 val offsets = listOf("A.mkv", "B.mkv", "C.mkv", longName).map { name ->
                     var offset: Int? = null
-                    for (attempt in 0 until 6) {
+                    // Inspect the final scroll result too, and wait for the
+                    // accessibility tree rather than only the app's main queue.
+                    for (attempt in 0..6) {
+                        device.waitForIdle()
                         val title = device.findObject(By.text(name))?.visibleBounds
                         val size = if (title == null || title.height() == 0) null else device.findObjects(By.text("100.0 MB")).map { it.visibleBounds }
                             .filter { it.height() > 0 && kotlin.math.abs(it.left - title.left) <= 2 && it.top >= title.bottom }.minByOrNull { it.top }
                         if (title != null && size != null) { offset = size.top - title.top; break }
-                        grid.scroll(Direction.DOWN, .35f)
-                        instrumentation.waitForIdleSync()
+                        if (attempt < 6) grid.scroll(Direction.DOWN, .35f)
                     }
                     offset ?: error("Visible metadata missing for $name")
                 }
