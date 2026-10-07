@@ -14,6 +14,7 @@ internal class LibraryFixtureData {
     val files = linkedMapOf<String, JSONObject>()
     val mutations = mutableListOf<Pair<String, String>>()
     val snapshots = mutableMapOf<String, Pair<String, String>>()
+    val reports = linkedMapOf<String, JSONObject>()
     var conflictOnce = false
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
@@ -29,6 +30,24 @@ internal class LibraryFixtureData {
     }
     fun route(method: String, uri: URI, body: String, favorites: JSONArray, reply: (String, Int) -> Unit): Boolean = synchronized(this) {
         val path = uri.path; val input = if (body.isBlank()) JSONObject() else JSONObject(body)
+        if (path == "/api/analysis/recent") {
+            val tool = query(uri)["tool"] ?: "storage"
+            val values = (0 until tasks.length()).map { tasks.getJSONObject(it) }.filter { it.getString("type") == "analysis.$tool" }
+                .map { JSONObject().put("id", it.getString("id")).put("tool", tool).put("status", it.getString("status")).put("createdAt", it.optLong("createdAt"))
+                    .put("scopes", JSONArray().put("/scan")).put("resultReady", reports.containsKey(it.getString("id"))) }
+            reply(JSONObject().put("items", JSONArray(values)).toString(), 200); return true
+        }
+        if (path == "/api/volumes") { reply("{}", 403); return true }
+        if (path in setOf("/api/analysis/storage", "/api/analysis/duplicates") && method == "POST") {
+            val type = if (path.endsWith("storage")) "analysis.storage" else "analysis.duplicates"
+            val value = task("analysis-${++sequence}", type, "queued", "扫描样本")
+            tasks.put(value); mutations.add(method to path); reply(value.toString(), 202); return true
+        }
+        if (path.startsWith("/api/analysis/")) {
+            if (path.endsWith("/cleanup") && method == "GET") { reply("{}", 404); return true }
+            val result = reports[path.substringAfterLast('/')]
+            if (result != null) { reply(result.toString(), 200); return true }
+        }
         if (path == "/api/resources/batch" && method == "POST") {
             val paths = input.getJSONArray("paths"); val result = JSONArray()
             for (i in 0 until paths.length()) {

@@ -114,6 +114,7 @@ internal fun serverTime(value: Long): String = if (value <= 0) "未提供" else 
                 if (task.sourcePath.isNotEmpty()) Text("来源：${task.sourcePath}")
                 if (task.outputPath.isNotEmpty()) Text("输出：${task.outputPath}")
                 if (task.error.isNotEmpty()) Text(task.error, color = MaterialTheme.colorScheme.error)
+                if (task.type in setOf("analysis.storage", "analysis.duplicates")) TextButton({ model.tasks.closeDetail(); model.showAnalysis(task.id, task.type) }) { Text(if (task.status == "completed") "查看分析报告" else "查看分析进度") }
                 if (task.status == "completed" && task.outputPath.startsWith('/')) TextButton({ model.tasks.closeDetail(); model.openRemotePath(task.outputPath) }, enabled = !client.busy) { Text("打开输出文件") }
                 TaskActions(model, task, enabled && !state.detailLoading && state.detailError == null && model.tasks.canEdit(task)) { confirmAction(task, it) }
             }

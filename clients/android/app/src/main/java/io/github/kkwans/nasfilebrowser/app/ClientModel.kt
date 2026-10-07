@@ -34,7 +34,7 @@ import org.json.JSONObject
 import java.net.URLEncoder
 
 typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
-enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签"), TRASH("回收站", "回收站"), TASKS("任务", "任务中心") }
+enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签"), TRASH("回收站", "回收站"), TASKS("任务", "任务中心"), TOOLS("工具", "存储工具") }
 
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
 data class ClientState(
@@ -106,6 +106,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
+    val storageTools = StorageToolsController(viewModelScope) { context === it && generation == it.generation }
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
         viewModelScope.launch { search.state.collect { syncLibraryObservers() } }
@@ -184,6 +185,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 tags.bind(bound)
                 tasks.bind(bound)
                 trash.bind(bound)
+                storageTools.bind(bound)
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
                 mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username, fileLayout = directory?.fileLayout ?: FileLayout.COVER, permissions = opened.identity.permissions)
@@ -540,10 +542,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun librarySection(value: LibrarySection) { search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value) }
     fun showServerTask(id: String) { librarySection(LibrarySection.TASKS); tasks.select(id) }
+    fun showAnalysis(id: String, type: String) { librarySection(LibrarySection.TOOLS); storageTools.openReport(id, if (type == "analysis.storage") "storage" else "duplicates") }
     private fun syncLibraryObservers() {
         val visible = foreground && mutable.value.connected && mutable.value.selected == null && mutable.value.image == null && !search.state.value.open
         tasks.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TASKS)
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
+        storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
     }
     private fun resourceTrashed(bound: SessionContext, file: ResourceRef) {
         if (context !== bound) return
@@ -687,6 +691,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         tags.bind(null)
         tasks.bind(null)
         trash.bind(null)
+        storageTools.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
         val previous = closing; val media = mediaClosing

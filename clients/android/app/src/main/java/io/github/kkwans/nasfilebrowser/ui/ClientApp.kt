@@ -67,6 +67,7 @@ import java.util.Locale
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TAGS -> TagsScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TASKS -> ServerTasksScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TRASH -> TrashScreen(model, state)
+                    io.github.kkwans.nasfilebrowser.app.LibrarySection.TOOLS -> StorageToolsScreen(model, state)
                 }
                 else -> RecentScreen(model, state, recent)
             }
