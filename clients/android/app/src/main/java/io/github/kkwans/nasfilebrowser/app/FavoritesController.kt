@@ -41,7 +41,7 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
         val context = bound ?: return
         if (mutable.value.loading || mutable.value.changing || !isCurrent(context)) return
         val expected = ++revision
-        mutable.value = mutable.value.copy(loading = true, error = null)
+        mutable.value = mutable.value.copy(loading = true, error = null, notice = null)
         reads = scope.launch {
             try {
                 val (items, groups) = read(context)

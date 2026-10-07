@@ -47,9 +47,12 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
                 IconButton(onClick = model.favorites::refresh, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新收藏") }
             }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(filter == null, { filter = null }, { Text("全部 ${state.items.size}") })
-                FilterChip(filter == "", { filter = "" }, { Text("未分组") })
+                val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = .10f),
+                    selectedLabelColor = MaterialTheme.colorScheme.primary, selectedLeadingIconColor = MaterialTheme.colorScheme.primary)
+                FilterChip(filter == null, { filter = null }, { Text("全部 ${state.items.size}") }, colors = chipColors)
+                FilterChip(filter == "", { filter = "" }, { Text("未分组") }, colors = chipColors)
                 state.groups.forEach { group -> FilterChip(filter == group.id, { filter = group.id }, { Text(group.name) },
+                    colors = chipColors,
                     leadingIcon = { Box(Modifier.size(8.dp).background(favoriteColor(group.color, MaterialTheme.colorScheme.primary), CircleShape)) }) }
             }
             if (state.loading || state.changing || client.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
