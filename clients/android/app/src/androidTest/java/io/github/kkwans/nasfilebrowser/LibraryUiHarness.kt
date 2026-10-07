@@ -18,6 +18,12 @@ internal open class LibraryUiHarness {
     protected suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
     protected fun text(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.text(label)), 5000) ?: missing(label) }
     protected fun action(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.desc(label)), 5000) ?: missing(label) }
+    protected fun fileDetails(name: String) {
+        var target = text(name)
+        while (!target.isLongClickable) target = target.parent ?: missing("长按文件卡片 $name")
+        target.longClick()
+        text("文件详情")
+    }
     private fun missing(label: String): Nothing {
         capture("library-missing-action")
         device.dumpWindowHierarchy(java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "library-missing-action.xml"))
