@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.extractor.*
+import androidx.media3.extractor.text.CuesWithTiming
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
@@ -31,6 +32,7 @@ class AssPacketExtractorTest {
         val fonts = mutableMapOf<String, ByteArray>()
         val headers = mutableMapOf<String, Format>()
         val dialogues = mutableListOf<Dialogue>()
+        val textCues = mutableListOf<CuesWithTiming>()
         val formats = mutableMapOf<Int, Format>()
         val samples = mutableMapOf<Int, Int>()
         var map: SeekMap? = null
@@ -40,6 +42,7 @@ class AssPacketExtractorTest {
             override fun dialogue(trackId: String, startMs: Long, durationMs: Long, packet: ByteArray) {
                 dialogues.add(Dialogue(trackId, startMs, durationMs, packet.decodeToString()))
             }
+            override fun textCues(trackId: String, cues: CuesWithTiming) { textCues.add(cues) }
         })
         extractor.init(object : ExtractorOutput {
             override fun track(id: Int, type: Int): TrackOutput = object : TrackOutput by DiscardingTrackOutput() {
@@ -86,6 +89,9 @@ class AssPacketExtractorTest {
                 assertTrue(dialogues.any { it.text.contains("\\pos(80,40)") && it.text.contains("I") })
                 assertTrue(dialogues.any { it.text.contains("\\p1") && it.text.contains("m 0 0") })
                 assertTrue(dialogues.all { it.start in 500..600 && it.duration in 10_000..10_600 })
+                assertTrue("Public text cues must retain the long interval needed for mid-cue selection", textCues.any {
+                    it.startTimeUs <= 6_000_000 && it.endTimeUs > 6_000_000 && it.cues.any { cue -> cue.text.toString().contains("NATIVE TEXT") }
+                })
                 val subtitles = formats.filterValues { it.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES }
                 assertEquals("ASS interception must retain all eight selectable subtitle tracks", 8, subtitles.size)
                 assertEquals(6, subtitles.values.count { it.codecs == MimeTypes.APPLICATION_PGS })

@@ -10,6 +10,8 @@ import androidx.media3.extractor.*
 import androidx.media3.extractor.mkv.EbmlProcessor
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory
+import androidx.media3.extractor.text.CueDecoder
+import androidx.media3.extractor.text.CuesWithTiming
 import androidx.media3.extractor.text.SubtitleTranscodingExtractorOutput
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
@@ -22,8 +24,10 @@ internal class AssPacketExtractor(private val sink: Sink) : Extractor {
         fun font(name: String, bytes: ByteArray)
         fun format(format: Format)
         fun dialogue(trackId: String, startMs: Long, durationMs: Long, packet: ByteArray)
+        fun textCues(trackId: String, cues: CuesWithTiming) = Unit
     }
     private val streams = mutableListOf<Capture>()
+    private val plainStreams = mutableListOf<PlainTextCapture>()
     private var transcoder: SubtitleTranscodingExtractorOutput? = null
     private var fontBytes = 0L
     private val delegate = object : MatroskaExtractor(DefaultSubtitleParserFactory(), FLAG_EMIT_RAW_SUBTITLE_DATA) {
@@ -63,7 +67,13 @@ internal class AssPacketExtractor(private val sink: Sink) : Extractor {
 
     override fun sniff(input: ExtractorInput) = delegate.sniff(input)
     override fun init(output: ExtractorOutput) {
-        val converted = SubtitleTranscodingExtractorOutput(output, DefaultSubtitleParserFactory())
+        val observed = object : ExtractorOutput by output {
+            override fun track(id: Int, type: Int): TrackOutput {
+                val track = output.track(id, type)
+                return if (type == C.TRACK_TYPE_TEXT) PlainTextCapture(track).also(plainStreams::add) else track
+            }
+        }
+        val converted = SubtitleTranscodingExtractorOutput(observed, DefaultSubtitleParserFactory())
         transcoder = converted
         delegate.init(object : ExtractorOutput by converted {
             override fun track(id: Int, type: Int): TrackOutput {
@@ -75,10 +85,41 @@ internal class AssPacketExtractor(private val sink: Sink) : Extractor {
     override fun read(input: ExtractorInput, seekPosition: PositionHolder) = delegate.read(input, seekPosition)
     override fun seek(position: Long, timeUs: Long) {
         streams.forEach { it.clear() }
+        plainStreams.forEach { it.clear() }
         transcoder?.resetSubtitleParsers()
         delegate.seek(position, timeUs)
     }
-    override fun release() { streams.clear(); delegate.release() }
+    override fun release() { streams.clear(); plainStreams.clear(); delegate.release() }
+
+    /** Observe Media3's own encoded text cues, retaining their styles and timing. */
+    private inner class PlainTextCapture(private val output: TrackOutput) : TrackOutput by output {
+        private var id: String? = null
+        private val pending = ByteArrayOutputStream()
+        private val decoder = CueDecoder()
+        fun clear() = pending.reset()
+        override fun format(format: Format) {
+            id = format.id.takeIf { format.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES && format.codecs == MimeTypes.APPLICATION_SUBRIP }
+            output.format(format)
+        }
+        override fun sampleData(data: ParsableByteArray, length: Int) = sampleData(data, length, TrackOutput.SAMPLE_DATA_PART_MAIN)
+        override fun sampleData(data: ParsableByteArray, length: Int, sampleDataPart: Int) {
+            if (id != null && sampleDataPart == TrackOutput.SAMPLE_DATA_PART_MAIN) {
+                check(pending.size().toLong() + length <= MAX_PACKET_BYTES)
+                pending.write(data.data, data.position, length)
+            }
+            output.sampleData(data, length, sampleDataPart)
+        }
+        override fun sampleMetadata(timeUs: Long, flags: Int, size: Int, offset: Int, cryptoData: TrackOutput.CryptoData?) {
+            id?.let { track ->
+                val data = pending.toByteArray()
+                val end = data.size - offset; val start = end - size
+                check(start >= 0 && end in start..data.size)
+                sink.textCues(track, decoder.decode(timeUs, data, start, size))
+                pending.reset(); pending.write(data, end, offset)
+            }
+            output.sampleMetadata(timeUs, flags, size, offset, cryptoData)
+        }
+    }
 
     private inner class Capture(private val output: TrackOutput) : TrackOutput by output {
         private var trackId: String? = null

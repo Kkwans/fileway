@@ -74,6 +74,15 @@ dependencies {
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     // Comparison harness only: no Media3 runtime is added to the product APK.
     androidTestImplementation("androidx.media3:media3-exoplayer:1.11.1")
+    providers.gradleProperty("filewayLibassProbeAar").orNull?.let { path ->
+        require(providers.gradleProperty("filewayFfmpegProbeManifest").isPresent) { "Combined subtitle probe requires the verified FFmpeg audio candidate" }
+        val aar = file(path)
+        val actual = MessageDigest.getInstance("SHA-256").digest(aar.readBytes()).joinToString("") { "%02x".format(it) }
+        require(actual == "1051212faf98ef956e06992b002d43cfdc81b6c60dcd32662e8d3ff52d584d65") { "Unverified libass comparison AAR" }
+        androidTestImplementation(files(aar))
+        androidTestImplementation("androidx.media3:media3-ui:1.11.1")
+        android.sourceSets.getByName("androidTest").kotlin.srcDir("src/libassProbeTest/java")
+    }
     providers.gradleProperty("filewayFfmpegProbeManifest").orNull?.let { manifestPath ->
         val manifestFile = file(manifestPath).canonicalFile
         val manifest = JsonSlurper().parse(manifestFile) as Map<*, *>
