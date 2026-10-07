@@ -236,6 +236,39 @@ class NativeSubtitleTest {
         }
     }
 
+    @Test fun rapidTrackRequestsKeepLastChoiceAndPauseWithoutReopening(): Unit = runBlocking {
+        withFixture("rapid-tracks") { model ->
+            onMain { model.player.pause() }
+            val initial = model.player.state.value
+            val audio = initial.audio.filter { it.id >= 0 }
+            val captions = initial.subtitles.filter { it.id >= 0 }
+            val targetAudio = audio.first { it.id != initial.selectedAudio }
+            val targetText = captions.first { it.title.contains("NFB PGS1") }
+            val opens = model.player.diagnosticSnapshot().count { it.action == io.github.kkwans.nasfilebrowser.player.PlaybackTraceAction.MEDIA_SET }
+            onMain {
+                model.player.audio(targetAudio.id)
+                model.player.audio(initial.selectedAudio)
+                model.player.audio(targetAudio.id)
+                model.player.subtitle(captions.first().id)
+                model.player.subtitle(-1)
+                model.player.subtitle(targetText.id)
+                model.player.rate(1.25f)
+                assertEquals(targetAudio.id, model.player.state.value.pendingAudio)
+                assertEquals(targetText.id, model.player.state.value.pendingSubtitle)
+            }
+            withTimeout(5000) {
+                model.player.state.first { it.pendingAudio == null && it.pendingSubtitle == null && it.selectedAudio == targetAudio.id && it.selectedSubtitle == targetText.id }
+            }
+            val result = model.player.state.value
+            assertFalse(result.playing)
+            assertEquals(initial.mediaGeneration, result.mediaGeneration)
+            assertEquals(1.25f, result.rate, .001f)
+            assertNull(result.operationError)
+            assertEquals(opens, model.player.diagnosticSnapshot().count { it.action == io.github.kkwans.nasfilebrowser.player.PlaybackTraceAction.MEDIA_SET })
+            rendered("last selected PGS pixels") { count(it, listOf(255, 0, 0)) > 200 }
+        }
+    }
+
     @Test fun textAppearanceChangesPixelsAndSurvivesPreferenceReopen(): Unit = runBlocking {
         withFixture("appearance") { model ->
             val original = model.playbackPreferences.textSubtitleAppearance.value

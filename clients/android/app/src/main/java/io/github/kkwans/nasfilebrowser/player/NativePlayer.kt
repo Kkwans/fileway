@@ -47,6 +47,7 @@ data class PlayerState(
     val waitingForBuffer: Boolean = false,
     val videoDecodePolicy: VideoDecodePolicy = VideoDecodePolicy.AUTO,
     val videoDecoderKind: String = "未知",
+    val pendingAudio: Int? = null, val pendingSubtitle: Int? = null,
 )
 
 /** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
@@ -71,6 +72,8 @@ class NativePlayer(context: Context) {
     private var externalRequest = 0L
     private var selectedExternal: Int? = null
     private var subtitleDisabled = false
+    private val trackCommands = mutableMapOf<Int, Runnable>()
+    private val trackTimeouts = mutableMapOf<Int, Runnable>()
     private data class Choice(val group: TrackGroup, val index: Int, val type: Int)
     private val choices = mutableMapOf<Int, Choice>()
     private val ids = mutableMapOf<Pair<TrackGroup, Int>, Int>()
@@ -253,7 +256,7 @@ class NativePlayer(context: Context) {
         val player = engine ?: return
         val audio = mutableListOf(NativeTrack(-1, "关闭")); val text = mutableListOf(NativeTrack(-1, "关闭"))
         choices.clear()
-        var selectedAudio = -1; var selectedText = -1; var selectedFormat: Format? = null
+        var selectedAudio = -1; var selectedText = -1; var actualText = -1; var selectedFormat: Format? = null
         for (group in player.currentTracks.groups) {
             if (group.type != C.TRACK_TYPE_AUDIO && group.type != C.TRACK_TYPE_TEXT) continue
             for (index in 0 until group.length) {
@@ -266,13 +269,21 @@ class NativePlayer(context: Context) {
                     ?: "${if (group.type == C.TRACK_TYPE_AUDIO) "音轨" else "字幕"} ${index + 1}"
                 val item = NativeTrack(id, title, mime, format.language.orEmpty())
                 if (group.type == C.TRACK_TYPE_AUDIO) { audio.add(item); if (group.isTrackSelected(index)) selectedAudio = id }
-                else { text.add(item); if (!subtitleDisabled && group.isTrackSelected(index)) { selectedText = id; selectedFormat = format } }
+                else {
+                    text.add(item)
+                    if (group.isTrackSelected(index)) {
+                        actualText = id
+                        if (!subtitleDisabled) { selectedText = id; selectedFormat = format }
+                    }
+                }
             }
         }
         text.addAll(external.values)
         val chosen = selectedExternal ?: selectedText
         val previous = mutable.value
         mutable.value = previous.copy(audio = audio, subtitles = text, selectedAudio = selectedAudio, selectedSubtitle = chosen)
+        if (C.TRACK_TYPE_AUDIO !in trackCommands && mutable.value.pendingAudio == selectedAudio) cancelTrackRequest(C.TRACK_TYPE_AUDIO)
+        if (C.TRACK_TYPE_TEXT !in trackCommands && selectedExternal == null && mutable.value.pendingSubtitle == actualText) cancelTrackRequest(C.TRACK_TYPE_TEXT)
         if (previous.selectedAudio != selectedAudio) trace.record(PlaybackTraceAction.AUDIO_SELECTED, selectedAudio.toDouble())
         if (previous.selectedSubtitle != chosen) trace.record(PlaybackTraceAction.SUBTITLE_SELECTED, chosen.toDouble())
         textIsAss = selectedExternal?.let { external[it]?.codec == MimeTypes.TEXT_SSA } ?: (selectedFormat?.codecs == MimeTypes.TEXT_SSA)
@@ -327,6 +338,7 @@ class NativePlayer(context: Context) {
         // An explicit off request wins immediately, even before renderer teardown.
         subtitleDisabled = id == -1
         if (id in external) {
+            cancelTrackRequest(C.TRACK_TYPE_TEXT)
             selectedExternal = id
             engine?.let { it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build() }
             refreshTracks()
@@ -343,13 +355,38 @@ class NativePlayer(context: Context) {
         val choice = choices[id]
         if (id != -1 && (choice == null || choice.type != type)) { mutable.value = mutable.value.copy(operationError = "轨道已变化，请重新选择"); return }
         val audio = type == C.TRACK_TYPE_AUDIO
+        cancelTrackRequest(type)
+        val epoch = session.generation
         trace.record(if (audio) PlaybackTraceAction.AUDIO_REQUEST else PlaybackTraceAction.SUBTITLE_REQUEST, id.toDouble())
-        val next = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, id == -1)
-        if (choice != null) next.addOverride(TrackSelectionOverride(choice.group, choice.index))
-        player.trackSelectionParameters = next.build()
-        mutable.value = mutable.value.copy(operationError = null)
-        trace.record(if (audio) PlaybackTraceAction.AUDIO_ACCEPTED else PlaybackTraceAction.SUBTITLE_ACCEPTED, 1.0)
+        mutable.value = if (audio) mutable.value.copy(pendingAudio = id, operationError = null)
+            else mutable.value.copy(pendingSubtitle = id, operationError = null)
+        val command = Runnable {
+            trackCommands.remove(type)
+            if (!session.accepts(epoch) || engine !== player) return@Runnable
+            val next = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, id == -1)
+            if (choice != null) next.addOverride(TrackSelectionOverride(choice.group, choice.index))
+            player.trackSelectionParameters = next.build()
+            trace.record(if (audio) PlaybackTraceAction.AUDIO_ACCEPTED else PlaybackTraceAction.SUBTITLE_ACCEPTED, 1.0)
+            if ((if (audio) mutable.value.pendingAudio else mutable.value.pendingSubtitle) != id) return@Runnable
+            val timeout = Runnable {
+                if (session.accepts(epoch) && engine === player && (if (audio) mutable.value.pendingAudio else mutable.value.pendingSubtitle) == id) {
+                    cancelTrackRequest(type)
+                    mutable.value = mutable.value.copy(operationError = "${if (audio) "音轨" else "字幕"}切换未确认，请重新选择或重试")
+                }
+            }
+            trackTimeouts[type] = timeout
+            handler.postDelayed(timeout, 5000)
+            refreshTracks()
+        }
+        trackCommands[type] = command
+        handler.post(command)
         if (id == -1 && !audio) { viewport?.showCues(emptyList()); layer?.select(null, null, player.currentPosition) }
+    }
+    private fun cancelTrackRequest(type: Int) {
+        trackCommands.remove(type)?.let(handler::removeCallbacks)
+        trackTimeouts.remove(type)?.let(handler::removeCallbacks)
+        mutable.value = if (type == C.TRACK_TYPE_AUDIO) mutable.value.copy(pendingAudio = null)
+            else mutable.value.copy(pendingSubtitle = null)
     }
     fun subtitleDelay(valueMs: Long) {
         val value = valueMs.coerceIn(-600_000, 600_000)
@@ -411,6 +448,7 @@ class NativePlayer(context: Context) {
     }
     fun clearOperationError(expected: String) { if (mutable.value.operationError == expected) mutable.value = mutable.value.copy(operationError = null) }
     private fun disposeMedia() {
+        cancelTrackRequest(C.TRACK_TYPE_AUDIO); cancelTrackRequest(C.TRACK_TYPE_TEXT)
         handler.removeCallbacks(ticker)
         externalRequest++; externalJob?.cancel(); externalJob = null
         val previous = engine; engine = null

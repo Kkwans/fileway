@@ -450,9 +450,11 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             JumpAction(R.drawable.ic_forward_10, "快进十秒", state.seekable && !client.busy) { step(10_000) }
                         }
                         Column(Modifier.clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
-                            DetailAction(R.drawable.ic_audio, "音轨", state.audio.firstOrNull { it.id == state.selectedAudio }?.title ?: "暂无音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
+                            DetailAction(R.drawable.ic_audio, "音轨", state.pendingAudio?.let { id -> "正在切换 · ${state.audio.firstOrNull { it.id == id }?.title ?: "音轨"}" }
+                                ?: state.audio.firstOrNull { it.id == state.selectedAudio }?.title ?: "暂无音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
-                            DetailAction(R.drawable.ic_subtitles, "字幕", state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.title ?: "关闭", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
+                            DetailAction(R.drawable.ic_subtitles, "字幕", state.pendingSubtitle?.let { id -> "正在切换 · ${state.subtitles.firstOrNull { it.id == id }?.title ?: "字幕"}" }
+                                ?: state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.title ?: "关闭", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
                             DetailAction(R.drawable.art_volume, "媒体音量", "${(mediaVolume * 100f / maximumVolume).roundToInt()}%", "媒体系统音量") { touch(); sheet = PlayerSheet.VOLUME }
                             HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
