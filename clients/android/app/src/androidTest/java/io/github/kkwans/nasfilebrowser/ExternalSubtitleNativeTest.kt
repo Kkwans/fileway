@@ -48,6 +48,40 @@ class ExternalSubtitleNativeTest {
         }
         return white
     }
+    @Test fun supUsesAuthenticatedLeaseAndAdjustsPausedPixelsWithoutReopening(): Unit = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
+        val caption = ExternalPgsTest.ownedSup()
+        val source = NativePlaybackTest.Fixture(media, mapOf("external.sup" to caption))
+        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val profile = store.save(ServerProfile(name = "SUP subtitle fixture", address = source.url))
+        lateinit var model: ClientModel
+        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        suspend fun main(action: suspend () -> Unit) = withContext(Dispatchers.Main) { action() }
+        suspend fun white(expected: Boolean) = withTimeout(6000) { while ((subtitleWhitePixels() > 20) != expected) delay(50) }
+        try {
+            main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            main { model.open(ResourceRef("/fixture.mkv", "/fixture.mkv", "Owned media.mkv", false, "video", media.size.toLong())) }
+            withTimeout(20_000) { model.player.state.first { it.firstFrameRendered && it.seekable } }
+            main { model.pausePlayback(); model.player.subtitle(-1); model.player.seek(2500) }
+            withTimeout(6000) { model.player.state.first { !it.playing && kotlin.math.abs(it.positionMs - 2500) < 250 } }
+            val generation = model.player.state.value.mediaGeneration
+            main { model.addExternalSubtitle(ResourceRef("/external.sup", "/external.sup", "external.sup", false, "", caption.size.toLong())) }
+            withTimeout(10_000) { model.player.state.first { !it.subtitleLoading && it.subtitles.any { track -> track.id == it.selectedSubtitle && track.title == "external.sup" } } }
+            white(true)
+            main { model.player.subtitleDelay(1000) }; white(false)
+            main { model.player.subtitleDelay(0) }; white(true)
+            main { model.player.seek(4500) }
+            withTimeout(6000) { model.player.state.first { kotlin.math.abs(it.positionMs - 4500) < 250 } }
+            white(false)
+            assertFalse(model.player.state.value.playing)
+            assertEquals(generation, model.player.state.value.mediaGeneration)
+            assertTrue(source.subtitleRequests.get() > 0)
+            assertEquals(0, source.unexpected.get())
+        } finally { main { model.disconnect() }; store.remove(profile); source.close() }
+    }
+
     @Test fun nasSubtitlePickerLoadsAuthenticatedExternalNativeTrack(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)

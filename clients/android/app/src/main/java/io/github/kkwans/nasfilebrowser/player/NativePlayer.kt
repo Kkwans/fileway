@@ -471,6 +471,7 @@ class NativePlayer(context: Context) {
                     "srt" -> MimeTypes.APPLICATION_SUBRIP
                     "vtt" -> MimeTypes.TEXT_VTT
                     "ttml", "dfxp" -> MimeTypes.APPLICATION_TTML
+                    "sup" -> MimeTypes.APPLICATION_PGS
                     else -> error("Unsupported external subtitle")
                 }
                 fun ready() {
@@ -482,11 +483,15 @@ class NativePlayer(context: Context) {
                 }
                 if (mime == MimeTypes.TEXT_SSA) currentLayer.externalAss("external:$id", bytes, ::ready)
                 else {
-                    withContext(Dispatchers.IO) {
-                        val parser = DefaultSubtitleParserFactory().create(Format.Builder().setSampleMimeType(mime).build())
-                        parser.parse(bytes, SubtitleParser.OutputOptions.allCues()) { currentLayer.textCues("external:$id", it) }
+                    val values = withContext(Dispatchers.IO) {
+                        if (mime == MimeTypes.APPLICATION_PGS) ExternalPgs.parse(bytes)
+                        else buildList {
+                            val parser = DefaultSubtitleParserFactory().create(Format.Builder().setSampleMimeType(mime).build())
+                            parser.parse(bytes, SubtitleParser.OutputOptions.allCues()) { add(it) }
+                        }
                     }
-                    ready()
+                    ensureActive()
+                    if (session.accepts(epoch) && externalRequest == request) currentLayer.externalText("external:$id", values, ::ready)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {

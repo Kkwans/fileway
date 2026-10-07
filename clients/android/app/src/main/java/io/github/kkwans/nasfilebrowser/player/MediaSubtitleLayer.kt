@@ -82,7 +82,7 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         if (list.none { it.startTimeUs == value.startTimeUs && it.durationUs == value.durationUs && it.cues == value.cues }) {
             list.add(value); cueBytes += bytes(value)
             while (cueBytes > 32L * 1024 * 1024 || cues.values.sumOf { it.size } > 20_000) {
-                val victim = cues.entries.filter { it.value.isNotEmpty() }.minByOrNull { it.value.first().startTimeUs } ?: break
+                val victim = cues.entries.filter { !it.key.startsWith("external:") && it.value.isNotEmpty() }.minByOrNull { it.value.first().startTimeUs } ?: break
                 cueBytes -= bytes(victim.value.removeAt(0))
             }
         }
@@ -91,6 +91,15 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
     fun externalAss(id: String, data: ByteArray, ready: () -> Unit) = submit {
         tracks.remove(id)?.release()
         tracks[id] = ass().createTrack().also { it.readBuffer(data) }
+        post { if (!closed.get()) ready() }
+    }
+    fun externalText(id: String, values: List<CuesWithTiming>, ready: () -> Unit) = submit {
+        val size = values.sumOf(::bytes)
+        check(values.size <= 20_000 && size <= 32L * 1024 * 1024)
+        check(cueBytes + size <= 32L * 1024 * 1024 && cues.values.sumOf { it.size } + values.size <= 20_000)
+        // Attach only a fully parsed file. A partial/failed read never becomes
+        // a selected track, and whole-file seek does not silently lose old cues.
+        cues[id] = values.toMutableList(); cueBytes += size
         post { if (!closed.get()) ready() }
     }
     fun select(assTrack: String?, textTrack: String?, positionMs: Long) {
