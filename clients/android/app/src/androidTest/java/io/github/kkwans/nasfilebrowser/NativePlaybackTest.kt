@@ -68,10 +68,11 @@ class NativePlaybackTest {
             try { withTimeout(25_000) { while (!predicate()) delay(100) } }
             catch (error: TimeoutCancellationException) {
                 val state = model.player.state.value
-                throw AssertionError("Native timeout during $checking: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, duration=${state.durationMs}, seekable=${state.seekable}, video=${state.width}x${state.height}, error=${state.error}, clientBusy=${model.state.value.busy}, selected=${model.state.value.selected != null}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}", error)
+                throw AssertionError("Native timeout during $checking: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, duration=${state.durationMs}, seekable=${state.seekable}, video=${state.width}x${state.height}, error=${state.error}, clientBusy=${model.state.value.busy}, selected=${model.state.value.selected != null}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}, trace=${model.player.diagnosticSnapshot()}", error)
             }
         }
         try {
+            android.util.Log.i("FilewayNativeGate", "libVLC=${LibVLC.version()} changeset=${LibVLC.changeset()} verbose=${BuildConfig.NATIVE_VERBOSE}")
             arguments.getString("nfbVlcChangeset")?.let { expected -> assertEquals("Actual native SDK must match the trial", expected, LibVLC.changeset()) }
             onMain { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             waitUntil { model.state.value.connected && !model.state.value.busy }

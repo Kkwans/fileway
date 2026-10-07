@@ -14,6 +14,7 @@ android {
         targetSdk = 37
         versionCode = 4
         versionName = "0.3.0-preview"
+        buildConfigField("boolean", "NATIVE_VERBOSE", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // External control-plane acceptance runs explicitly through adb.
         // Filter at discovery: UTP reports runtime assumptions as failures.
@@ -30,6 +31,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildTypes {
+        debug {
+            // Explicit owned-fixture diagnostics only; release always keeps verbose logging off.
+            val nativeVerbose = providers.gradleProperty("filewayNativeVerbose").orElse("false").get()
+            require(nativeVerbose in listOf("true", "false")) { "filewayNativeVerbose must be true or false" }
+            buildConfigField("boolean", "NATIVE_VERBOSE", nativeVerbose)
+            if (nativeVerbose == "true") versionNameSuffix = "-native-diagnostic"
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

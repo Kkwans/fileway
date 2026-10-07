@@ -168,7 +168,7 @@ class NativeSubtitleTest {
             assertEquals("No HLS/transcode/other endpoint may be called", 0, source.unexpected.get())
         } catch (error: Throwable) {
             capture("failure-${label}")
-            android.util.Log.e("NfbSubtitleAcceptance", "Failure during $checking; state=${model.player.state.value}")
+            android.util.Log.e("NfbSubtitleAcceptance", "Failure during $checking; state=${model.player.state.value}; trace=${model.player.diagnosticSnapshot()}")
             throw AssertionError("Native subtitle failure during $checking", error)
         } finally { activeModel = null; onMain { model.disconnect() }; store.remove(profile); source.close() }
     }

@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.videolan.libvlc.LibVLC
 
 /** Repeated real input starts with a laid-out video Surface, not metadata-only readiness. */
 class PlayerSurfaceStartupTest {
@@ -50,6 +51,7 @@ class PlayerSurfaceStartupTest {
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         try {
+            android.util.Log.i("FilewayNativeGate", "libVLC=${LibVLC.version()} changeset=${LibVLC.changeset()} verbose=${BuildConfig.NATIVE_VERBOSE}")
             withContext(Dispatchers.Main) { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
             repeat(3) { iteration ->
@@ -58,7 +60,7 @@ class PlayerSurfaceStartupTest {
                     withTimeout(20_000) { model.player.state.first { it.playing && it.positionMs > 0 && it.durationMs > 0 }; while (!hasVideo()) delay(100) }
                 } catch (e: TimeoutCancellationException) {
                     val s = model.player.state.value
-                    throw AssertionError("Open $iteration stalled: phase=${s.phase}, playing=${s.playing}, position=${s.positionMs}, buffer=${s.buffering}, rawReads=${source.rawRequests.get()}", e)
+                    throw AssertionError("Open $iteration stalled: phase=${s.phase}, playing=${s.playing}, position=${s.positionMs}, buffer=${s.buffering}, rawReads=${source.rawRequests.get()}, trace=${model.player.diagnosticSnapshot()}", e)
                 }
                 withContext(Dispatchers.Main) { model.leavePlayer() }
                 delay(250)
