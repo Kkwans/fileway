@@ -2,11 +2,15 @@ package io.github.kkwans.nasfilebrowser
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.Process
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.data.AppTheme
 import kotlinx.coroutines.*
@@ -28,7 +32,7 @@ class ThemeRestartPrepareTest {
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         val original = withTimeout(5000) { model.appearance.state.first { it.loaded } }.theme
-        saved.writeText(original.name)
+        saved.writeText("${original.name}\n${Process.myPid()}\n")
         withContext(Dispatchers.Main) { model.appearance.save(AppTheme.DARK) }
         withTimeout(5000) { model.appearance.state.first { it.theme == AppTheme.DARK && !it.saving } }
     }
@@ -41,18 +45,23 @@ class ThemeRestartVerifyTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val saved = File(instrumentation.targetContext.noBackupFilesDir, "theme-restart-test-original.txt")
         check(saved.isFile) { "Restart preparation is missing" }
-        val original = AppTheme.valueOf(saved.readText())
+        val prepared = saved.readLines()
+        val original = AppTheme.valueOf(prepared.first())
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         try {
+            assertNotEquals("The host must stop the prepared process before verification", prepared[1].toInt(), Process.myPid())
             assertEquals(AppTheme.DARK, withTimeout(5000) { model.appearance.state.first { it.loaded } }.theme)
+            withTimeout(5000) { model.state.first { !it.startupPending } }
             assertFalse(model.state.value.connected)
+            assertTrue("Verify the restored connection page, not the startup placeholder",
+                UiDevice.getInstance(instrumentation).wait(Until.hasObject(By.text("连接你的文件库")), 5000))
             withTimeout(5000) {
                 while (true) {
                     val screenshot = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
                     val bitmap = screenshot.copy(Bitmap.Config.ARGB_8888, false)
                     val pixel = try { bitmap.getPixel(10, bitmap.height / 2) } finally { bitmap.recycle(); screenshot.recycle() }
-                    if (pixel == Color.rgb(16, 20, 27)) break
+                    if (pixel == Color.rgb(32, 32, 35)) break
                     delay(100)
                 }
             }

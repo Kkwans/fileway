@@ -32,6 +32,28 @@ bash scripts/build-native.sh
 The SDK path belongs in untracked `local.properties` or `ANDROID_HOME`.
 See [transport contract](docs/embedded-routing.md) and [local state](docs/local-state.md).
 
+## Emulator checks
+
+Build both APKs, then run the host-managed suite on a disposable emulator that
+is the only attached device:
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+python3 scripts/run-emulator-checks.py --serial emulator-5556
+```
+
+Use the actual selected emulator serial. The runner rejects physical devices and
+additional attached devices. It runs the ordinary connected suite, then verifies
+theme restoration with separate prepare/verify instrumentation invocations and
+an intervening process stop. The prepare PID must differ from the verify PID;
+saved preferences survive without clearing data. The first failing result and
+logs remain under `app/build/acceptance`, including when later evidence export
+fails. A host timeout does not authorize a second install or test job.
+
+UTP may uninstall its target package, so this runner must never be used on an
+occupied personal phone. Physical media, HDR, audible output and covering-upgrade
+acceptance are separate gates; successful emulator checks do not certify them.
+
 Credentials, Tailscale identity, signing keys and real media must stay outside this repository.
 
 Embedded Tailscale is selected explicitly in the connection form. Configuration alone does not enroll a node; connect starts the official interactive login flow. The node's approved subnet routes are enabled, and its state is encrypted with a data key protected by Android Keystore. Embedded mode never falls back to direct HTTP. Real tailnet enrollment, external routing and device lifecycle acceptance are still pending.

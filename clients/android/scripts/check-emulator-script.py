@@ -20,15 +20,20 @@ def check(api, target, page_size, test_status, export_status, expected, should_t
         root = Path(folder)
         component = root / "clients/android"
         component.mkdir(parents=True)
-        (component / "gradlew").write_text('#!/bin/sh\n: > test-called\nexit "$NFB_FAKE_TEST_STATUS"\n')
+        (component / "scripts").mkdir()
+        (component / "scripts/run-emulator-checks.py").write_text('''import os
+from pathlib import Path
+Path("test-called").touch()
+Path("export-called").touch()
+raise SystemExit(int(os.environ["NFB_FAKE_TEST_STATUS"]) or int(os.environ["NFB_FAKE_EXPORT_STATUS"]))
+''')
         (root / "adb").write_text('''#!/bin/sh
 case "$1" in
   shell) printf '%s\n' "$NFB_FAKE_PAGESIZE" ;;
-  pull) test -f test-called || exit 91; : > export-called; exit "$NFB_FAKE_EXPORT_STATUS" ;;
+  get-serialno) printf '%s\n' emulator-5556 ;;
   *) exit 92 ;;
 esac
 ''')
-        (component / "gradlew").chmod(0o700)
         (root / "adb").chmod(0o700)
         env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
                    NFB_FAKE_TEST_STATUS=str(test_status), NFB_FAKE_EXPORT_STATUS=str(export_status), NFB_FAKE_PAGESIZE=str(page_size))
@@ -45,7 +50,7 @@ esac
 
 if __name__ == "__main__":
     for api, target, pages in [("35", "google_apis", 4096), ("37.0", "google_apis_ps16k", 16384)]:
-        for tests, export, expected in [(0, 0, 0), (7, 0, 7), (0, 1, 1), (7, 1, 1)]:
+        for tests, export, expected in [(0, 0, 0), (7, 0, 7), (0, 1, 1), (7, 1, 7)]:
             check(api, target, pages, tests, export, expected)
     check("37.0", "google_apis_ps16k", 4096, 0, 0, 1, should_test=False)
     print("9 emulator-script ordering, export, status and page-size checks passed")
