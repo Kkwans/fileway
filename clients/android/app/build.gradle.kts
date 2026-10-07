@@ -19,7 +19,7 @@ android {
         applicationId = "io.github.kkwans.nasfilebrowser"
         minSdk = 29
         targetSdk = 37
-        versionCode = 5
+        versionCode = 6
         versionName = "0.4.0-preview"
         buildConfigField("boolean", "NATIVE_VERBOSE", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
