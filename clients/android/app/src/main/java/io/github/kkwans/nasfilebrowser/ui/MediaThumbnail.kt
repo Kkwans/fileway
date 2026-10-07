@@ -21,6 +21,7 @@ import coil3.request.ImageRequest
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
+import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.data.PreviewLease
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
@@ -30,7 +31,7 @@ import kotlinx.coroutines.awaitCancellation
     contentScale: ContentScale = ContentScale.Crop, naturalAspect: Boolean = false) {
     val client by model.state.collectAsStateWithLifecycle()
     val cache by model.cache.state.collectAsStateWithLifecycle()
-    key(naturalAspect, cache.revision, client.previewScope, file.wirePath, file.path, file.size, file.modified) {
+    key(naturalAspect, cache.revision, client.previewScope, file.mediaKey, file.size, file.modified) {
         var asset by remember { mutableStateOf<PreviewLease?>(null) }
         var phase by remember { mutableStateOf("预览加载中") }
         var aspect by remember { mutableFloatStateOf(1f) }
@@ -38,7 +39,7 @@ import kotlinx.coroutines.awaitCancellation
         LaunchedEffect(Unit) {
             var owned: PreviewLease? = null
             try {
-                if (client.previewScope.isEmpty()) { phase = "暂无预览"; return@LaunchedEffect }
+                if (client.previewScope.isEmpty() && file.downloadId.isEmpty()) { phase = "暂无预览"; return@LaunchedEffect }
                 owned = model.preview(file, contain = naturalAspect)
                 asset = owned
                 awaitCancellation()

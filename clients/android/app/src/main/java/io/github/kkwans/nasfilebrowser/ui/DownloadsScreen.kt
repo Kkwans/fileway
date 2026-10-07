@@ -73,7 +73,8 @@ import java.util.Locale
                     val canOpen = item.localUri.isNotEmpty() && (item.complete || kind == MediaKind.VIDEO)
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(painterResource(if (kind == MediaKind.IMAGE) R.drawable.ic_image else if (kind == MediaKind.VIDEO) R.drawable.art_play else R.drawable.ic_download), null,
+                            if (item.complete && kind == MediaKind.IMAGE) MediaThumbnail(model, file, Modifier.size(52.dp), showStatusText = false)
+                            else Icon(painterResource(if (kind == MediaKind.IMAGE) R.drawable.ic_image else if (kind == MediaKind.VIDEO) R.drawable.art_play else R.drawable.ic_download), null,
                                 Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
                             Column(Modifier.weight(1f).clickable(enabled = canOpen) { openDownloaded(context, model, item, kind) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp)) {
                                 Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -90,7 +91,7 @@ import java.util.Locale
                         if (item.active) Text(state.speeds[item.id]?.let { readableSize(it) + "/s" } ?: "正在获取下载速度", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
+                            if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, Modifier.semantics { contentDescription = "打开下载：${item.name}" }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
                             if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
                             var more by remember(item.id) { mutableStateOf(false) }
                             Box {
