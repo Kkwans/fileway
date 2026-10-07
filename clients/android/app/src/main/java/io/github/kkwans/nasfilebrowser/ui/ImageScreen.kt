@@ -179,10 +179,10 @@ import kotlin.math.abs
             owned?.release()
         }
     }
-    LaunchedEffect(readingLease, active, fetched, canceled) {
+    LaunchedEffect(readingLease, active, fetched, canceled, failure) {
         readProgress = null
         val source = readingLease ?: return@LaunchedEffect
-        if (!active || fetched || canceled) return@LaunchedEffect
+        if (!active || fetched || canceled || failure != null) return@LaunchedEffect
         while (true) {
             try {
                 val stats = NativeTransport.call(JSONObject().put("op", "lease_stats").put("session", source.scope).put("url", source.url)) as JSONObject
@@ -267,6 +267,13 @@ private fun imageFailure(error: Throwable): String = when (error) {
     is HttpException -> imageHttpFailure(error.response.code)
     is ImageWorkingLimitException -> error.message.orEmpty()
     is java.net.SocketTimeoutException -> "图片读取超时，可保留预览或重试"
+    is java.net.ConnectException, is java.net.UnknownHostException -> "无法连接图片来源，请检查连接后重试"
+    is java.io.EOFException, is java.net.ProtocolException -> "图片数据未完整接收，请重新加载"
+    is android.graphics.ImageDecoder.DecodeException -> when (error.error) {
+        android.graphics.ImageDecoder.DecodeException.SOURCE_INCOMPLETE -> "图片数据不完整，请重新加载"
+        android.graphics.ImageDecoder.DecodeException.SOURCE_EXCEPTION -> "图片读取中断，请重试"
+        else -> "图片数据损坏或格式不受支持，可保留预览或选择其他图片"
+    }
     else -> "图片无法加载，请检查网络或文件格式后重试"
 }
 
@@ -274,5 +281,8 @@ private fun imageHttpFailure(status: Int): String = when (status) {
     401 -> "登录已过期，请重新连接服务器"
     403 -> "没有读取这张图片的权限"
     404 -> "图片已不存在"
+    410 -> "图片已被移除"
+    429 -> "图片请求过于频繁，请稍后重试"
+    502, 503, 504 -> "图片服务暂不可用，请稍后重试"
     else -> "图片读取失败"
 }
