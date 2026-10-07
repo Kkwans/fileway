@@ -376,14 +376,24 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     Text("正在加载", fontSize = 13.sp)
                                     PlayerLabel("取消", "取消播放请求") { model.cancel() }
                                 }
-                            } else if (!client.busy && state.phase in setOf("正在打开视频", "正在缓冲", "正在跳转")) {
+                            } else if (state.waitingForBuffer) {
                                 Row(Modifier.align(Alignment.Center).clip(RoundedCornerShape(8.dp)).background(Color(0xCC151515)).padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     CircularProgressIndicator(Modifier.size(18.dp), color = PlayerAccent, strokeWidth = 2.dp)
-                                    Text(if (state.phase == "正在缓冲") "缓冲 ${state.buffering.toInt()}%" else state.phase, fontSize = 13.sp)
+                                    Text("${state.phase} ${state.buffering.toInt()}%", fontSize = 13.sp)
                                     PlayerLabel("取消", "取消播放等待") { model.leavePlayer() }
                                 }
                             }
                         }
+                        Text(client.downloadBytesPerSecond?.let { speed ->
+                            when {
+                                speed >= 1_000_000 -> String.format(java.util.Locale.ROOT, "%.1f MB/s", speed / 1_000_000.0)
+                                speed >= 1000 -> String.format(java.util.Locale.ROOT, "%.1f KB/s", speed / 1000.0)
+                                else -> "$speed B/s"
+                            }
+                        } ?: "— B/s", color = Color.White, fontSize = 11.sp,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(top = if (landscape && visible) 56.dp else 8.dp, end = 12.dp)
+                                .background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 3.dp)
+                                .semantics { contentDescription = "实际网络下载速度" })
                         if (visible && landscape) Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent))).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
                             Text(file.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))

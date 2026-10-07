@@ -42,6 +42,7 @@ data class PlayerState(
     val videoDecoder: String = "未知", val audioDecoder: String = "未知",
     val sourceVideoCodec: String = "未知", val sourceDynamicRange: String = "未知",
     val sourceColorSpace: String = "未知",
+    val waitingForBuffer: Boolean = false,
 )
 
 /** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
@@ -56,6 +57,7 @@ class NativePlayer(context: Context) {
     val state = mutable.asStateFlow()
     var checkpoint: (() -> Unit)? = null
     private var engine: ExoPlayer? = null
+    private var loadControl: PlaybackLoadControl? = null
     private var viewport: PlayerViewport? = null
     private var layer: MediaSubtitleLayer? = null
     private var released = false
@@ -123,7 +125,8 @@ class NativePlayer(context: Context) {
                 if (it is MatroskaExtractor) MediaSubtitleExtractor(subtitles) else it
             }.toTypedArray()
         }
-        val player = ExoPlayer.Builder(context, factory)
+        val bufferControl = PlaybackLoadControl().also { loadControl = it }
+        val player = ExoPlayer.Builder(context, factory).setLoadControl(bufferControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractors)).build()
         engine = player
         trace.record(PlaybackTraceAction.ENGINE_READY); trace.record(PlaybackTraceAction.PLAYER_READY)
@@ -207,7 +210,10 @@ class NativePlayer(context: Context) {
                 player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "已暂停"
                 else -> "正在播放"
             }, playing = player.isPlaying, positionMs = player.currentPosition.coerceAtLeast(0), durationMs = player.duration.coerceAtLeast(0),
-            seekable = player.isCurrentMediaItemSeekable, buffering = player.bufferedPercentage.toFloat(), bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0),
+            seekable = player.isCurrentMediaItemSeekable,
+            waitingForBuffer = player.playWhenReady && player.playbackState == Player.STATE_BUFFERING,
+            buffering = if (player.playbackState == Player.STATE_READY) 100f else (loadControl?.percent ?: 0).coerceAtMost(99).toFloat(),
+            bufferedPositionMs = player.bufferedPosition.coerceAtLeast(0),
             width = player.videoSize.width, height = player.videoSize.height, rate = player.playbackParameters.speed, volume = (player.volume * 100).toInt(),
             sourceVideoCodec = format?.codecs ?: format?.sampleMimeType ?: "未知",
             sourceDynamicRange = when {
@@ -269,6 +275,7 @@ class NativePlayer(context: Context) {
         if (!player.isCurrentMediaItemSeekable) return
         val target = position.coerceIn(0, player.duration.coerceAtLeast(0))
         seekTarget = target; trace.record(PlaybackTraceAction.SEEK_REQUEST, target.toDouble())
+        loadControl?.resetProgress()
         player.seekTo(target); trace.record(PlaybackTraceAction.SEEK_ACCEPTED, target.toDouble()); publish()
     }
     fun rate(value: Float) {
@@ -387,6 +394,7 @@ class NativePlayer(context: Context) {
         externalRequest++; externalJob?.cancel(); externalJob = null
         val previous = engine; engine = null
         previous?.release()
+        loadControl = null
         viewport?.subtitles(null); layer?.close(); layer = null
     }
     fun stop() {

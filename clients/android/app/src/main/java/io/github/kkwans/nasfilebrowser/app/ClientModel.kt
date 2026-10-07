@@ -42,6 +42,7 @@ data class ClientState(
     val error: String? = null, val selected: ResourceRef? = null, val image: ResourceRef? = null,
     val mediaQueue: MediaQueue? = null,
     val fileCategory: FileCategory = FileCategory.ALL, val fileOrder: FileOrder = FileOrder.NAME,
+    val downloadBytesPerSecond: Long? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
@@ -87,6 +88,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val navigation = ArrayDeque<Pair<String, String>>()
     private var playback: PlaybackBinding? = null
     private var saveTimer: Job? = null
+    private var transferTimer: Job? = null
     private var resumeOperation: Job? = null
     private var recentJob: Job? = null
     private var closing: Job? = null
@@ -299,6 +301,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                     lastSaved = null
                     mutable.value = mutable.value.copy(selected = file, busy = false, stage = "", progressStatus = null)
                     player.open(url, resume, autoplay = foreground)
+                    observeTransfer(bound, url)
                     saveTimer?.cancel()
                     saveTimer = viewModelScope.launch { while (true) { delay(10_000); if (player.state.value.playing) saveProgress() } }
                 } catch (error: Exception) {
@@ -486,6 +489,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         binding.writer.submit(value)
     }
     private fun endPlayback() {
+        transferTimer?.cancel(); transferTimer = null
+        mutable.value = mutable.value.copy(downloadBytesPerSecond = null)
         resumeOperation?.cancel()
         saveTimer?.cancel()
         val old = playback; val value = old?.let(::snapshot)
@@ -516,6 +521,34 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         mutable.value = mutable.value.copy(selected = null, mediaQueue = null, busy = false, stage = "", error = null)
     }
     private fun revokeLease() { val old = lease; lease = ""; if (old.isNotEmpty()) cleanup.launch { NativeTransport.call(JSONObject().put("op", "revoke").put("url", old)) } }
+    private fun observeTransfer(bound: SessionContext, url: String) {
+        transferTimer?.cancel()
+        mutable.value = mutable.value.copy(downloadBytesPerSecond = null)
+        transferTimer = viewModelScope.launch {
+            var previousBytes = 0L
+            var previousMillis = -1L
+            val samples = ArrayDeque<Long>()
+            while (context == bound && lease == url) {
+                try {
+                    val result = NativeTransport.call(JSONObject().put("op", "lease_stats").put("session", bound.api.id).put("url", url)) as JSONObject
+                    if (context != bound || lease != url) break
+                    val bytes = result.getLong("upstreamBytes")
+                    val millis = result.getLong("elapsedMillis")
+                    if (previousMillis >= 0 && millis > previousMillis) {
+                        samples.addLast(((bytes - previousBytes).coerceAtLeast(0) * 1000 / (millis - previousMillis)))
+                        while (samples.size > 3) samples.removeFirst()
+                        mutable.value = mutable.value.copy(downloadBytesPerSecond = samples.average().toLong())
+                    }
+                    previousBytes = bytes; previousMillis = millis
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) {
+                    if (context == bound && lease == url) mutable.value = mutable.value.copy(downloadBytesPerSecond = null)
+                    previousMillis = -1; samples.clear()
+                }
+                delay(500)
+            }
+        }
+    }
     private fun closeSession() {
         mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false
         previewImageLoader.memoryCache?.clear()
