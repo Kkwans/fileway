@@ -16,8 +16,13 @@ internal open class LibraryUiHarness {
     protected val device get() = UiDevice.getInstance(instrumentation)
     protected lateinit var model: ClientModel
     protected suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
-    protected fun text(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.text(label)), 5000) ?: error("Missing visible $label") }
-    protected fun action(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.desc(label)), 5000) ?: error("Missing action $label") }
+    protected fun text(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.text(label)), 5000) ?: missing(label) }
+    protected fun action(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.desc(label)), 5000) ?: missing(label) }
+    private fun missing(label: String): Nothing {
+        capture("library-missing-action")
+        device.dumpWindowHierarchy(java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "library-missing-action.xml"))
+        error("Missing visible action $label; tab=${model.state.value.tab}, busy=${model.state.value.busy}, tagsLoaded=${model.tags.state.value.loaded}")
+    }
     protected suspend fun fixture(data: LibraryFixtureData, block: suspend (ClientSearchTest.Fixture) -> Unit) {
         val source = ClientSearchTest.Fixture(data.files.keys.filter { it.substringBeforeLast('/').isEmpty() }.map { it.substringAfterLast('/') }, library = data)
         val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))

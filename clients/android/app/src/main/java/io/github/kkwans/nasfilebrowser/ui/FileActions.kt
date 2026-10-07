@@ -9,6 +9,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.*
@@ -26,7 +29,10 @@ import kotlinx.coroutines.withTimeout
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         FavoriteFileAction(model, file, enabled)
         val count = tags.items.count { collectionPath(file.path) in it.paths }
-        OutlinedButton({ labeling = true }, Modifier.fillMaxWidth(), enabled = enabled && !tags.changing) { Text(if (tags.loaded) "标签 · $count" else "设置标签") }
+        OutlinedButton({ labeling = true }, Modifier.fillMaxWidth().semantics {
+            contentDescription = "设置文件标签"
+            stateDescription = if (tags.loaded) "已关联 $count 个标签" else "尚未读取标签"
+        }, enabled = enabled && !tags.changing) { Text(if (tags.loaded) "标签 · $count" else "设置标签") }
         if (client.permissions.delete && file.path != "/") TextButton({ moving = true }, Modifier.fillMaxWidth(), enabled = enabled && !tags.changing) { Text("移入回收站") }
         if (!labeling) tags.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
