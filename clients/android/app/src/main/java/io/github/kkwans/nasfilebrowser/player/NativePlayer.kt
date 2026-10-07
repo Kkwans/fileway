@@ -25,6 +25,7 @@ import io.github.kkwans.nasfilebrowser.BuildConfig
 import io.github.kkwans.nasfilebrowser.data.TextSubtitleAppearance
 import io.github.kkwans.nasfilebrowser.data.VideoDecodePolicy
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +49,7 @@ data class PlayerState(
     val videoDecodePolicy: VideoDecodePolicy = VideoDecodePolicy.AUTO,
     val videoDecoderKind: String = "未知",
     val pendingAudio: Int? = null, val pendingSubtitle: Int? = null,
+    val decoderRecovery: String? = null,
 )
 
 /** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
@@ -124,6 +126,9 @@ class NativePlayer(context: Context) {
         layer = subtitles
         viewport?.subtitles(subtitles)
         val decoderKinds = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val recoverWithSoftware = java.util.concurrent.atomic.AtomicBoolean(false)
+        var softwareDecoderReadyAt = Long.MAX_VALUE
+        var recoveryCompleted = false
         val factory = object : DefaultRenderersFactory(context) {
             override fun buildMiscellaneousRenderers(context: Context, eventHandler: Handler, extensionRendererMode: Int, out: ArrayList<Renderer>) {
                 super.buildMiscellaneousRenderers(context, eventHandler, extensionRendererMode, out)
@@ -136,7 +141,8 @@ class NativePlayer(context: Context) {
                     decoderKinds[it.name] = when { it.hardwareAccelerated -> "硬件"; it.softwareOnly -> "软件"; else -> "未知" }
                 }
                 if (!MimeTypes.isVideo(mime)) decoders else when (videoDecodePolicy) {
-                    VideoDecodePolicy.AUTO -> decoders.sortedByDescending { it.hardwareAccelerated }
+                    VideoDecodePolicy.AUTO -> if (recoverWithSoftware.get()) decoders.filter { it.softwareOnly }
+                        else decoders.sortedByDescending { it.hardwareAccelerated }
                     VideoDecodePolicy.HARDWARE -> decoders.filter { it.hardwareAccelerated }
                     VideoDecodePolicy.SOFTWARE -> decoders.filter { it.softwareOnly }
                 }
@@ -158,7 +164,10 @@ class NativePlayer(context: Context) {
             override fun onEvents(player: Player, events: Player.Events) { if (current()) publish() }
             override fun onTracksChanged(tracks: Tracks) { if (current()) refreshTracks() }
             override fun onRenderedFirstFrame() {
-                if (current()) { mutable.value = mutable.value.copy(firstFrameRendered = true); trace.record(PlaybackTraceAction.VIDEO_OUTPUT); publish() }
+                if (current() && player.playerError == null) {
+                    mutable.value = mutable.value.copy(firstFrameRendered = true)
+                    trace.record(PlaybackTraceAction.VIDEO_OUTPUT); publish()
+                }
             }
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 if (current()) {
@@ -180,9 +189,35 @@ class NativePlayer(context: Context) {
             }
             override fun onPlayerError(error: PlaybackException) {
                 if (!current()) return
-                session.pause()
                 trace.record(PlaybackTraceAction.ERROR, error.errorCode.toDouble())
-                mutable.value = mutable.value.copy(playing = false, phase = "播放失败", error = when (error.errorCode) {
+                val failedCodec = generateSequence(error.cause) { it.cause }.take(8)
+                    .filterIsInstance<MediaCodecDecoderException>().firstOrNull()?.codecInfo
+                if (videoDecodePolicy == VideoDecodePolicy.AUTO && !recoverWithSoftware.get() &&
+                    failedCodec != null && failedCodec.hardwareAccelerated && MimeTypes.isVideo(failedCodec.mimeType)) {
+                    val available = runCatching {
+                        MediaCodecSelector.DEFAULT.getDecoderInfos(failedCodec.mimeType, failedCodec.secure, failedCodec.tunneling).any { it.softwareOnly }
+                    }.getOrDefault(false)
+                    if (available && recoverWithSoftware.compareAndSet(false, true)) {
+                        mutable.value = mutable.value.copy(playing = false, firstFrameRendered = false,
+                            decoderRecovery = "硬件解码失败，正在尝试软件解码；HDR 输出尚未确认")
+                        handler.post {
+                            if (current() && player.playerError === error) {
+                                // Reprepare the same media/lease at the retained position.
+                                // Keep track parameters, rate and current pause intent.
+                                loadControl?.resetProgress()
+                                mutable.value = mutable.value.copy(firstFrameRendered = false)
+                                player.playWhenReady = session.wantsPlay
+                                player.prepare()
+                            }
+                        }
+                        return
+                    }
+                }
+                cancelTrackRequest(C.TRACK_TYPE_AUDIO); cancelTrackRequest(C.TRACK_TYPE_TEXT)
+                session.pause()
+                mutable.value = mutable.value.copy(playing = false, phase = "播放失败",
+                    decoderRecovery = if (recoverWithSoftware.get() && !recoveryCompleted) "软件解码未能恢复，请手动重试" else mutable.value.decoderRecovery,
+                    error = when (error.errorCode) {
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络读取失败，请检查连接后重试"
                     PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "这条视频或音轨暂时无法解码，请尝试其他音轨"
                     else -> "视频无法继续播放，请重试或选择其他文件"
@@ -191,7 +226,16 @@ class NativePlayer(context: Context) {
         })
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
-                if (current()) mutable.value = mutable.value.copy(videoDecoder = decoderName, videoDecoderKind = decoderKinds[decoderName] ?: "未知")
+                if (current()) {
+                    mutable.value = mutable.value.copy(videoDecoder = decoderName, videoDecoderKind = decoderKinds[decoderName] ?: "未知")
+                    if (recoverWithSoftware.get() && mutable.value.videoDecoderKind == "软件") softwareDecoderReadyAt = initializedTimestampMs
+                }
+            }
+            override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+                if (current() && player.playerError == null && recoverWithSoftware.get() && renderTimeMs >= softwareDecoderReadyAt) {
+                    recoveryCompleted = true
+                    mutable.value = mutable.value.copy(decoderRecovery = "已使用软件解码恢复画面；HDR 输出尚未确认")
+                }
             }
             override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                 if (current()) mutable.value = mutable.value.copy(audioDecoder = decoderName)

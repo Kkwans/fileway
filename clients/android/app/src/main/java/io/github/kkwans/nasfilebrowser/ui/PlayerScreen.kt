@@ -606,7 +606,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     Text("切换策略会保存进度并重新打开当前视频，后续视频也使用此设置。", style = MaterialTheme.typography.bodySmall, color = PlayerSecondary)
                                     VideoDecodePolicy.entries.forEach { policy ->
                                         Choice(policy.label, when (policy) {
-                                            VideoDecodePolicy.AUTO -> "优先硬件，初始化失败时尝试其他可用解码器"
+                                            VideoDecodePolicy.AUTO -> "优先硬件，解码器故障时尝试可用的软件解码"
                                             VideoDecodePolicy.HARDWARE -> "只使用硬件视频解码器"
                                             VideoDecodePolicy.SOFTWARE -> "使用设备提供的软件视频解码器"
                                         }, state.videoDecodePolicy == policy, enabled = !changingDecoder && !client.busy && state.videoDecodePolicy != policy) {
@@ -622,6 +622,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 }
                             }
                             item { SourceField("实际音频解码器", state.audioDecoder) }
+                            state.decoderRecovery?.let { recovery -> item { SourceField("解码恢复", recovery) } }
                             item { SourceField("片源动态范围", state.sourceDynamicRange) }
                             item { SourceField("片源色彩空间", state.sourceColorSpace) }
                             item {
