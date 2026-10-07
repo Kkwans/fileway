@@ -22,6 +22,7 @@ import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.text.SubtitleParser
 import io.github.kkwans.nasfilebrowser.BuildConfig
+import io.github.kkwans.nasfilebrowser.data.TextSubtitleAppearance
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -68,6 +69,11 @@ class NativePlayer(context: Context) {
     private var nextId = 1 // IDs are never reused across media generations.
     private var textIsAss = false
     private var textIsCollected = false
+    private var subtitleAppearance = TextSubtitleAppearance()
+    fun textSubtitleAppearance(value: TextSubtitleAppearance) {
+        subtitleAppearance = value
+        viewport?.textAppearance(value)
+    }
     private val ticker = object : Runnable {
         override fun run() { if (engine != null && !released) { publish(); handler.postDelayed(this, 200) } }
     }
@@ -81,6 +87,7 @@ class NativePlayer(context: Context) {
             view.addView(it, ViewGroup.LayoutParams(-1, -1))
         }
         viewport = target
+        target.textAppearance(subtitleAppearance)
         target.subtitles(layer)
         engine?.let { target.videoSize(it.videoSize.width, it.videoSize.height, it.videoSize.pixelWidthHeightRatio); it.setVideoSurfaceView(target.video) }
         trace.record(PlaybackTraceAction.ATTACH)
@@ -134,7 +141,7 @@ class NativePlayer(context: Context) {
                 }
             }
             override fun onCues(cueGroup: CueGroup) {
-                if (current() && !textIsAss && !textIsCollected && selectedExternal == null) viewport?.text?.setCues(cueGroup.cues)
+                if (current() && !textIsAss && !textIsCollected && selectedExternal == null) viewport?.showCues(cueGroup.cues)
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (!current()) return
@@ -287,7 +294,7 @@ class NativePlayer(context: Context) {
         player.trackSelectionParameters = next.build()
         mutable.value = mutable.value.copy(operationError = null)
         trace.record(if (audio) PlaybackTraceAction.AUDIO_ACCEPTED else PlaybackTraceAction.SUBTITLE_ACCEPTED, 1.0)
-        if (id == -1 && !audio) { viewport?.text?.setCues(emptyList()); layer?.select(null, null, player.currentPosition) }
+        if (id == -1 && !audio) { viewport?.showCues(emptyList()); layer?.select(null, null, player.currentPosition) }
     }
     fun subtitleDelay(valueMs: Long) {
         val value = valueMs.coerceIn(-600_000, 600_000)

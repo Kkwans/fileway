@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import io.github.kkwans.nasfilebrowser.data.parsePlaybackRate
+import io.github.kkwans.nasfilebrowser.data.TextSubtitleAppearance
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
@@ -78,6 +79,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 
 private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE }
@@ -94,6 +96,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     val queue = client.mediaQueue
     val liveState by rememberUpdatedState(state)
     val holdRate by model.playbackPreferences.holdRate.collectAsStateWithLifecycle()
+    val savedSubtitleAppearance by model.playbackPreferences.textSubtitleAppearance.collectAsStateWithLifecycle()
+    var subtitlePreview by remember(savedSubtitleAppearance) { mutableStateOf(savedSubtitleAppearance) }
+    LaunchedEffect(subtitlePreview) { model.player.textSubtitleAppearance(subtitlePreview) }
     val liveHoldRate by rememberUpdatedState(holdRate)
     var holding by remember(file) { mutableStateOf(false) }
     val uiScope = rememberCoroutineScope()
@@ -455,6 +460,30 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                             }) { Text("应用") }
                                         }
                                         subtitleOffsetError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                        val codec = state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.codec.orEmpty()
+                                        when {
+                                            codec.contains("ssa", ignoreCase = true) -> Text("ASS / SSA 使用作者字体、位置与动画，保留原始样式。", fontSize = 12.sp, color = PlayerSecondary)
+                                            listOf("pgs", "dvbsub", "vobsub").any { codec.contains(it, ignoreCase = true) } -> Text("位图字幕使用片源图像，不支持文字字号调整。", fontSize = 12.sp, color = PlayerSecondary)
+                                            else -> {
+                                                Text("文本字号 ${(subtitlePreview.scale * 100).roundToInt()}% · 底边距 ${(subtitlePreview.bottomPadding * 100).roundToInt()}%", fontSize = 14.sp)
+                                                Slider(subtitlePreview.scale, { subtitlePreview = subtitlePreview.copy(scale = it) },
+                                                    Modifier.semantics { contentDescription = "文本字幕字号" }, valueRange = .5f..2f)
+                                                Slider(subtitlePreview.bottomPadding, { subtitlePreview = subtitlePreview.copy(bottomPadding = it) },
+                                                    Modifier.semantics { contentDescription = "文本字幕底边距" }, valueRange = 0f.. .4f)
+                                                Text("字幕外观预览", fontSize = (18 * subtitlePreview.scale).sp, color = Color.White)
+                                                Row {
+                                                    TextButton(onClick = { subtitlePreview = TextSubtitleAppearance() }) { Text("重置预览") }
+                                                    TextButton(onClick = {
+                                                        val value = subtitlePreview
+                                                        uiScope.launch {
+                                                            try { model.playbackPreferences.saveTextSubtitleAppearance(value) }
+                                                            catch (cancelled: CancellationException) { throw cancelled }
+                                                            catch (_: Exception) { feedback.showSnackbar("字幕外观保存失败，请重试") }
+                                                        }
+                                                    }) { Text("保存到此设备") }
+                                                }
+                                            }
+                                        }
                                     }
                                 } }) {
                                 if (audio) model.player.audio(it) else model.player.subtitle(it)

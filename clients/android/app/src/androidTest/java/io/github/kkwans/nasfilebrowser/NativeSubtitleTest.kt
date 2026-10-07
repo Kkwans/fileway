@@ -231,6 +231,37 @@ class NativeSubtitleTest {
         }
     }
 
+    @Test fun textAppearanceChangesPixelsAndSurvivesPreferenceReopen(): Unit = runBlocking {
+        withFixture("appearance") { model ->
+            val original = model.playbackPreferences.textSubtitleAppearance.value
+            try {
+                withContext(Dispatchers.Main) { model.playbackPreferences.saveTextSubtitleAppearance(TextSubtitleAppearance()) }
+                select(model, "NFB Text")
+                textPixels()
+                onMain { model.player.pause() }
+                fun white(frame: IntArray) = frame.indices.filter { index ->
+                    val p = frame[index]
+                    Color.alpha(p) > 100 && Color.red(p) > 200 && Color.green(p) > 200 && Color.blue(p) > 200
+                }
+                val baseline = white(textPixels())
+                val baselineY = baseline.map { it / 320 }.average()
+                withContext(Dispatchers.Main) { model.playbackPreferences.saveTextSubtitleAppearance(TextSubtitleAppearance(1.75f, .08f)) }
+                rendered("larger actual text") { white(it).size > baseline.size * 1.5 }
+                val raised = TextSubtitleAppearance(1f, .3f)
+                withContext(Dispatchers.Main) { model.playbackPreferences.saveTextSubtitleAppearance(raised) }
+                rendered("raised actual text") {
+                    val points = white(it)
+                    points.size > 60 && points.map { index -> index / 320 }.average() < baselineY - 20
+                }
+                assertEquals(raised, PlaybackPreferences(instrumentation.targetContext).textSubtitleAppearance.value)
+                assertFalse("Appearance changes must preserve pause", model.player.state.value.playing)
+                capture("appearance-raised")
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { model.playbackPreferences.saveTextSubtitleAppearance(original) }
+            }
+        }
+    }
+
     @Test fun actualAssAttachedFontAndDrawingRenderThroughNativeLease(): Unit = runBlocking {
         withFixture("ass") { model ->
             select(model, "NFB ASS Attachment")

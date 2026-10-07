@@ -5,12 +5,30 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+data class TextSubtitleAppearance(val scale: Float = 1f, val bottomPadding: Float = .08f) {
+    init { require(scale.isFinite() && scale in .5f..2f && bottomPadding.isFinite() && bottomPadding in 0f.. .4f) }
+}
 
 /** Device preference; no account, token or playback snapshot is stored here. */
 class PlaybackPreferences(context: Context) {
     private val prefs = context.getSharedPreferences("playback_preferences", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(prefs.getFloat("hold_rate", 3f).takeIf { it.isFinite() && it in .1f..5f } ?: 3f)
     val holdRate = mutable.asStateFlow()
+    private val subtitleWrites = Mutex()
+    private val subtitleMutable = MutableStateFlow(TextSubtitleAppearance(
+        prefs.getFloat("subtitle_scale", 1f).takeIf { it.isFinite() && it in .5f..2f } ?: 1f,
+        prefs.getFloat("subtitle_bottom", .08f).takeIf { it.isFinite() && it in 0f.. .4f } ?: .08f,
+    ))
+    val textSubtitleAppearance = subtitleMutable.asStateFlow()
+    suspend fun saveTextSubtitleAppearance(value: TextSubtitleAppearance) = subtitleWrites.withLock {
+        withContext(Dispatchers.IO) {
+            check(prefs.edit().putFloat("subtitle_scale", value.scale).putFloat("subtitle_bottom", value.bottomPadding).commit()) { "无法保存字幕外观" }
+        }
+        subtitleMutable.value = value
+    }
     suspend fun saveHoldRate(value: Float) {
         require(value.isFinite() && value in .1f..5f)
         withContext(Dispatchers.IO) { check(prefs.edit().putFloat("hold_rate", value).commit()) { "无法保存长按倍速" } }
