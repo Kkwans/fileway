@@ -11,6 +11,9 @@ import io.github.kkwans.nasfilebrowser.core.EmbeddedNetwork
 import io.github.kkwans.nasfilebrowser.core.NetworkState
 import io.github.kkwans.nasfilebrowser.player.NativePlayer
 import io.github.kkwans.nasfilebrowser.data.*
+import io.github.kkwans.nasfilebrowser.download.DownloadController
+import io.github.kkwans.nasfilebrowser.download.DownloadRecord
+import io.github.kkwans.nasfilebrowser.download.DownloadDataSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +39,7 @@ import java.net.URLEncoder
 typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
 enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签"), TRASH("回收站", "回收站"), TASKS("任务", "任务中心"), TOOLS("工具", "存储工具") }
 
-data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "")
+data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "", val downloadId: String = "")
 data class ClientState(
     val startupPending: Boolean = false,
     val connected: Boolean = false, val busy: Boolean = false, val stage: String = "",
@@ -60,9 +63,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val player = NativePlayer(application)
     val playbackPreferences = PlaybackPreferences(application)
     val cache = CacheController(application, viewModelScope)
+    val downloads = DownloadController(application, viewModelScope)
     val previewImageLoader get() = cache.thumbnailLoader.value
     fun cacheAccount(): String = context?.account?.key.orEmpty()
-    fun thumbnailKey(file: ResourceRef): String = cache.key(cacheAccount(), file.wirePath.ifEmpty { file.path }, "${file.size}/${file.modified}")
+    fun thumbnailKey(file: ResourceRef): String = cache.key(if (file.downloadId.isEmpty()) cacheAccount() else "local-downloads", file.mediaKey, "${file.size}/${file.modified}")
     private val store = ProfileStore(ClientDatabase.get(application), CredentialVault(application))
     private val appearanceStore = AppearanceStore(ClientDatabase.get(application))
     val appearance = AppearanceController(viewModelScope, { appearanceStore.theme.first() }, appearanceStore::save)
@@ -92,6 +96,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val navigation = ArrayDeque<Pair<String, String>>()
     private var pendingDirectory: Pair<String, String>? = null
     private var playback: PlaybackBinding? = null
+    private var localPlayback: DownloadRecord? = null
+    private var localProgressPending: Job? = null
     private var saveTimer: Job? = null
     private var transferTimer: Job? = null
     private var resumeOperation: Job? = null
@@ -110,6 +116,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
         viewModelScope.launch { search.state.collect { syncLibraryObservers() } }
+        viewModelScope.launch { downloads.state.collect { value ->
+            localPlayback?.let { item -> mutable.value = mutable.value.copy(downloadBytesPerSecond = value.speeds[item.id]) }
+        } }
         player.checkpoint = { saveProgress() }
         val expected = generation
         startupJob = viewModelScope.launch {
@@ -281,13 +290,24 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     private fun openSearchResult(file: ResourceRef) = openFrom(file, search.mediaSnapshot(), MediaQueueSource.SEARCH)
     fun openTagged(file: ResourceRef, candidates: List<ResourceRef>) = openFrom(file, candidates, MediaQueueSource.TAGGED)
+    fun download(file: ResourceRef) {
+        val bound = context ?: return
+        downloads.enqueue(bound, file) { context === bound && generation == bound.generation }
+    }
+    private fun downloadRef(item: DownloadRecord) = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
+    fun openDownload(item: DownloadRecord) {
+        val file = downloadRef(item)
+        val candidates = downloads.state.value.items.filter { it.localUri.isNotEmpty() && (it.complete || downloadRef(it).mediaKind() == MediaKind.VIDEO) }.map(::downloadRef)
+        openQueued(file, MediaQueue.snapshot(++queueSequence, "local-downloads", file, candidates, MediaQueueSource.DOWNLOADED))
+    }
     private fun openFrom(file: ResourceRef, candidates: List<ResourceRef>, source: MediaQueueSource) {
         val bound = context ?: return
         openQueued(file, MediaQueue.snapshot(++queueSequence, bound.account.key, file, candidates, source))
     }
     fun navigateMedia(index: Int) {
-        val bound = context ?: return
-        val queue = mutable.value.mediaQueue?.takeIf { it.owner == bound.account.key }?.select(index) ?: return
+        val current = mutable.value.mediaQueue ?: return
+        if (current.owner != "local-downloads" && current.owner != context?.account?.key) return
+        val queue = current.select(index) ?: return
         if (queue.index == mutable.value.mediaQueue?.index) return
         if (queue.kind == MediaKind.IMAGE) mutable.value = mutable.value.copy(image = queue.current, mediaQueue = queue, error = null)
         else openQueued(queue.current, queue)
@@ -299,6 +319,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         openQueued(file, mutable.value.mediaQueue)
     }
     suspend fun changeVideoDecoder(value: VideoDecodePolicy) {
+        val local = localPlayback
+        if (local != null) {
+            val queue = mutable.value.mediaQueue
+            val wasPlaying = player.state.value.let { it.playing || it.waitingForBuffer || it.error != null }
+            playbackPreferences.saveVideoDecodePolicy(value)
+            if (localPlayback === local) openQueued(downloadRef(local), queue, wasPlaying)
+            return
+        }
         val binding = playback ?: return
         val queue = mutable.value.mediaQueue
         val wasPlaying = player.state.value.let { it.playing || it.waitingForBuffer || it.error != null }
@@ -306,6 +334,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (playback === binding && context == binding.context) openQueued(binding.file, queue, wasPlaying)
     }
     private fun openQueued(file: ResourceRef, queue: MediaQueue?, autoplay: Boolean = true) {
+        if (file.downloadId.isNotEmpty()) { openLocal(file, queue, autoplay); return }
         if (file.directory) {
             navigation.addLast(mutable.value.path to mutable.value.wirePath)
             browse(file.path, file.wirePath)
@@ -369,6 +398,46 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             mutable.value = mutable.value.copy(selected = null, image = file, mediaQueue = queue, busy = false, stage = "", error = null)
         } else mutable.value = mutable.value.copy(error = "这个文件类型暂不支持打开")
     }
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun openLocal(file: ResourceRef, queue: MediaQueue?, autoplay: Boolean) {
+        search.close(); operation?.cancel()
+        val request = ++mediaRequest
+        pendingOpenFromPlayer = mutable.value.selected != null
+        pendingMediaOpen = request
+        mutable.value = mutable.value.copy(selected = file.takeIf { it.mediaKind() == MediaKind.VIDEO }, image = null, mediaQueue = queue,
+            busy = true, stage = "正在打开本机文件", error = null)
+        operation = viewModelScope.launch {
+            try {
+                endPlayback(); mediaClosing?.join()
+                val item = ClientDatabase.get(getApplication()).downloads().get(file.downloadId) ?: error("下载记录已移除")
+                currentCoroutineContext().ensureActive()
+                if (mediaRequest != request) return@launch
+                check(item.localUri.isNotEmpty()) { "文件仍在准备，请稍后打开" }
+                when (file.mediaKind()) {
+                    MediaKind.IMAGE -> {
+                        check(item.complete) { "图片下载完成后即可查看" }
+                        mutable.value = mutable.value.copy(image = file, selected = null, busy = false, stage = "", progressStatus = null)
+                    }
+                    MediaKind.VIDEO -> {
+                        localPlayback = item; lastSaved = null
+                        mutable.value = mutable.value.copy(selected = file, busy = false, stage = "", progressStatus = "续播仅保存本机", downloadBytesPerSecond = 0)
+                        val uri = android.net.Uri.Builder().scheme("fileway-download").authority(item.id).appendPath(item.name).build().toString()
+                        player.open(uri, item.positionMs, foreground && autoplay, playbackPreferences.videoDecodePolicy.value, DownloadDataSource.Factory(getApplication()))
+                        saveTimer = viewModelScope.launch { while (true) { delay(10_000); if (player.state.value.playing) saveProgress() } }
+                    }
+                    null -> error("此文件请从下载页面使用系统应用打开")
+                }
+                pendingMediaOpen = null; pendingOpenFromPlayer = false
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                if (mediaRequest == request) {
+                    pendingMediaOpen = null; pendingOpenFromPlayer = false
+                    mutable.value = mutable.value.copy(busy = false, stage = "", error = failure.message ?: "无法打开本机文件，请检查下载目录")
+                    if (file.mediaKind() != MediaKind.VIDEO) downloads.reportError(failure.message ?: "本机文件无法打开")
+                }
+            }
+        }
+    }
     private fun browse(path: String, wire: String) {
         val bound = context ?: return
         pendingDirectory = path to wire
@@ -402,6 +471,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         browse(crumb.path, crumb.wirePath)
     }
     suspend fun preview(file: ResourceRef, contain: Boolean = false): PreviewLease {
+        if (file.downloadId.isNotEmpty()) return image(file, ImageQuality.ORIGINAL).first
         val bound = context ?: error("服务器尚未连接")
         val asset = bound.api.preview(file.path, file.wirePath, contain)
         try {
@@ -475,6 +545,11 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun closeImage() { mutable.value = mutable.value.copy(image = null, mediaQueue = null) }
     suspend fun image(file: ResourceRef, quality: ImageQuality): Pair<PreviewLease, ResourceRef> {
+        if (file.downloadId.isNotEmpty()) {
+            val item = ClientDatabase.get(getApplication()).downloads().get(file.downloadId) ?: error("下载记录已移除")
+            check(item.complete && item.localUri.isNotEmpty()) { "图片下载完成后即可查看" }
+            return PreviewLease(item.localUri, "local-downloads") { } to file
+        }
         val bound = context ?: error("服务器尚未连接")
         cache.awaitReady()
         val wire = file.wirePath.ifEmpty { file.path.split('/').joinToString("/") { android.net.Uri.encode(it) } }
@@ -539,7 +614,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun tab(value: String) { if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun tab(value: String) { if (value == "downloads" && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun librarySection(value: LibrarySection) { search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value) }
     fun showServerTask(id: String) { librarySection(LibrarySection.TASKS); tasks.select(id) }
     fun showAnalysis(id: String, type: String) { librarySection(LibrarySection.TOOLS); storageTools.openReport(id, if (type == "analysis.storage") "storage" else "duplicates") }
@@ -548,6 +623,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         tasks.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TASKS)
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
+        downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
     }
     private fun resourceTrashed(bound: SessionContext, file: ResourceRef) {
         if (context !== bound) return
@@ -578,6 +654,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun togglePlayback() {
         if (player.state.value.playing) { pausePlayback(); return }
+        if (localPlayback != null) { if (foreground) player.toggle(); return }
         val binding = playback ?: return
         if (!foreground) return
         resumeOperation?.cancel()
@@ -613,6 +690,16 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             binding.file.path, binding.file.wirePath, binding.file.name, value.positionMs, value.durationMs, System.currentTimeMillis(), ProgressSync.PENDING)
     }
     private fun saveProgress() {
+        localPlayback?.let { item ->
+            val value = player.state.value
+            val fingerprint = value.positionMs to value.durationMs
+            if (fingerprint != lastSaved && (value.durationMs > 0 || value.positionMs > 0)) {
+                lastSaved = fingerprint
+                val previous = localProgressPending
+                localProgressPending = cleanup.launch { previous?.join(); ClientDatabase.get(getApplication()).downloads().playback(item.id, fingerprint.first, fingerprint.second) }
+            }
+            return
+        }
         val binding = playback ?: return
         val value = snapshot(binding) ?: return
         val fingerprint = value.positionMs to value.durationMs
@@ -622,6 +709,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         binding.writer.submit(value)
     }
     private fun endPlayback() {
+        saveProgress()
+        val oldLocal = localPlayback; localPlayback = null
+        val localStored = localProgressPending
         transferTimer?.cancel(); transferTimer = null
         mutable.value = mutable.value.copy(downloadBytesPerSecond = null)
         resumeOperation?.cancel()
@@ -633,9 +723,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val subtitles = subtitleLeases.toList(); subtitleLeases.clear()
         val oldLease = lease; lease = ""
         val previous = mediaClosing
-        if (old != null || oldLease.isNotEmpty()) mediaClosing = cleanup.launch {
+        if (old != null || oldLocal != null || oldLease.isNotEmpty()) mediaClosing = cleanup.launch {
             previous?.join()
-            try { stored?.await() }
+            try { stored?.await(); if (oldLocal != null) localStored?.join() }
             catch (error: Exception) {
                 if (error is CancellationException) throw error
                 withContext(Dispatchers.Main) { mutable.value = mutable.value.copy(notice = "上次的续播未能保存，请检查本机存储。") }

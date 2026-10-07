@@ -288,7 +288,7 @@ class NativePlaybackTest {
     }
 
     internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap(),
-        private val videos: List<String> = listOf("fixture.mkv")) : Closeable {
+        private val videos: List<String> = listOf("fixture.mkv"), private val download: Boolean = false) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val rawRequests = AtomicInteger()
@@ -336,7 +336,8 @@ class NativePlaybackTest {
             if (endpoint != "/api/login" && headers["x-auth"].isNullOrEmpty()) { send(ByteArray(0), status = 403); return }
             when {
                 endpoint == "/api/login" -> {
-                    val payload = JSONObject().put("user", JSONObject().put("id", 71).put("username", "fixture"))
+                    val payload = JSONObject().put("user", JSONObject().put("id", 71).put("username", "fixture")
+                        .apply { if (download) put("perm", JSONObject().put("download", true)) })
                     val token = "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
                     send(token.toByteArray(), "text/plain")
                 }
@@ -354,6 +355,11 @@ class NativePlaybackTest {
                         if (stalled) { subtitleRead.countDown(); check(releaseSubtitle.await(10, TimeUnit.SECONDS)) }
                         send(subtitles.getValue(endpoint.removePrefix("/api/raw/")), "text/plain; charset=utf-8")
                     } finally { if (stalled) subtitleReturned.countDown() }
+                }
+                download && endpoint.substringBefore('?').removePrefix("/api/resources/") in videos -> {
+                    val path = endpoint.substringBefore('?').removePrefix("/api/resources")
+                    send(JSONObject().put("path", path).put("wirePath", path).put("name", path.substringAfterLast('/')).put("isDir", false)
+                        .put("type", "video").put("size", media.size).put("modified", "owned-download-v1").toString().toByteArray())
                 }
                 endpoint.substringBefore('?').removePrefix("/api/preview/thumb/") in videos -> send(ByteArray(0), status = 404)
                 endpoint.startsWith("/api/media/playback") -> {

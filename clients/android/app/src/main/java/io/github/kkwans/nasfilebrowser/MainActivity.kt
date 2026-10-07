@@ -22,6 +22,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (intent.getBooleanExtra("open_downloads", false)) model.tab("downloads")
         setContent {
             val appearance by model.appearance.state.collectAsStateWithLifecycle()
             val client by model.state.collectAsStateWithLifecycle()
@@ -50,5 +51,6 @@ class MainActivity : ComponentActivity() {
             ?.fitsSystemWindows = false
     }
     override fun onStart() { super.onStart(); model.foreground(true) }
+    override fun onNewIntent(intent: android.content.Intent) { super.onNewIntent(intent); setIntent(intent); if (intent.getBooleanExtra("open_downloads", false)) model.tab("downloads") }
     override fun onStop() { model.foreground(false); model.pausePlayback(); super.onStop() }
 }

@@ -3,7 +3,7 @@ package io.github.kkwans.nasfilebrowser.app
 import java.util.Locale
 
 enum class MediaKind { IMAGE, VIDEO }
-enum class MediaQueueSource(val label: String) { DIRECTORY("当前目录"), SEARCH("当前搜索结果"), SINGLE("单个文件"), TAGGED("当前标签结果") }
+enum class MediaQueueSource(val label: String) { DIRECTORY("当前目录"), SEARCH("当前搜索结果"), SINGLE("单个文件"), TAGGED("当前标签结果"), DOWNLOADED("本机下载") }
 
 fun ResourceRef.mediaKind(): MediaKind? {
     if (directory) return null
@@ -14,7 +14,7 @@ fun ResourceRef.mediaKind(): MediaKind? {
     }
 }
 
-val ResourceRef.mediaKey: String get() = wirePath.ifEmpty { path }
+val ResourceRef.mediaKey: String get() = if (downloadId.isNotEmpty()) "download/$downloadId" else wirePath.ifEmpty { path }
 
 /** Immutable list at open time. No recursion, live search append, wraparound or auto-next. */
 data class MediaQueue(

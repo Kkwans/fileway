@@ -57,6 +57,7 @@ import kotlinx.coroutines.launch
         modifier = Modifier.heightIn(min = barHeight)) {
         listOf(Triple("files", "文件", R.drawable.ic_folder), Triple("recent", "最近播放", R.drawable.ic_history),
             Triple("library", "资料库", R.drawable.ic_bookmark),
+            Triple("downloads", "下载", R.drawable.ic_download),
             Triple("settings", "设置", R.drawable.ic_person)).forEach { (tab, label, icon) ->
             NavigationBarItem(selected = selected == tab, onClick = { model.tab(tab) },
                 modifier = Modifier.semantics { contentDescription = "${label}导航" },

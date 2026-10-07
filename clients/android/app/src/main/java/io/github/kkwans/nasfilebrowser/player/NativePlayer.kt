@@ -113,7 +113,8 @@ class NativePlayer(context: Context) {
         viewport = null
         trace.record(PlaybackTraceAction.DETACH)
     }
-    fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true, videoDecodePolicy: VideoDecodePolicy = VideoDecodePolicy.AUTO) {
+    fun open(url: String, positionMs: Long = 0, autoplay: Boolean = true, videoDecodePolicy: VideoDecodePolicy = VideoDecodePolicy.AUTO,
+        dataSourceFactory: androidx.media3.datasource.DataSource.Factory? = null) {
         if (released) return
         disposeMedia()
         val epoch = session.open(autoplay)
@@ -158,7 +159,7 @@ class NativePlayer(context: Context) {
         }
         val bufferControl = PlaybackLoadControl().also { loadControl = it }
         val player = ExoPlayer.Builder(context, factory).setLoadControl(bufferControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(context, extractors)).build()
+            .setMediaSourceFactory(if (dataSourceFactory == null) DefaultMediaSourceFactory(context, extractors) else DefaultMediaSourceFactory(dataSourceFactory, extractors)).build()
         engine = player
         trace.record(PlaybackTraceAction.ENGINE_READY); trace.record(PlaybackTraceAction.PLAYER_READY)
         fun current() = !released && engine === player && session.accepts(epoch)

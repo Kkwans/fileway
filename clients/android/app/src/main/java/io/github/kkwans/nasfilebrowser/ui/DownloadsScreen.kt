@@ -1,0 +1,138 @@
+package io.github.kkwans.nasfilebrowser.ui
+
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.webkit.MimeTypeMap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.kkwans.nasfilebrowser.R
+import io.github.kkwans.nasfilebrowser.app.*
+import io.github.kkwans.nasfilebrowser.download.*
+import java.util.Locale
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun DownloadsScreen(model: ClientModel) {
+    val state by model.downloads.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var filter by rememberSaveable { mutableStateOf("全部") }
+    var settings by rememberSaveable { mutableStateOf(false) }
+    var remove by remember { mutableStateOf<DownloadRecord?>(null) }
+    var deleteFile by remember { mutableStateOf(false) }
+    val folder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) model.downloads.selectDirectory(uri) }
+    val folderFallback = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    fun openFolder(tree: String) {
+        try { context.startActivity(model.downloads.target.directoryIntent(tree)) }
+        catch (_: android.content.ActivityNotFoundException) {
+            try { folderFallback.launch(model.downloads.target.directoryPicker(tree)) }
+            catch (_: Exception) { model.downloads.reportError("此设备没有可用的文件管理器，请安装后重试") }
+        } catch (_: Exception) { model.downloads.reportError("无法打开目录，请检查文件管理器及目录授权") }
+    }
+    val records = state.items.filter { when (filter) { "已完成" -> it.complete; "未完成" -> !it.complete; else -> true } }
+    Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "downloads") }) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("本机下载", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton({ settings = true }) { Text("下载目录") }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("全部", "未完成", "已完成").forEach { label -> FilterChip(filter == label, { filter = label }, { Text(label) }) }
+            }
+            state.error?.let { message -> Text(message, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
+            state.notice?.let { message -> Text(message, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            LazyColumn(Modifier.weight(1f).semantics { contentDescription = "本机下载列表" }, contentPadding = PaddingValues(bottom = 16.dp)) {
+                if (records.isEmpty()) item {
+                    Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Icon(painterResource(R.drawable.ic_download), null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text(if (state.items.isEmpty()) "把文件带在身边" else "这里还没有${filter}的文件", style = MaterialTheme.typography.titleMedium)
+                        Text("从文件详情中下载。下载中的视频可边下边播，完成的图片和视频可离线打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton({ model.tab("files") }) { Text("浏览服务器文件") }
+                    }
+                }
+                items(records, key = { it.id }) { item ->
+                    val file = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
+                    val kind = file.mediaKind()
+                    val canOpen = item.localUri.isNotEmpty() && (item.complete || kind == MediaKind.VIDEO)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(painterResource(if (kind == MediaKind.IMAGE) R.drawable.ic_image else if (kind == MediaKind.VIDEO) R.drawable.art_play else R.drawable.ic_download), null,
+                                Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+                            Column(Modifier.weight(1f).clickable(enabled = canOpen) { openDownloaded(context, model, item, kind) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp)) {
+                                Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(item.sourceLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        val fraction = if (item.expectedSize > 0) (item.downloaded.toDouble() / item.expectedSize).toFloat().coerceIn(0f, 1f) else 0f
+                        val status = when (item.status) { "completed" -> "已完成"; "queued" -> "等待下载"; "running" -> "正在下载"; "paused" -> "已暂停"; "interrupted" -> "下载中断"; else -> "下载失败" }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(status, style = MaterialTheme.typography.labelMedium, color = if (item.status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(if (item.complete) readableSize(item.expectedSize) else "${(fraction * 100).toInt().coerceAtMost(99)}% · ${readableSize(item.downloaded)} / ${readableSize(item.expectedSize)}", style = MaterialTheme.typography.labelMedium)
+                        }
+                        if (!item.complete) LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(3.dp), gapSize = 0.dp, drawStopIndicator = {})
+                        if (item.active) Text(state.speeds[item.id]?.let { readableSize(it) + "/s" } ?: "正在获取下载速度", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
+                            if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
+                            var more by remember(item.id) { mutableStateOf(false) }
+                            Box {
+                                TextButton({ more = true }, enabled = !state.busy) { Text("更多") }
+                                DropdownMenu(more, { more = false }) {
+                                    DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri) })
+                                    DropdownMenuItem({ Text("移除记录") }, { more = false; deleteFile = false; remove = item }, enabled = item.complete)
+                                    DropdownMenuItem({ Text("删除文件与记录") }, { more = false; deleteFile = true; remove = item }, enabled = !item.active)
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+        }
+    }
+    if (settings) ModalBottomSheet(onDismissRequest = { settings = false }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("下载目录", style = MaterialTheme.typography.titleLarge)
+            Text(downloadDirectoryLabel(state.tree), style = MaterialTheme.typography.bodyLarge)
+            Text("更改目录只影响新下载。现有文件留在原目录，不会自动移动或删除。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Button({ try { folder.launch(state.tree.takeIf { it.isNotEmpty() }?.let(Uri::parse)) } catch (_: Exception) { model.downloads.reportError("无法打开目录选择器") } }, Modifier.fillMaxWidth()) { Text("选择下载目录") }
+            OutlinedButton({ openFolder(state.tree) }, Modifier.fillMaxWidth()) { Text("打开下载目录") }
+            if (state.tree.isNotEmpty()) TextButton({ model.downloads.selectDirectory(null) }, Modifier.fillMaxWidth()) { Text("恢复默认 · Download/fileway") }
+        }
+    }
+    remove?.let { item -> AlertDialog(onDismissRequest = { remove = null }, title = { Text(if (deleteFile) "删除本机文件？" else "移除下载记录？") },
+        text = { Text(item.name + "\n\n" + if (deleteFile) "本机文件与下载记录将删除。服务器上的原文件保持不变。" else if (item.complete) "仅移除记录，本机文件仍保留，可通过系统文件管理器查看。" else "仅移除记录会留下未完成文件，且无法继续下载。建议选择删除文件与记录。") },
+        confirmButton = { TextButton({ model.downloads.remove(item, deleteFile); remove = null }) { Text(if (deleteFile) "删除" else "移除记录") } },
+        dismissButton = { TextButton({ remove = null }) { Text("取消") } }) }
+}
+
+private fun downloadDirectoryLabel(tree: String): String = if (tree.isEmpty()) "Download/fileway" else runCatching {
+    DocumentsContract.getTreeDocumentId(Uri.parse(tree)).replace("primary:", "本机存储 / ")
+}.getOrDefault("已授权的自定义目录")
+
+private fun openDownloaded(context: Context, model: ClientModel, item: DownloadRecord, kind: MediaKind?) {
+    if (kind != null) { model.openDownload(item); return }
+    try {
+        val uri = Uri.parse(item.localUri)
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)) ?: "application/octet-stream"
+        context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply { clipData = ClipData.newRawUri(item.name, uri) })
+    } catch (_: Exception) { model.downloads.reportError("没有可打开此文件的应用，请通过文件管理器查看") }
+}

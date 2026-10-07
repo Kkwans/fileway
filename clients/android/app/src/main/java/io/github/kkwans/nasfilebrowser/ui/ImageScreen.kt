@@ -107,9 +107,10 @@ import kotlin.math.abs
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val cache by model.cache.state.collectAsStateWithLifecycle()
-    val account = model.cacheAccount()
+    val local = file.downloadId.isNotEmpty()
+    val account = if (local) "local-downloads" else model.cacheAccount()
     var originalRequested by rememberSaveable(file.mediaKey) { mutableStateOf(false) }
-    val quality = if (originalRequested) ImageQuality.ORIGINAL else cache.settings.imageQuality
+    val quality = if (local || originalRequested) ImageQuality.ORIGINAL else cache.settings.imageQuality
     val activeNow by rememberUpdatedState(active)
     var preview by remember { mutableStateOf<CoilImage?>(null) }
     var previewStatus by remember { mutableStateOf("正在读取预览") }
@@ -162,8 +163,8 @@ import kotlin.math.abs
             val result = model.image(file, quality)
             owned = result.first; current = result.second
             readingLease = owned
-            phase = if (quality == ImageQuality.ORIGINAL) "正在读取原图" else "正在读取图片"
-            if (cache.settings.imageMB == 0L || forceWorkingFile) {
+            phase = if (local) "正在打开本机图片" else if (quality == ImageQuality.ORIGINAL) "正在读取原图" else "正在读取图片"
+            if (!local && (cache.settings.imageMB == 0L || forceWorkingFile)) {
                 temporary = TemporaryImages.read(context, owned, if (quality == ImageQuality.ORIGINAL || quality == ImageQuality.HIGH) current.size else 0)
                 working = temporary
             }
@@ -183,6 +184,7 @@ import kotlin.math.abs
     LaunchedEffect(readingLease, active, fetched, canceled, failure) {
         readProgress = null
         val source = readingLease ?: return@LaunchedEffect
+        if (local) return@LaunchedEffect
         if (!active || fetched || canceled || failure != null) return@LaunchedEffect
         while (true) {
             try {
@@ -201,7 +203,7 @@ import kotlin.math.abs
     val lease = asset
     val token = requestToken
     val imageLoader = model.cache.imageLoader.value
-    val data = working?.file ?: lease?.url
+    val data = working?.file ?: lease?.url?.let { if (local) android.net.Uri.parse(it) else it }
     val request = remember(data, cacheKey, token, attempt, quality, imageLoader) {
         ImageRequest.Builder(context).data(data).placeholder { latestPreview }.error { latestPreview }.fallback { latestPreview }
             .memoryCacheKey(cacheKey).diskCacheKey(cacheKey)

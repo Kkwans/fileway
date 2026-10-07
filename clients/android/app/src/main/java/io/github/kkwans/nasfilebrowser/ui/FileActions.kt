@@ -18,11 +18,21 @@ import io.github.kkwans.nasfilebrowser.app.*
 import io.github.kkwans.nasfilebrowser.data.collectionPath
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 
 @Composable internal fun FileActions(model: ClientModel, file: ResourceRef, onMoved: () -> Unit = {}) {
+    if (file.downloadId.isNotEmpty()) {
+        Text("本机下载 · 收藏和标签在服务器原文件上管理", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
     val tags by model.tags.state.collectAsStateWithLifecycle()
     val trash by model.trash.state.collectAsStateWithLifecycle()
     val client by model.state.collectAsStateWithLifecycle()
+    val downloads by model.downloads.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var labeling by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     var moving by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     val enabled = !trash.changing && !client.busy
@@ -33,6 +43,13 @@ import kotlinx.coroutines.withTimeout
             contentDescription = "设置文件标签"
             stateDescription = if (tags.loaded) "已关联 $count 个标签" else "尚未读取标签"
         }, enabled = enabled && !tags.changing) { Text(if (tags.loaded) "标签 · $count" else "设置标签") }
+        if (!file.directory && client.permissions.download) OutlinedButton({
+            model.download(file)
+            if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }, Modifier.fillMaxWidth(), enabled = enabled && !downloads.busy) { Text("下载到本机") }
+        downloads.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        downloads.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         if (client.permissions.delete && file.path != "/") TextButton({ moving = true }, Modifier.fillMaxWidth(), enabled = enabled && !tags.changing) { Text("移入回收站") }
         if (!labeling) tags.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }

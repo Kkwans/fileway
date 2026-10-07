@@ -1,0 +1,101 @@
+package io.github.kkwans.nasfilebrowser
+
+import android.net.Uri
+import androidx.lifecycle.ViewModelProvider
+import androidx.test.ext.junit.rules.ActivityScenarioRule
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
+import io.github.kkwans.nasfilebrowser.app.ClientModel
+import io.github.kkwans.nasfilebrowser.data.*
+import io.github.kkwans.nasfilebrowser.download.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.util.UUID
+
+/** Only owned fixture profile/file/record; preserves the previously active account. */
+@RunWith(AndroidJUnit4::class)
+class DownloadPlaybackTest {
+    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    @Test fun savedPrefixStreamsMissingRangesThenCompletedFilePlaysOffline(): Unit = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val db = ClientDatabase.get(context); val dao = db.downloads()
+        val previous = db.profiles().activeSession()
+        val bytes = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
+        val source = NativePlaybackTest.Fixture(bytes, download = true)
+        val store = ProfileStore(db, CredentialVault(context))
+        val profile = store.save(ServerProfile(name = "Owned download fixture", address = source.url))
+        val target = DownloadTarget(context)
+        var saved: DownloadRecord? = null
+        lateinit var model: ClientModel
+        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
+        suspend fun waitFor(stage: String, predicate: () -> Boolean) {
+            try { withTimeout(20_000) { while (!predicate()) delay(100) } }
+            catch (failure: TimeoutCancellationException) {
+                UiDevice.getInstance(instrumentation).executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+                UiDevice.getInstance(instrumentation).executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/download-prefix-failure.png")
+                throw AssertionError("$stage: player=${model.player.state.value}, trace=${model.player.diagnosticSnapshot()}, raw=${source.rawRequests.get()}, unexpected=${source.unexpected.get()}, selected=${model.state.value.selected?.downloadId}, busy=${model.state.value.busy}, tab=${model.state.value.tab}, client=${model.state.value.error}, download=${model.downloads.state.value.error}", failure)
+            }
+        }
+        try {
+            main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
+            waitFor("owned login") { model.state.value.connected && !model.state.value.busy }
+            val account = store.accounts(profile).single()
+            val id = UUID.randomUUID().toString(); val prefix = minOf(bytes.size / 4, 8192)
+            val record = DownloadRecord(id, dao.lastJobId() + 1, account.key, profile.id, profile.sourceRevision,
+                "/fixture.mkv", "/fixture.mkv", "fileway-owned-download-$id.mkv", "video", bytes.size.toLong(), "owned-download-v1", "${bytes.size}/owned-download-v1", "Owned fixture", "",
+                status = "paused", downloaded = prefix.toLong(), createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis())
+            val uri = target.allocate(record); saved = record.copy(localUri = uri.toString())
+            context.contentResolver.openOutputStream(uri, "w")!!.use { it.write(bytes, 0, prefix) }
+            dao.insert(saved)
+            main { model.tab("downloads") }
+            val device = UiDevice.getInstance(instrumentation)
+            assertNotNull(device.wait(Until.findObject(By.text("本机下载")), 5000))
+            withTimeout(5000) { model.downloads.state.first { it.items.any { row -> row.id == id } } }
+            val play = device.wait(Until.findObject(By.text("边下边播")), 5000)
+            assertNotNull(play); play!!.click()
+            waitFor("prefix playback") { model.player.state.value.let { it.firstFrameRendered && it.playing && it.seekable && it.positionMs > 600 } }
+            assertTrue("The missing range must actually use authenticated transport", source.rawRequests.get() > 0)
+            assertEquals(prefix.toLong(), dao.get(id)!!.downloaded)
+            assertEquals("paused", dao.get(id)!!.status)
+            main { model.player.seek(8000) }
+            waitFor("range seek") { model.player.state.value.positionMs >= 7500 }
+            main { model.leavePlayer() }
+            val resume = device.wait(Until.findObject(By.text("继续下载")), 5000)
+            assertNotNull(resume); resume!!.click()
+            withTimeout(20_000) { dao.observe().first { rows -> rows.any { it.id == id && it.complete } } }
+            val complete = dao.get(id)!!; saved = complete
+            assertEquals(bytes.size.toLong(), complete.downloaded)
+            val local = context.contentResolver.openInputStream(Uri.parse(complete.localUri))!!.use { it.readBytes() }
+            assertArrayEquals("Resume must append the original remaining bytes", bytes, local)
+            DownloadRuntime.get(context).awaitStopped(id)
+            source.close()
+            val requests = source.rawRequests.get()
+            main { model.openDownload(complete) }
+            waitFor("offline first frame") { model.player.state.value.let { it.firstFrameRendered && it.playing && it.positionMs > 600 } }
+            main { model.player.seek(4000) }
+            waitFor("offline seek") { model.player.state.value.positionMs >= 3500 }
+            assertEquals(requests, source.rawRequests.get())
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/download-offline-phone.png")
+        } finally {
+            withContext(NonCancellable) {
+                main { model.leavePlayer(); model.disconnect() }
+                saved?.let { item ->
+                    DownloadScheduler.pause(context, item.id); DownloadRuntime.get(context).awaitStopped(item.id)
+                    target.delete(item); dao.removeRecord(item.id)
+                }
+                source.close(); store.remove(profile)
+                previous?.let { if (db.profiles().account(it.accountKey) != null) db.profiles().saveActiveSession(it) }
+            }
+        }
+    }
+}

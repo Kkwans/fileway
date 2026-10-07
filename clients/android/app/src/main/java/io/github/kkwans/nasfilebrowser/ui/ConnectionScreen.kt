@@ -115,6 +115,7 @@ import io.github.kkwans.nasfilebrowser.data.*
                         enabled = canSave, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), shape = RoundedCornerShape(10.dp)) {
                         Text("保存服务器档案", fontSize = 14.sp)
                     }
+                    TextButton(onClick = { model.tab("downloads") }, modifier = Modifier.fillMaxWidth()) { Text("查看本机下载 · 无需连接服务器") }
                 }
             }
         }

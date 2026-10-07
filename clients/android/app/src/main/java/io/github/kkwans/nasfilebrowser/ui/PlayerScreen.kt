@@ -101,6 +101,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 @Composable internal fun PlayerScreen(model: ClientModel, file: ResourceRef) {
     val state by model.player.state.collectAsStateWithLifecycle()
     val client by model.state.collectAsStateWithLifecycle()
+    val downloads by model.downloads.state.collectAsStateWithLifecycle()
     val queue = client.mediaQueue
     val liveState by rememberUpdatedState(state)
     val holdRate by model.playbackPreferences.holdRate.collectAsStateWithLifecycle()
@@ -492,7 +493,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             val audio = sheet == PlayerSheet.AUDIO
                             TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle,
                                 header = if (audio) null else { {
-                                    DetailAction(R.drawable.ic_folder, "选择外挂字幕", if (state.subtitleLoading) "正在读取字幕" else "浏览当前服务器的字幕文件", "选择外挂字幕", !state.subtitleLoading) { sheet = PlayerSheet.EXTERNAL; touch() }
+                                    if (file.downloadId.isEmpty()) DetailAction(R.drawable.ic_folder, "选择外挂字幕", if (state.subtitleLoading) "正在读取字幕" else "浏览当前服务器的字幕文件", "选择外挂字幕", !state.subtitleLoading) { sheet = PlayerSheet.EXTERNAL; touch() }
                                     DetailAction(R.drawable.ic_subtitles, "选择本地字幕", "从手机或文档提供方选择字幕", "选择本地字幕", !readingDocument && !state.subtitleLoading) {
                                         documentGeneration = model.player.state.value.mediaGeneration
                                         touch()
@@ -594,7 +595,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         }
                         PlayerSheet.SOURCE -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             item { SourceField("文件", file.name) }
-                            item { SourceField("服务器与账号", client.serverLabel) }
+                            item { SourceField(if (file.downloadId.isEmpty()) "服务器与账号" else "来源", if (file.downloadId.isEmpty()) client.serverLabel
+                                else if (downloads.items.firstOrNull { it.id == file.downloadId }?.complete == true) "本机下载 · 离线读取"
+                                else "本机下载 · 未下载片段按需读取服务器") }
                             item { SourceField("路径", file.path) }
                             item { SourceField("播放方式", "原生播放 · Media3") }
                             item { SourceField("画质", "原画 · 直接读取原文件") }
