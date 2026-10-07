@@ -228,6 +228,7 @@ func cachedChunk(ctx context.Context, l *Lease, c *mediaCache, version string, s
 	n := end - start + 1
 	key := version + "-" + strconv.FormatInt(start, 10)
 	if data, ok := c.read(l.cacheGroup(), key, n); ok {
+		l.telemetry.add(0, int64(len(data)), 0, 0)
 		return data, nil
 	}
 	headers := make(http.Header)
@@ -254,7 +255,7 @@ func cachedChunk(ctx context.Context, l *Lease, c *mediaCache, version string, s
 	if actual != version {
 		return nil, errors.New("source identity changed")
 	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, n+1))
+	data, err := io.ReadAll(io.LimitReader(measuredBody{ReadCloser: res.Body, stats: &l.telemetry}, n+1))
 	if err != nil || int64(len(data)) != n {
 		return nil, errors.New("source interrupted")
 	}

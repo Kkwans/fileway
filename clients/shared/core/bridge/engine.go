@@ -247,6 +247,8 @@ func (e *Engine) execute(c Command) (any, error) {
 		return nil, b.ConfigureCache(c.CacheConfig)
 	case "cache_cleanup":
 		return b.CleanCache(c.Clear)
+	case "lease_stats":
+		return b.LeaseStats(c.Session, c.URL)
 	case "lease":
 		endpoint, err := transport.RawEndpoint(c.Path, c.WirePath)
 		if err != nil {

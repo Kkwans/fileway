@@ -36,13 +36,14 @@ type Session struct {
 }
 
 type Lease struct {
-	cacheKey string
-	prefetch chan struct{}
-	session  *Session
-	endpoint string
-	media    bool
-	ctx      context.Context
-	cancel   context.CancelFunc
+	telemetry leaseTelemetry
+	cacheKey  string
+	prefetch  chan struct{}
+	session   *Session
+	endpoint  string
+	media     bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // Broker binds source credentials to immutable sessions. The public HTTP
@@ -358,6 +359,11 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, done := combined(r.Context(), l.ctx)
 	defer done()
+	var requestID uint64
+	if r.Method == http.MethodGet {
+		requestID = l.telemetry.begin()
+		defer l.telemetry.finish(requestID)
+	}
 	headers := make(http.Header)
 	for _, k := range []string{"Range", "If-Range", "If-Modified-Since", "If-None-Match"} {
 		if v := r.Header.Get(k); v != "" {
@@ -374,6 +380,11 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer res.Body.Close()
+	if r.Method == http.MethodGet && (res.StatusCode == http.StatusOK || res.StatusCode == http.StatusPartialContent) {
+		l.telemetry.total(requestID, res.ContentLength)
+		res.Body = measuredBody{ReadCloser: res.Body, stats: &l.telemetry}
+		w = &measuredWriter{ResponseWriter: w, stats: &l.telemetry, request: requestID}
+	}
 	if res.Header.Get("X-Renew-Token") == "true" && previous != "" {
 		if err := l.session.renew(ctx, previous); err != nil {
 			http.Error(w, "sign in again", http.StatusUnauthorized)
