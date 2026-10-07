@@ -99,6 +99,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private val layoutWrites = Mutex()
     private var layoutRequest = 0L
     val search: SearchController = SearchController(viewModelScope, { context == it && generation == it.generation }, ::openSearchResult)
+    val favorites = FavoritesController(viewModelScope) { context === it && generation == it.generation }
     init {
         player.checkpoint = { saveProgress() }
         val expected = generation
@@ -171,6 +172,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 store.activate(profile, account, bound.owner)
                 if (generation != expected) return@launch
                 context = bound
+                favorites.bind(bound)
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
                 mutable.value = mutable.value.copy(connected = true, profile = profile, accounts = accounts, serverLabel = "${profile.name} · ${account.username}", busy = true, stage = "正在读取目录", notice = null, previewScope = opened.id, accountName = account.username, fileLayout = directory?.fileLayout ?: FileLayout.COVER)
@@ -240,6 +242,30 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun fileCategory(value: FileCategory) { mutable.value = mutable.value.copy(fileCategory = value) }
     fun fileOrder(value: FileOrder) { mutable.value = mutable.value.copy(fileOrder = value) }
     fun open(file: ResourceRef) = openFrom(file, directoryItems(), MediaQueueSource.DIRECTORY)
+    fun openFavorite(path: String) {
+        val bound = context ?: return
+        if (mutable.value.busy) return
+        operation?.cancel()
+        mutable.value = mutable.value.copy(busy = true, stage = "正在确认收藏文件", error = null)
+        operation = viewModelScope.launch {
+            try {
+                val wire = SearchResult.encodePath(path)
+                val data = bound.api.request("GET", "/api/resources$wire?metadata=1")
+                currentCoroutineContext().ensureActive()
+                check(context === bound && generation == bound.generation)
+                val actualPath = data.optString("path", path)
+                check(actualPath == path) { "收藏路径已变化，请重新选择" }
+                val file = ResourceRef(path, data.optString("wirePath").ifEmpty { wire }, data.optString("name").ifEmpty { path.substringAfterLast('/') },
+                    data.getBoolean("isDir"), data.optString("type"), data.optLong("size"), data.optString("modified"))
+                mutable.value = mutable.value.copy(busy = false, stage = "")
+                if (file.directory) { tab("files"); openQueued(file, null) }
+                else openQueued(file, MediaQueue.snapshot(++queueSequence, bound.account.key, file, listOf(file), MediaQueueSource.SINGLE))
+            } catch (error: Exception) {
+                if (error !is CancellationException && context === bound) mutable.value = mutable.value.copy(
+                    busy = false, stage = "", error = error.message ?: "收藏文件无法打开，请重试")
+            }
+        }
+    }
     private fun openSearchResult(file: ResourceRef) = openFrom(file, search.mediaSnapshot(), MediaQueueSource.SEARCH)
     private fun openFrom(file: ResourceRef, candidates: List<ResourceRef>, source: MediaQueueSource) {
         val bound = context ?: return
@@ -617,6 +643,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false
         previewImageLoader.memoryCache?.clear()
         search.close()
+        favorites.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
         val previous = closing; val media = mediaClosing

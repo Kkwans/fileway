@@ -62,6 +62,7 @@ import java.util.Locale
                 search.open -> SearchScreen(model, state)
                 state.tab == "files" -> BrowserScreen(model, state)
                 state.tab == "settings" -> SettingsScreen(model, state)
+                state.tab == "library" -> FavoritesScreen(model, state)
                 else -> RecentScreen(model, state, recent)
             }
         }
@@ -106,6 +107,7 @@ import java.util.Locale
                 }
             }
             details?.let { file -> FileDetailsDialog(file, showSize = false, openEnabled = !state.busy,
+                actions = { FavoriteFileAction(model, file) },
                 onLocation = { details = null; model.openContainingDirectory(file) }, onDismiss = { details = null }) }
         }
     }

@@ -32,6 +32,10 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         }
     }
     suspend fun request(method: String, endpoint: String, body: JSONObject? = null) = JSONObject(response(method, endpoint, body))
+    suspend fun action(method: String, endpoint: String, body: JSONObject? = null): JSONObject {
+        val text = response(method, endpoint, body, setOf(200, 201, 202, 204))
+        return if (text.isBlank()) JSONObject() else JSONObject(text)
+    }
     suspend fun spriteMetadata(path: String): JSONObject {
         require(path.startsWith('/'))
         val query = java.net.URLEncoder.encode(path, "UTF-8")

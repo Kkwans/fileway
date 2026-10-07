@@ -1,0 +1,195 @@
+package io.github.kkwans.nasfilebrowser.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.kkwans.nasfilebrowser.R
+import io.github.kkwans.nasfilebrowser.app.*
+
+private fun favoriteColor(value: String, fallback: Color): Color = try { Color(android.graphics.Color.parseColor(value)) } catch (_: Exception) { fallback }
+
+@Composable internal fun FavoritesScreen(model: ClientModel, client: ClientState) {
+    val state by model.favorites.state.collectAsStateWithLifecycle()
+    var filter by rememberSaveable(state.scope) { mutableStateOf<String?>(null) }
+    var editing by remember(state.scope) { mutableStateOf<Favorite?>(null) }
+    var managing by rememberSaveable(state.scope) { mutableStateOf(false) }
+    val enabled = !state.loading && !state.changing && !client.busy
+    LaunchedEffect(state.scope) { model.favorites.refresh() }
+    LaunchedEffect(state.groups) { if (!filter.isNullOrEmpty() && state.groups.none { it.id == filter }) filter = null }
+    val items = state.items.filter { filter == null || it.groupId == filter }
+    Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "library") }) { insets ->
+        Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("收藏夹", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                TextButton(onClick = { managing = true }, enabled = enabled && state.loaded) { Text("管理分组") }
+                IconButton(onClick = model.favorites::refresh, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新收藏") }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(filter == null, { filter = null }, { Text("全部 ${state.items.size}") })
+                FilterChip(filter == "", { filter = "" }, { Text("未分组") })
+                state.groups.forEach { group -> FilterChip(filter == group.id, { filter = group.id }, { Text(group.name) },
+                    leadingIcon = { Box(Modifier.size(8.dp).background(favoriteColor(group.color, MaterialTheme.colorScheme.primary), CircleShape)) }) }
+            }
+            if (state.loading || state.changing || client.busy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            (state.error ?: client.error)?.let { message -> Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(message, Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = model.favorites::refresh, enabled = enabled) { Text("刷新") }
+            } }
+            state.notice?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (items.isEmpty() && !state.loading && state.error == null) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(if (state.items.isEmpty()) "常用文件，随手收藏" else "这个分组还没有收藏", style = MaterialTheme.typography.titleMedium)
+                    Text("长按文件或文件夹，在详情中加入收藏。这里与网页端同步。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { model.tab("files") }) { Text("浏览文件") }
+                }
+            } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = "服务端收藏列表" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(items, key = { it.id }) { favorite ->
+                    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background) {
+                        Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button) { model.openFavorite(favorite.path) }
+                            .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(favorite.name.ifEmpty { favorite.path }, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text(favorite.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                state.groups.firstOrNull { it.id == favorite.groupId }?.let { group -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Box(Modifier.size(6.dp).background(favoriteColor(group.color, MaterialTheme.colorScheme.primary), CircleShape))
+                                    Text(group.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } }
+                            }
+                            TextButton(onClick = { editing = favorite }, enabled = enabled) { Text("编辑") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    editing?.let { item ->
+        var name by remember(item.id) { mutableStateOf(item.name) }
+        var group by remember(item.id) { mutableStateOf(item.groupId) }
+        AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑收藏") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("显示名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Text(item.path, style = MaterialTheme.typography.bodySmall)
+                Text("收藏分组", style = MaterialTheme.typography.titleSmall)
+                FavoriteGroupChoice("", "未分组", group) { group = "" }
+                state.groups.forEach { folder -> FavoriteGroupChoice(folder.id, folder.name, group) { group = folder.id } }
+                Row {
+                    TextButton(onClick = { model.favorites.move(item, -1); editing = null }, enabled = enabled && state.items.firstOrNull()?.id != item.id) { Text("上移") }
+                    TextButton(onClick = { model.favorites.move(item, 1); editing = null }, enabled = enabled && state.items.lastOrNull()?.id != item.id) { Text("下移") }
+                    TextButton(onClick = { model.favorites.remove(item); editing = null }, enabled = enabled) { Text("取消收藏") }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { model.favorites.update(item, name, group); editing = null }, enabled = enabled && name.isNotBlank()) { Text("保存") } },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
+    }
+    if (managing) FavoriteGroupsDialog(model) { managing = false }
+}
+
+@Composable private fun FavoriteGroupChoice(id: String, name: String, selected: String, choose: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = id == selected, role = Role.RadioButton, onClick = choose), verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(id == selected, onClick = null); Text(name, Modifier.padding(start = 8.dp))
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun FavoriteGroupsDialog(model: ClientModel, dismiss: () -> Unit) {
+    val state by model.favorites.state.collectAsStateWithLifecycle()
+    var create by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<FavoriteGroup?>(null) }
+    var deleting by remember { mutableStateOf<FavoriteGroup?>(null) }
+    val enabled = !state.changing && !state.loading
+    AlertDialog(onDismissRequest = dismiss, title = { Text("收藏分组") }, text = {
+        Column {
+            if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (state.groups.isEmpty()) Text("用分组整理电影、照片和常用文件夹。", style = MaterialTheme.typography.bodyMedium)
+            LazyColumn(Modifier.heightIn(max = 400.dp)) {
+                items(state.groups, key = { it.id }) { group ->
+                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        Text(group.name, style = MaterialTheme.typography.titleSmall)
+                        Row {
+                            TextButton({ model.favorites.moveGroup(group, -1) }, enabled = enabled && state.groups.firstOrNull()?.id != group.id) { Text("上移") }
+                            TextButton({ model.favorites.moveGroup(group, 1) }, enabled = enabled && state.groups.lastOrNull()?.id != group.id) { Text("下移") }
+                            TextButton({ editing = group }, enabled = enabled) { Text("编辑") }
+                            TextButton({ deleting = group }, enabled = enabled) { Text("删除") }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            }
+        }
+    }, confirmButton = { TextButton({ create = true }, enabled = enabled) { Text("新建分组") } }, dismissButton = { TextButton(dismiss) { Text("完成") } })
+    if (create || editing != null) {
+        val group = editing
+        var name by remember(group) { mutableStateOf(group?.name.orEmpty()) }
+        var color by remember(group) { mutableStateOf(group?.color ?: "#3F72D8") }
+        val palette = listOf("#E5484D", "#D95876", "#F06A5B", "#F28C28", "#DDAA1D", "#D6BE21", "#86B83E", "#35A867", "#2AA889", "#28AFC0", "#3A9BD9", "#3F72D8", "#5B62D9", "#7656C9", "#9B4DB5", "#C34F90", "#758195")
+        AlertDialog(onDismissRequest = { create = false; editing = null }, title = { Text(if (group == null) "新建分组" else "编辑分组") }, text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("分组名称") }, singleLine = true)
+                Text("标记颜色", style = MaterialTheme.typography.titleSmall)
+                FlowRow {
+                    palette.forEachIndexed { index, value -> Box(Modifier.size(48.dp).selectable(selected = value == color, role = Role.RadioButton) { color = value }
+                        .semantics { contentDescription = "分组颜色 ${index + 1}" }, contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(28.dp).border(if (value == color) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
+                            .padding(3.dp).background(favoriteColor(value, MaterialTheme.colorScheme.primary), CircleShape))
+                    } }
+                }
+            }
+        }, confirmButton = { TextButton({ model.favorites.saveGroup(group, name, color); create = false; editing = null }, enabled = enabled && name.isNotBlank()) { Text("保存") } },
+            dismissButton = { TextButton({ create = false; editing = null }) { Text("取消") } })
+    }
+    deleting?.let { group -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除分组“${group.name}”？") },
+        text = { Text("组内收藏将移到“未分组”，文件保持原位。网页端也会同步此变更。") },
+        confirmButton = { TextButton({ model.favorites.removeGroup(group); deleting = null }, enabled = enabled) { Text("删除分组") } },
+        dismissButton = { TextButton({ deleting = null }) { Text("取消") } }) }
+}
+
+@Composable internal fun FavoriteFileAction(model: ClientModel, file: ResourceRef) {
+    val state by model.favorites.state.collectAsStateWithLifecycle()
+    var choosing by remember(file) { mutableStateOf(false) }
+    LaunchedEffect(file, state.scope) { model.favorites.refresh() }
+    val existing = model.favorites.favorite(file.path)
+    Column {
+        OutlinedButton(onClick = { if (existing != null) model.favorites.remove(existing) else choosing = true },
+            modifier = Modifier.fillMaxWidth(), enabled = state.loaded && !state.loading && !state.changing && state.error == null) {
+            Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+            Text(if (state.changing) "正在保存" else if (state.loading) "正在读取收藏" else if (existing == null) "加入收藏" else "取消收藏")
+        }
+        state.error?.let { Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(it, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            TextButton(model.favorites::refresh) { Text("重试") }
+        } }
+        state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+    if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text("加入收藏") }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text(file.name, style = MaterialTheme.typography.bodyLarge)
+            FavoriteGroupChoice("", "未分组", "") { model.favorites.add(file); choosing = false }
+            state.groups.forEach { group -> FavoriteGroupChoice(group.id, group.name, "") { model.favorites.add(file, group.id); choosing = false } }
+        }
+    }, confirmButton = { TextButton({ choosing = false }) { Text("取消") } })
+}

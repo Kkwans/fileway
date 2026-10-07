@@ -90,7 +90,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
                 }
             }
         }
-        details?.let { file -> FileDetailsDialog(file, onDismiss = { details = null }) }
+        details?.let { file -> FileDetailsDialog(file, actions = { FavoriteFileAction(model, file) }, onDismiss = { details = null }) }
     }
 }
 
@@ -179,7 +179,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
 }
 
 @Composable internal fun FileDetailsDialog(file: ResourceRef, showSize: Boolean = true, onOpen: (() -> Unit)? = null,
-    openEnabled: Boolean = true, onLocation: (() -> Unit)? = null, onDismiss: () -> Unit) {
+    openEnabled: Boolean = true, onLocation: (() -> Unit)? = null, actions: (@Composable () -> Unit)? = null, onDismiss: () -> Unit) {
     @Composable fun field(label: String, value: String) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -188,11 +188,14 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
     }
     AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(12.dp), containerColor = MaterialTheme.colorScheme.background,
         title = { Text("文件详情", style = MaterialTheme.typography.titleLarge) }, text = {
-        SelectionContainer { Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             field("名称", file.name); field("位置", file.path); field("类型", fileTypeLabel(file))
             if (showSize && !file.directory) field("大小", readableSize(file.size))
             field("修改时间", displayModified(file.modified) ?: "未提供")
         } }
+        actions?.invoke()
+        }
     }, confirmButton = {
         if (onLocation != null) TextButton(onClick = onLocation, enabled = openEnabled) { Text("打开所在目录") }
         if (onOpen == null) TextButton(onClick = onDismiss) { Text("关闭") }
