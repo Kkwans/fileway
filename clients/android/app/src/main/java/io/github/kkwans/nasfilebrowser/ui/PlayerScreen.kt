@@ -577,14 +577,14 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 Choice("${value}×", if (value == 1f) "正常速度" else "", state.rate == value) { model.player.rate(value); sheet = null; touch() }
                             }
                         }
-                        PlayerSheet.VOLUME -> Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        PlayerSheet.VOLUME -> Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             Text("${(mediaVolume * 100f / maximumVolume).roundToInt()}%", fontSize = 32.sp, fontWeight = FontWeight.Medium)
                             PlayerSlider(mediaVolume.toFloat(), maximumVolume.toFloat(), "媒体系统音量", !audioManager.isVolumeFixed,
                                 { changeVolume(it) }, description = "${mediaVolume}，共 $maximumVolume 档")
                             Text(if (audioManager.isVolumeFixed) "此设备使用固定音量。" else "与设备媒体音量键同步，右侧上下滑动也可调整。", fontSize = 13.sp, color = PlayerSecondary)
                             Spacer(Modifier.height(8.dp))
                         }
-                        PlayerSheet.BRIGHTNESS -> Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        PlayerSheet.BRIGHTNESS -> Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             Text(if (brightness < 0) "跟随系统" else "${(brightness * 100).roundToInt()}%", fontSize = 28.sp)
                             PlayerSlider(actualBrightness() * 100, 100f, "窗口亮度", window != null, { changeBrightness(it / 100) })
                             Text("仅调整当前播放窗口，退出后恢复。左侧上下滑动也可调整。", fontSize = 13.sp, color = PlayerSecondary)
@@ -707,7 +707,7 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
         contentDescription = label
         stateDescription = value
         role = Role.Button
-        if (!enabled) disabled()
+        if (enabled) onClick { click(); true } else disabled()
     }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(painterResource(icon), null, Modifier.size(20.dp), tint = PlayerSecondary)
         Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -716,8 +716,9 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
     }
 }
 @Composable private fun PlayerPanel(landscape: Boolean, title: String, dismiss: () -> Unit, content: @Composable () -> Unit) {
-    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        BoxWithConstraints(Modifier.fillMaxSize().semantics { contentDescription = "播放设置" }) {
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()
+            .semantics { contentDescription = "播放设置" }) {
             Box(Modifier.fillMaxSize().clickable(onClick = dismiss))
             val panel = if (landscape) Modifier.align(Alignment.CenterEnd).width(maxWidth.coerceAtMost(360.dp)).fillMaxHeight()
                 else Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxHeight * 0.75f)
