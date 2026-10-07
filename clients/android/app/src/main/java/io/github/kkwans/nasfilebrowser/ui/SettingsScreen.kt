@@ -163,7 +163,7 @@ import kotlinx.coroutines.launch
             Text(if (state.profile?.network == ConnectionMode.TAILNET) "连接方式：内嵌 Tailscale" else "连接方式：直接连接")
         }
     }, confirmButton = { TextButton(onClick = { profileDetails = false }) { Text("关闭") } })
-    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("NAS File Browser") }, text = {
+    if (about) AlertDialog(onDismissRequest = { about = false }, title = { Text("栖卷 · Fileway") }, text = {
         Text("版本 ${BuildConfig.VERSION_NAME}\n原生 Android 客户端\nGPL-3.0-or-later")
     }, confirmButton = { TextButton(onClick = { about = false }) { Text("关闭") } })
 }

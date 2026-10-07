@@ -79,7 +79,7 @@ class SettingsScreenTest {
             assertTrue(model.previewImageLoader.memoryCache?.keys.isNullOrEmpty())
             capture("settings-cache")
             action("关于应用").click()
-            assertTrue(device.wait(Until.hasObject(By.text("NAS File Browser")), 5000))
+            assertTrue(device.wait(Until.hasObject(By.text("栖卷 · Fileway")), 5000))
             (device.wait(Until.findObject(By.text("关闭")), 5000) ?: error("Dialog close action missing")).click()
             nav("最近播放").click()
             assertTrue(device.wait(Until.hasObject(By.text("继续观看")), 5000))
