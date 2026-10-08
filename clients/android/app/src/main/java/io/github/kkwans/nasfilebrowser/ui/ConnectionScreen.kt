@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -81,6 +82,8 @@ import io.github.kkwans.nasfilebrowser.data.*
     // Passwords never enter saved instance state or acceptance artifacts.
     var password by remember(state.editorVersion) { mutableStateOf("") }
     var visiblePassword by remember { mutableStateOf(false) }
+    val loginPreferences = remember(context) { context.getSharedPreferences("login-preferences", android.content.Context.MODE_PRIVATE) }
+    var keepLogin by rememberSaveable { mutableStateOf(loginPreferences.getBoolean("keep-login", true)) }
     var mode by rememberSaveable(state.editorVersion) { mutableStateOf(if (state.profile?.network == ConnectionMode.TAILNET) "tailnet" else "direct") }
     var remove by remember { mutableStateOf<ServerProfile?>(null) }
     var profilesOpen by remember { mutableStateOf(false) }
@@ -93,7 +96,8 @@ import io.github.kkwans.nasfilebrowser.data.*
         if (canConnect) {
             focus.clearFocus()
             val server = url.trim(); val user = username; val secret = password; val networkMode = mode; val serverType = backend
-            val action = { model.connectDraft(profileName, server, serverType, user, secret, networkMode) }
+            val rememberLogin = keepLogin
+            val action = { model.connectDraft(profileName, server, serverType, user, secret, networkMode, rememberPassword = rememberLogin) }
             if (Build.VERSION.SDK_INT >= 37 && networkMode == "direct" && !hasLocalAccess() && !accessDenied) {
                 afterPermission = action
                 permission.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
@@ -203,6 +207,15 @@ import io.github.kkwans.nasfilebrowser.data.*
                                         if (visiblePassword) "隐藏密码" else "显示密码")
                                 }
                             })
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(keepLogin, enabled = !state.busy, role = Role.Checkbox) {
+                            keepLogin = it; loginPreferences.edit().putBoolean("keep-login", it).apply()
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(keepLogin, onCheckedChange = null, enabled = !state.busy)
+                            Column(Modifier.padding(start = 8.dp)) {
+                                Text("保持登录", style = MaterialTheme.typography.bodyMedium)
+                                Text("在本机加密保存密码，过期后自动恢复", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                         }
                     }
                     TextButton(onClick = { optionsOpen = !optionsOpen }, enabled = !state.busy, contentPadding = PaddingValues(0.dp)) {

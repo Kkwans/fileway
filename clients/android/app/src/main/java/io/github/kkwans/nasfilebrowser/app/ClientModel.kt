@@ -143,13 +143,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val profile = mutable.value.profile
         connectDraft(profile?.name ?: android.net.Uri.parse(url).host.orEmpty(), url, profile?.backend ?: BackendKind.NAS, username, password, network)
     }
-    fun connectDraft(name: String, url: String, backend: BackendKind, username: String, password: String, network: String) {
+    fun connectDraft(name: String, url: String, backend: BackendKind, username: String, password: String, network: String, rememberPassword: Boolean = false) {
         val draft = (mutable.value.profile ?: ServerProfile(name = name, address = url)).copy(name = name, address = url, backend = backend,
             network = if (network == "tailnet") ConnectionMode.TAILNET else ConnectionMode.DIRECT)
-        connectTo(draft, username, password, null)
+        connectTo(draft, username, password, null, rememberPassword = rememberPassword)
     }
     fun restore(account: AccountRecord) { mutable.value.profile?.let { connectTo(it, account.username, "", account) } }
-    private fun connectTo(draft: ServerProfile, username: String, password: String, restored: AccountRecord?, automatic: Boolean = false) {
+    private fun connectTo(draft: ServerProfile, username: String, password: String, restored: AccountRecord?, automatic: Boolean = false, rememberPassword: Boolean = false) {
         if (!automatic) startupJob?.cancel()
         operation?.cancel(); generation++
         closeSession(); navigation.clear()
@@ -177,12 +177,15 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                     networkMutable.value = status
                     if (!status.connected) throw IllegalStateException("请先连接并登录 Tailscale")
                 }
-                opened = if (restored == null) NasSession.login(profile, username, password)
-                    else NasSession.restore(profile, store.token(profile, restored) ?: error("保存的登录已失效，请重新输入密码"), restored.userId)
+                val saved = restored?.let { restoreSavedSession(store, profile, it) }
+                opened = saved?.api ?: NasSession.login(profile, username, password)
                 if (generation != expected) return@launch
                 // A restored token is accepted only after an authenticated read.
-                val root = opened.request("GET", "/api/resources/")
+                val root = saved?.verification ?: opened.request("GET", "/api/resources/")
+                if (generation != expected) return@launch
                 val account = store.saveLogin(profile, opened.identity.id, opened.identity.username, opened.token())
+                if (restored == null) store.rememberPassword(profile, account, password.takeIf { rememberPassword })
+                opened.persistTokens { token -> store.refreshToken(profile, account, token); Unit }
                 val bound = SessionContext(profile, account, opened, expected)
                 val accounts = store.accounts(profile)
                 val directory = store.directory(account)
@@ -759,6 +762,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             while (context == bound && lease == url) {
                 try {
                     val result = NativeTransport.call(JSONObject().put("op", "lease_stats").put("session", bound.api.id).put("url", url)) as JSONObject
+                    bound.api.token()
                     if (context != bound || lease != url) break
                     val bytes = result.getLong("upstreamBytes")
                     val millis = result.getLong("elapsedMillis")
@@ -831,7 +835,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun foreground(active: Boolean) {
         foreground = active
         syncLibraryObservers()
-        if (!active) { networkPollJob?.cancel(); search.cancel(); return }
+        if (!active) {
+            context?.let { bound -> cleanup.launch {
+                try { bound.api.token() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { if (context == bound) mutable.value = mutable.value.copy(notice = "登录状态未能保存，请检查本机存储后重试。") }
+            } }
+            networkPollJob?.cancel(); search.cancel(); return
+        }
         if (networkActivated && networkJob?.isActive != true) observeNetwork()
     }
     fun stopNetwork(logout: Boolean = false) {

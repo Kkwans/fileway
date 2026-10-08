@@ -81,24 +81,75 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
     }
 
     suspend fun token(profile: ServerProfile, account: AccountRecord): String? = withContext(Dispatchers.IO) {
-        if (account.profileId != profile.id || account.sourceRevision != profile.sourceRevision) return@withContext null
-        val current = dao.profile(profile.id) ?: return@withContext null
-        if (current.sourceRevision != profile.sourceRevision || current.address != profile.address || current.backend != profile.backend
-            || current.network != profile.network) return@withContext null
-        val stored = dao.account(account.key) ?: return@withContext null
-        if (stored.profileId != profile.id || stored.sourceRevision != profile.sourceRevision || stored.userId != account.userId) return@withContext null
+        val stored = matchingAccount(profile, account) ?: return@withContext null
         vault.read(stored.credentialRef)?.toString(Charsets.UTF_8)
     }
 
+    private suspend fun matchingAccount(profile: ServerProfile, account: AccountRecord): AccountRecord? {
+        if (account.profileId != profile.id || account.sourceRevision != profile.sourceRevision) return null
+        val current = dao.profile(profile.id) ?: return null
+        if (current.sourceRevision != profile.sourceRevision || current.address != profile.address || current.backend != profile.backend
+            || current.network != profile.network) return null
+        val stored = dao.account(account.key) ?: return null
+        if (stored.profileId != profile.id || stored.sourceRevision != profile.sourceRevision || stored.userId != account.userId
+            || stored.credentialRef != account.credentialRef) return null
+        return stored
+    }
+
+    /** Native requests and Range streams can renew independently of the login UI. */
+    suspend fun refreshToken(profile: ServerProfile, account: AccountRecord, token: String): Boolean = withContext(Dispatchers.IO) {
+        val identity = NasSession.parseIdentity(token)
+        check(identity.id == account.userId) { "续期账号不匹配" }
+        database.withTransaction {
+            val stored = matchingAccount(profile, account) ?: return@withTransaction false
+            // Explicit sign-out deletes the credential. A late native callback
+            // must never recreate it, even though the account's history remains.
+            val previous = vault.read(stored.credentialRef)?.toString(Charsets.UTF_8) ?: return@withTransaction false
+            if (NasSession.issuedAt(previous) > NasSession.issuedAt(token)) return@withTransaction false
+            if (previous != token) vault.write(stored.credentialRef, token.toByteArray(Charsets.UTF_8))
+            if (stored.username != identity.username) dao.saveAccount(stored.copy(username = identity.username, updatedAt = System.currentTimeMillis()))
+            true
+        }
+    }
+
+    suspend fun rememberPassword(profile: ServerProfile, account: AccountRecord, password: String?) = withContext(Dispatchers.IO) {
+        require(password == null || password.isNotEmpty())
+        database.withTransaction {
+            val stored = matchingAccount(profile, account) ?: error("服务器档案已变化，请重新连接")
+            check(vault.read(stored.credentialRef) != null) { "登录记录已退出，请重新登录" }
+            val ref = stored.credentialRef + ":password"
+            if (password == null) vault.remove(ref) else vault.write(ref, password.toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    suspend fun password(profile: ServerProfile, account: AccountRecord): String? = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            val stored = matchingAccount(profile, account) ?: return@withTransaction null
+            if (vault.read(stored.credentialRef) == null) return@withTransaction null
+            vault.read(stored.credentialRef + ":password")?.toString(Charsets.UTF_8)
+        }
+    }
+
+    suspend fun forgetRejectedPassword(profile: ServerProfile, account: AccountRecord, rejected: String) = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            val stored = matchingAccount(profile, account) ?: return@withTransaction
+            val ref = stored.credentialRef + ":password"
+            // A failed old attempt must not erase a password saved by a newer login.
+            if (vault.read(ref)?.toString(Charsets.UTF_8) == rejected) vault.remove(ref)
+        }
+    }
+
     suspend fun signOut(account: AccountRecord) = withContext(Dispatchers.IO) {
-        dao.account(account.key)?.let { vault.remove(it.credentialRef) }
-        dao.clearActiveSession(account.key)
+        database.withTransaction {
+            dao.account(account.key)?.let { vault.remove(it.credentialRef); vault.remove(it.credentialRef + ":password") }
+            dao.clearActiveSession(account.key)
+        }
     }
 
     suspend fun remove(profile: ServerProfile) = withContext(Dispatchers.IO) {
         database.withTransaction {
             // A failed credential deletion leaves the profile visible for retry.
-            dao.credentialRefs(profile.id).forEach(vault::remove)
+            dao.credentialRefs(profile.id).forEach { vault.remove(it); vault.remove(it + ":password") }
             dao.deleteProfile(profile.id)
         }
     }

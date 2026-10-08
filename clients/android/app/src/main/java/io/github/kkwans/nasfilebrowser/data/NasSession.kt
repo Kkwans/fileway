@@ -7,6 +7,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class AccountIdentity(val id: Long, val username: String, val hostname: String, val permissions: ServerPermissions = ServerPermissions())
 class ServiceException(val status: Int, message: String) : Exception(message)
@@ -14,10 +16,21 @@ class ServiceException(val status: Int, message: String) : Exception(message)
 /** One immutable server/account context. Never reuse a handle for another login. */
 class NasSession private constructor(val profile: ServerProfile, val id: String, val identity: AccountIdentity,
     private val native: suspend (JSONObject) -> Any?) {
-    suspend fun token(): String {
+    private val tokenWrites = Mutex()
+    private var tokenStore: (suspend (String) -> Unit)? = null
+    private var persistedToken: String? = null
+    suspend fun persistTokens(store: suspend (String) -> Unit) {
+        tokenWrites.withLock {
+            check(tokenStore == null) { "Login storage is already bound" }
+            tokenStore = store
+        }
+        token()
+    }
+    suspend fun token(): String = tokenWrites.withLock {
         val token = native(JSONObject().put("op", "token").put("session", id)) as String
         check(parseIdentity(token).id == identity.id) { "服务器账号已变化，请重新登录" }
-        return token
+        tokenStore?.let { save -> if (persistedToken != token) { save(token); persistedToken = token } }
+        token
     }
     suspend fun permissions(): ServerPermissions = parseIdentity(token()).permissions
     private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200)): String {
@@ -79,6 +92,11 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
     suspend fun close() { native(JSONObject().put("op", "close_session").put("session", id)) }
 
     companion object {
+        internal fun issuedAt(token: String): Long = runCatching {
+            val payload = token.split('.')[1]
+            require(payload.length <= 262_144)
+            JSONObject(Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP).toString(Charsets.UTF_8)).optLong("iat")
+        }.getOrDefault(0)
         fun parseIdentity(token: String): AccountIdentity {
             try {
                 val parts = token.trim().split('.')
@@ -104,7 +122,7 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
                 val result = native(JSONObject().put("op", "login").put("session", id).put("username", username).put("password", password)) as JSONObject
                 when (result.getInt("status")) {
                     200 -> return NasSession(profile, id, parseIdentity(result.getString("body")), native)
-                    401, 403 -> error("账号或密码不正确")
+                    401, 403 -> throw ServiceException(result.getInt("status"), "账号或密码不正确")
                     else -> error("登录失败，请检查服务器地址和账号")
                 }
             } catch (error: Exception) {

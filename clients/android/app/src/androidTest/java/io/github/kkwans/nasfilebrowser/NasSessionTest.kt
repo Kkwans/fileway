@@ -11,9 +11,31 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NasSessionTest {
-    private fun token(id: Long): String {
-        val payload = JSONObject().put("user", JSONObject().put("id", id).put("username", "viewer"))
+    private fun token(id: Long, issued: Long = 0): String {
+        val payload = JSONObject().put("iat", issued).put("user", JSONObject().put("id", id).put("username", "viewer"))
         return "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
+    }
+    @Test fun renewedTokensArePersistedOnceAndAnotherIdentityCannotReachStorage() = runBlocking {
+        val original = token(7, 10)
+        val renewed = token(7, 20)
+        var current = original
+        val saved = mutableListOf<String>()
+        val session = NasSession.restore(ServerProfile(name = "Owned login", address = "https://login.example.test"), original, 7) { command ->
+            when (command.getString("op")) {
+                "open" -> "owned-login"
+                "token" -> current
+                "request" -> { current = renewed; JSONObject().put("status", 200).put("body", "{}") }
+                else -> null
+            }
+        }
+        session.persistTokens { saved.add(it) }
+        session.request("GET", "/api/resources/")
+        session.token(); session.token()
+        assertEquals(listOf(original, renewed), saved)
+        current = token(8, 30)
+        assertTrue(runCatching { session.token() }.isFailure)
+        assertEquals(listOf(original, renewed), saved)
+        session.close()
     }
     @Test fun previewCapabilityPreservesWirePathAndReleasesOnce() = runBlocking {
         var account = 7L

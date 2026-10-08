@@ -1,5 +1,35 @@
 # Local profile and account state
 
+## Renewed tokens and keep-login credentials
+
+The Android session writes renewed JWTs back to the existing Keystore vault after
+API/search requests and native playback/download progress sampling, and when the
+app leaves the foreground. Unchanged tokens do not rewrite storage. Updates check
+the live source revision, origin, network mode, account ID and credential reference;
+older issued tokens cannot replace newer ones. A late renewal cannot recreate a
+credential removed by sign-out. Room serializes credential renewal and removal.
+
+The connection form's “保持登录” option applies on successful password login. It
+stores the password in a separate AES-GCM/Keystore entry bound to that account's
+existing opaque credential reference. Choosing not to retain it on a subsequent
+login removes that password. Sign-out and profile removal remove both entries.
+Passwords never enter Room, SavedState, logs or backup. The remembered checkbox
+choice contains only a boolean; it is not credential storage.
+
+Startup/account restore and resumed downloads first validate the saved token with
+a read. Only an explicit 401 permits one saved-password login, followed by a
+same-user-ID check. Network errors and 403 do not trigger password retries; rejected
+passwords are forgotten without erasing a newer saved password. Mutating requests
+are never replayed by this recovery helper. The server's JWT expiry is unchanged;
+no backend deployment or new authentication endpoint is involved.
+
+Legacy profiles have no recoverable saved password. If their token has already
+expired, one successful login with “保持登录” provisions the encrypted entry.
+Existing JWT storage and Room schema remain compatible. Rollback uses the original
+certificate and a higher versionCode repair package, never uninstalling or clearing
+personal data. The extra encrypted password entry is separate from the legacy JWT.
+
+
 ## Active-session restoration (schema v5, 2026-10-04)
 
 `active_session` holds a foreign key to the selected account and a non-secret owner nonce. Startup resolves the exact profile/source revision, reads the Keystore-protected JWT, verifies it through an authenticated NAS resources request and then restores the existing directory/layout. A loading view avoids flashing the onboarding form. Rejected authentication keeps the saved server/account and offers existing account restoration; it never claims connected before the read succeeds. Root back exits the Activity rather than disconnecting the NAS session.

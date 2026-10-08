@@ -40,16 +40,18 @@ class DownloadRuntime private constructor(private val context: Context) {
         val profile = store.profile(record.profileId) ?: error("原服务器档案已移除，已下载文件仍保留")
         check(profile.sourceRevision == record.sourceRevision) { "下载来源已修改，不能追加旧文件，请创建新的下载" }
         val account = store.account(record.accountKey) ?: error("原账号已移除，已下载文件仍保留")
-        val token = store.token(profile, account) ?: error("原账号登录已失效，请重新登录后恢复下载")
+        check(store.token(profile, account) != null) { "原账号登录已失效，请重新登录后恢复下载" }
         if (profile.network == ConnectionMode.TAILNET) {
             val state = network.start()
             check(state.connected) { "内嵌网络尚未连接，请先完成登录或批准后恢复下载" }
         }
         NativeTransport.call(cacheCommand(context, readCacheSettings(context)))
-        val api = NasSession.restore(profile, token, account.userId)
+        val wire = record.wirePath.ifEmpty { SearchResult.encodePath(record.path) }
+        val saved = restoreSavedSession(store, profile, account, "/api/resources$wire?metadata=1")
+        val api = saved.api
         try {
-            val wire = record.wirePath.ifEmpty { SearchResult.encodePath(record.path) }
-            val meta = api.request("GET", "/api/resources$wire?metadata=1")
+            api.persistTokens { renewed -> store.refreshToken(profile, account, renewed); Unit }
+            val meta = saved.verification
             check(!meta.getBoolean("isDir") && meta.getLong("size") == record.expectedSize && meta.optString("modified") == record.modified) {
                 "源文件已变化，已下载部分保留，请新建下载"
             }
@@ -88,6 +90,7 @@ class DownloadRuntime private constructor(private val context: Context) {
     suspend fun transfers(id: String): List<DownloadTransfer> = sources.entries.filter { it.value.first == id }.mapNotNull { (key, entry) ->
         try {
             val stats = NativeTransport.call(JSONObject().put("op", "lease_stats").put("session", entry.second.api.id).put("url", entry.second.url)) as JSONObject
+            entry.second.api.token()
             DownloadTransfer(key, stats.getLong("upstreamBytes"), stats.getLong("elapsedMillis"))
         } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null }
     }
@@ -144,6 +147,7 @@ class DownloadRuntime private constructor(private val context: Context) {
                         if (now - lastCheckpoint >= 1000) {
                             output.fd.sync()
                             check(dao.progress(id, record.generation, bytes, now) == 1) { "下载操作已被替换" }
+                            access!!.api.token()
                             lastCheckpoint = now
                         }
                     }
@@ -152,6 +156,7 @@ class DownloadRuntime private constructor(private val context: Context) {
                     check(dao.progress(id, record.generation, bytes, System.currentTimeMillis()) == 1)
             }
             currentCoroutineContext().ensureActive()
+            access?.api?.token()
             destinations.complete(target)
             dao.finish(id, record.generation, "completed", "", System.currentTimeMillis())
         } catch (cancelled: CancellationException) {
