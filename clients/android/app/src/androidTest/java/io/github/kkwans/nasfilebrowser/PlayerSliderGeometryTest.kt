@@ -19,12 +19,14 @@ import io.github.kkwans.nasfilebrowser.ui.PlayerSlider
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class PlayerSliderGeometryTest {
-    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    private val activity = ActivityScenarioRule(MainActivity::class.java)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(OwnedUiTraceRule()).around(activity)
     @Test fun actualThumbAndTrackShareVerticalCentreAtFivePositionsAndStillDrag(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)
@@ -61,10 +63,21 @@ class PlayerSliderGeometryTest {
                 assertEquals("Thumb/track vertical centre at ${values[index]}%", track[track.size / 2], thumb.second, 1f)
             }
         } finally { pixels.recycle(); shot.recycle() }
-        val bounds = device.findObject(By.desc("进度校准2")).visibleBounds
-        device.swipe(bounds.centerX(), bounds.centerY(), bounds.left + bounds.width() * 3 / 4, bounds.centerY(), 20)
-        withTimeout(5000) { while (values[2] < 65f) delay(50) }
         device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
         device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/slider-centres.png")
+        withTimeout(5000) {
+            while (true) {
+                var focused = false
+                activity.scenario.onActivity { focused = it.hasWindowFocus() }
+                if (focused) break
+                delay(50)
+            }
+        }
+        device.waitForIdle()
+        val bounds = device.findObject(By.desc("进度校准2")).visibleBounds
+        OwnedUiTraceRule.trace("slider-drag bounds=$bounds before=${values[2]}")
+        assertTrue(device.swipe(bounds.centerX(), bounds.centerY(), bounds.left + bounds.width() * 3 / 4, bounds.centerY(), 40))
+        val changed = withTimeoutOrNull(5000) { while (values[2] < 65f) delay(50); true } == true
+        assertTrue("Physical drag must change slider value; bounds=$bounds actual=${values[2]}", changed)
     }
 }
