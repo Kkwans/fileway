@@ -24,6 +24,8 @@ class DownloadDataSource(private val context: Context, private val database: Cli
     private var remaining = 0L
     private var opened = false
     private var firstRead = false
+    private var lastSnapshotMs = 0L
+    private var snapshotReads = 0
     private fun trace(stage: String) {
         if (io.github.kkwans.nasfilebrowser.BuildConfig.DEBUG) android.util.Log.d("FilewayDownloadRead",
             "${android.os.SystemClock.elapsedRealtime()} reader=${System.identityHashCode(this)} $stage")
@@ -37,6 +39,7 @@ class DownloadDataSource(private val context: Context, private val database: Cli
         check(item.localUri.isNotEmpty()) { "文件仍在准备，请稍后打开" }
         if (dataSpec.position > item.expectedSize) throw DataSourceException( androidx.media3.common.PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         spec = dataSpec; record = item; position = dataSpec.position
+        lastSnapshotMs = android.os.SystemClock.elapsedRealtime(); snapshotReads = 1
         remaining = if (dataSpec.length == C.LENGTH_UNSET.toLong()) item.expectedSize - position else minOf(dataSpec.length, item.expectedSize - position)
         try {
             trace("local-open-start")
@@ -56,8 +59,13 @@ class DownloadDataSource(private val context: Context, private val database: Cli
         var item = record ?: throw IOException("下载读取尚未打开")
         val allowed = minOf(length.toLong(), remaining).toInt()
         var prefix = if (item.complete) item.expectedSize else DownloadRuntime.get(context).prefix(item)
-        if (!item.complete && position >= prefix) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Extractors can ask for single-byte EBML fields. Do not dispatch a
+        // SQLite query per byte while reading a remote MKV index. Running
+        // writers already publish their live prefix through an AtomicLong.
+        if (!item.complete && position >= prefix && (network == null || now - lastSnapshotMs >= 250)) {
             val latest = runBlocking(Dispatchers.IO) { database.downloads().get(item.id) }
+            lastSnapshotMs = now; snapshotReads++
             if (latest != null) { item = latest; record = latest; prefix = if (latest.complete) latest.expectedSize else DownloadRuntime.get(context).prefix(latest) }
         }
         val input = file
@@ -82,6 +90,7 @@ class DownloadDataSource(private val context: Context, private val database: Cli
     }
     override fun getUri(): Uri? = spec?.uri
     override fun close() {
+        trace("close position=$position remaining=$remaining snapshotReads=$snapshotReads")
         try { network?.close() }
         finally {
             network = null
