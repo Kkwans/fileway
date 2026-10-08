@@ -37,9 +37,11 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
                 FavoriteGroup(row.getString("id"), row.getString("name"), row.optString("color"), row.optInt("order"))
             } }.sortedWith(compareBy<FavoriteGroup> { it.order }.thenBy { it.id })
     }
-    fun refresh() {
+    fun refresh() = refresh(false)
+    fun refresh(replaceRead: Boolean) {
         val context = bound ?: return
-        if (mutable.value.loading || mutable.value.changing || !isCurrent(context)) return
+        if (mutable.value.loading && !replaceRead || mutable.value.changing || !isCurrent(context)) return
+        if (replaceRead) reads?.cancel()
         val expected = ++revision
         mutable.value = mutable.value.copy(loading = true, error = null, notice = null)
         reads = scope.launch {

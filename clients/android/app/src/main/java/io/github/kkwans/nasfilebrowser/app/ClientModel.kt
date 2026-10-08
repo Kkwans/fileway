@@ -112,6 +112,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
+    val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed)
     val storageTools = StorageToolsController(viewModelScope) { context === it && generation == it.generation }
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
@@ -197,6 +198,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 tags.bind(bound)
                 tasks.bind(bound)
                 trash.bind(bound)
+                fileOperations.bind(bound)
                 storageTools.bind(bound)
                 recentJob?.cancel()
                 recentJob = viewModelScope.launch { history.recent(account).collect { entries -> if (context == bound) recentMutable.value = entries.distinctBy { it.resourceKey } } }
@@ -658,6 +660,22 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             browse(file.path.substringBeforeLast('/').ifEmpty { "/" }, wire.substringBeforeLast('/').ifEmpty { "/" })
         }
     }
+    private fun resourceRenamed(bound: SessionContext, file: ResourceRef, target: RenameTarget) {
+        if (context !== bound) return
+        val source = file.wirePath.ifEmpty { SearchResult.encodePath(file.path) }
+        fun matches(wire: String) = wire == source || file.directory && wire.startsWith(source.trimEnd('/') + "/")
+        mutable.value = mutable.value.copy(files = mutable.value.files.map { item ->
+            val wire = item.wirePath.ifEmpty { SearchResult.encodePath(item.path) }
+            if (!matches(wire)) item else item.copy(path = target.path + item.path.removePrefix(file.path),
+                wirePath = target.wirePath + wire.removePrefix(source), name = if (wire == source) target.name else item.name)
+        }, notice = "已重命名为 ${target.name}")
+        favorites.refresh(replaceRead = true); tags.refresh(replaceRead = true)
+        if (matches(mutable.value.wirePath)) {
+            val current = mutable.value
+            navigation.clear()
+            browse(target.path + current.path.removePrefix(file.path), target.wirePath + current.wirePath.removePrefix(source))
+        }
+    }
     private fun resourceRestored(bound: SessionContext, path: String) {
         if (context !== bound) return
         favorites.refresh(); tags.refresh()
@@ -801,6 +819,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         tags.bind(null)
         tasks.bind(null)
         trash.bind(null)
+        fileOperations.bind(null)
         storageTools.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()

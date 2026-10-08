@@ -111,7 +111,8 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
                 val perm = user.optJSONObject("perm")
                 return AccountIdentity(id, name, payload.optJSONObject("instance")?.optString("hostname").orEmpty(),
                     ServerPermissions(perm != null, perm?.optBoolean("admin") == true, perm?.optBoolean("create") == true,
-                        perm?.optBoolean("delete") == true, perm?.optBoolean("modify") == true, perm?.optBoolean("download") == true))
+                        perm?.optBoolean("delete") == true, perm?.optBoolean("modify") == true, perm?.optBoolean("download") == true,
+                        perm?.optBoolean("rename") == true))
             } catch (_: Exception) { error("服务器返回了不支持的账号格式") }
         }
         suspend fun login(profile: ServerProfile, username: String, password: String,

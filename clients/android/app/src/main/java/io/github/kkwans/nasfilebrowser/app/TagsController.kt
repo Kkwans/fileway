@@ -36,9 +36,11 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
                 if (paths == null) emptyList() else (0 until paths.length()).map { collectionPath(paths.getString(it)) }.distinct())
         } }
     }
-    fun refresh() {
+    fun refresh() = refresh(false)
+    fun refresh(replaceRead: Boolean) {
         val context = bound ?: return
-        if (!current(context) || mutable.value.loading || mutable.value.changing) return
+        if (!current(context) || mutable.value.loading && !replaceRead || mutable.value.changing) return
+        if (replaceRead) readJob?.cancel()
         val epoch = ++readEpoch
         mutable.value = mutable.value.copy(loading = true, error = null, notice = null)
         readJob = scope.launch {

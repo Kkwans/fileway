@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +27,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import io.github.kkwans.nasfilebrowser.data.renameNameError
 import io.github.kkwans.nasfilebrowser.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,16 +55,19 @@ import io.github.kkwans.nasfilebrowser.R
     val client by model.state.collectAsStateWithLifecycle()
     val downloads by model.downloads.state.collectAsStateWithLifecycle()
     val favorites by model.favorites.state.collectAsStateWithLifecycle()
+    val operations by model.fileOperations.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var labeling by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     var moving by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
-    val enabled = !trash.changing && !client.busy
+    var renaming by remember(file.mediaKey, operations.scope) { mutableStateOf(false) }
+    val enabled = !trash.changing && !client.busy && !operations.changing
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         FavoriteFileAction(model, file, enabled)
         val count = tags.items.count { collectionPath(file.path) in it.paths }
         FileActionIcon(R.drawable.ic_tag, "设置文件标签", enabled && !tags.changing, count > 0) { labeling = true }
+        if (client.permissions.rename && file.path != "/") FileActionIcon(R.drawable.ic_edit, "重命名文件", enabled && !tags.changing && !favorites.changing) { renaming = true }
         if (!file.directory && client.permissions.download) FileActionIcon(R.drawable.ic_download, "下载到本机", enabled && !downloads.busy) {
             model.download(file)
             if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
@@ -71,8 +82,10 @@ import io.github.kkwans.nasfilebrowser.R
         downloads.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         downloads.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         if (!labeling) tags.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        if (!renaming) operations.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
     if (labeling) FileTagPicker(model, file) { labeling = false }
+    if (renaming) FileRenameDialog(model, file, { renaming = false }) { renaming = false; onMoved() }
     if (moving) AlertDialog(onDismissRequest = { moving = false }, title = { Text("移入回收站？") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(file.name); Text(file.path, style = MaterialTheme.typography.bodySmall)
@@ -81,6 +94,28 @@ import io.github.kkwans.nasfilebrowser.R
         }
     }, confirmButton = { TextButton({ model.trash.move(file) { moving = false; onMoved() } }, enabled = enabled) { Text(if (trash.changing) "正在移动" else "移入回收站") } },
         dismissButton = { TextButton({ moving = false }, enabled = enabled) { Text("取消") } })
+}
+
+@Composable private fun FileRenameDialog(model: ClientModel, file: ResourceRef, dismiss: () -> Unit, saved: () -> Unit) {
+    val state by model.fileOperations.state.collectAsStateWithLifecycle()
+    val stemEnd = if (file.directory) file.name.length else file.name.lastIndexOf('.').takeIf { it > 0 } ?: file.name.length
+    var input by remember { mutableStateOf(TextFieldValue(file.name, TextRange(0, stemEnd))) }
+    var attempted by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val error = renameNameError(input.text)
+    val canSubmit = !state.changing && error == null && input.text.trim() != file.name
+    fun submit() { if (canSubmit) { attempted = true; model.fileOperations.rename(file, input.text, saved) } }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(onDismissRequest = { if (!state.changing) dismiss() }, title = { Text("重命名") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth().focusRequester(focus), label = { Text("新名称") },
+                enabled = !state.changing, singleLine = true, isError = error != null,
+                supportingText = { Text(error ?: if (file.directory) "同名文件夹存在时不会覆盖" else "保留扩展名可继续使用原来的打开方式") },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { submit() }))
+            if (attempted) state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        }
+    }, confirmButton = { TextButton({ submit() }, enabled = canSubmit) { Text(if (state.changing) "正在重命名" else "保存名称") } },
+        dismissButton = { TextButton(dismiss, enabled = !state.changing) { Text("取消") } })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

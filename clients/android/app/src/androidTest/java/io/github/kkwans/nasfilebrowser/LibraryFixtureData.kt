@@ -20,6 +20,10 @@ internal class LibraryFixtureData {
     @Volatile var rejectNextFavoriteWrite = false
     @Volatile var rejectTrashPathOnce: String? = null
     val trashAttempts = mutableListOf<String>()
+    var renameAllowed = false
+    var liveDirectoryListing = false
+    @Volatile var rejectNextRename = false
+    val renameAttempts = mutableListOf<String>()
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
         files[path] = JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
@@ -67,6 +71,33 @@ internal class LibraryFixtureData {
         }
         if (path.startsWith("/api/resources/") && method == "GET" && uri.rawQuery == "metadata=1" && files.containsKey(path.removePrefix("/api/resources"))) {
             reply(files.getValue(path.removePrefix("/api/resources")).toString(), 200); return true
+        }
+        if (liveDirectoryListing && path.startsWith("/api/resources/") && method == "GET" && uri.rawQuery == null) {
+            val directory = path.removePrefix("/api/resources").trimEnd('/')
+            reply(JSONObject().put("items", JSONArray(files.filterKeys { it.substringBeforeLast('/') == directory }.values.toList())).toString(), 200)
+            return true
+        }
+        if (path.startsWith("/api/resources/") && method == "PATCH") {
+            val q = query(uri)
+            check(q["action"] == "rename" && q["override"] == "false" && q["rename"] == "false")
+            renameAttempts.add(uri.rawPath + "?" + uri.rawQuery)
+            if (!renameAllowed) { reply("{}", 403); return true }
+            if (rejectNextRename) { rejectNextRename = false; reply("{}", 503); return true }
+            val original = path.removePrefix("/api/resources"); val destination = q.getValue("destination")
+            if (!files.containsKey(original)) { reply("{}", 404); return true }
+            if (files.containsKey(destination)) { reply("{}", 409); return true }
+            fun rewrite(value: String) = if (value == original || value.startsWith("$original/")) destination + value.removePrefix(original) else value
+            for (name in files.keys.toList().filter { rewrite(it) != it }) {
+                val renamed = rewrite(name); val row = files.remove(name)!!
+                row.put("path", renamed).put("wirePath", SearchResult.encodePath(renamed))
+                if (name == original) row.put("name", destination.substringAfterLast('/'))
+                files[renamed] = row
+            }
+            for (i in 0 until favorites.length()) favorites.getJSONObject(i).let { it.put("path", rewrite(it.getString("path"))) }
+            for (i in 0 until tags.length()) tags.getJSONObject(i).getJSONArray("paths").let { paths ->
+                for (j in 0 until paths.length()) paths.put(j, rewrite(paths.getString(j)))
+            }
+            mutations.add(method to path); reply("", 200); return true
         }
         if (path.startsWith("/api/tags")) {
             if (method != "GET" && rejectNextTagWrite) {

@@ -52,6 +52,49 @@ func TestURLPreservesBaseAndWireBytes(t *testing.T) {
 	}
 }
 
+func TestResourcePatchPreservesAuthenticationWireBytesAndMethodBoundary(t *testing.T) {
+	var received atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		if r.Method != http.MethodPatch || r.Header.Get("X-Auth") != "owned.test.token" {
+			t.Error("resource PATCH lost its method or original account")
+		}
+		if r.URL.EscapedPath() != "/base/api/resources/%D6%D0/old%25.png" {
+			t.Errorf("source bytes changed: %s", r.URL.EscapedPath())
+		}
+		if r.URL.Query().Get("destination") != "/\xD6\xD0/new%2F +#.png" {
+			t.Errorf("destination decoded incorrectly: %q", r.URL.Query().Get("destination"))
+		}
+		if r.URL.Query().Get("override") != "false" || r.URL.Query().Get("rename") != "false" {
+			t.Error("rename unexpectedly allowed overwriting or automatic renaming")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	b, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	sid, err := b.Open(server.URL+"/base", "owned.test.token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "/api/resources/%D6%D0/old%25.png?action=rename&destination=%2F%D6%D0%2Fnew%252F%20%2B%23.png&override=false&rename=false"
+	response, err := b.Request(context.Background(), sid, http.MethodPatch, endpoint, nil)
+	if err != nil || response.Status != http.StatusNoContent {
+		t.Fatal(response, err)
+	}
+	for _, method := range []string{http.MethodTrace, http.MethodConnect, http.MethodOptions} {
+		if _, err := b.Request(context.Background(), sid, method, endpoint, nil); err == nil {
+			t.Fatalf("unsupported method reached transport: %s", method)
+		}
+	}
+	if received.Load() != 1 {
+		t.Fatalf("unexpected request count: %d", received.Load())
+	}
+}
+
 func TestAuthenticatedRangeAndImmutableLease(t *testing.T) {
 	data := strings.Repeat("0123456789", 1000)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

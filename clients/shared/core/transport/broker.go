@@ -227,7 +227,7 @@ func (s *Session) renew(ctx context.Context, previous string) error {
 }
 
 func (b *Broker) Request(ctx context.Context, id, method, endpoint string, body []byte) (Response, error) {
-	if method != "GET" && method != "PUT" && method != "POST" && method != "DELETE" {
+	if method != "GET" && method != "PUT" && method != "POST" && method != "DELETE" && method != "PATCH" {
 		return Response{}, errors.New("unsupported method")
 	}
 	s, err := b.session(id)

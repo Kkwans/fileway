@@ -222,7 +222,7 @@ class ClientSearchTest {
             if (uri.path == "/api/login") {
                 val name = JSONObject(String(body)).getString("username")
                 val payload = JSONObject().put("user", JSONObject().put("id", if (name == "two") 2 else 1).put("username", name))
-                if (library != null) payload.getJSONObject("user").put("perm", JSONObject().put("admin", false).put("create", true).put("delete", true).put("modify", true).put("download", true))
+                if (library != null) payload.getJSONObject("user").put("perm", JSONObject().put("admin", false).put("create", true).put("delete", true).put("modify", true).put("download", true).put("rename", library.renameAllowed))
                 reply(socket, "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature", "text/plain")
                 return
             }
