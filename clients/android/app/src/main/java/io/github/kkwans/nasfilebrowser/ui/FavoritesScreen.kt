@@ -190,11 +190,17 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
             if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                item { FavoriteGroupChoice("", "未分组", chosenGroup, !state.changing) { chosenGroup = "" } }
+                item {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).selectable(chosenGroup.isEmpty(), enabled = !state.changing, role = Role.RadioButton) { chosenGroup = "" }, verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(12.dp).background(MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))
+                        Text("未分组", Modifier.weight(1f).padding(horizontal = 12.dp), style = MaterialTheme.typography.bodyLarge)
+                        RadioButton(chosenGroup.isEmpty(), null, enabled = !state.changing)
+                    }
+                }
                 items(state.groups, key = { it.id }) { group ->
                     Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).selectable(chosenGroup == group.id, enabled = !state.changing, role = Role.RadioButton) { chosenGroup = group.id }, verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(12.dp).background(favoriteColor(group.color, MaterialTheme.colorScheme.primary), CircleShape))
-                        Text(group.name, Modifier.weight(1f).padding(horizontal = 12.dp))
+                        Text(group.name, Modifier.weight(1f).padding(horizontal = 12.dp), style = MaterialTheme.typography.bodyLarge)
                         RadioButton(chosenGroup == group.id, null, enabled = !state.changing)
                     }
                 }

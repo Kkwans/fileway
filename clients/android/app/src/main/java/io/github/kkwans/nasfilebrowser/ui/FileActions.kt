@@ -118,7 +118,7 @@ import io.github.kkwans.nasfilebrowser.R
                     .toggleable(tag.id in selected, enabled = !loading && !state.changing, role = Role.Checkbox) { checked -> selected = if (checked) selected + tag.id else selected - tag.id },
                     verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(12.dp).background(metadataColor(tag.color, MaterialTheme.colorScheme.primary), CircleShape))
-                    Text(tag.name, Modifier.weight(1f).padding(horizontal = 12.dp))
+                    Text(tag.name, Modifier.weight(1f).padding(horizontal = 12.dp), style = MaterialTheme.typography.bodyLarge)
                     Checkbox(tag.id in selected, null)
                 } }
             }

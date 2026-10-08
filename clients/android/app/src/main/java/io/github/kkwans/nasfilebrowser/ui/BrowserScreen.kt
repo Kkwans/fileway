@@ -169,7 +169,7 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
         }
     }
     @Composable fun labels() {
-        if (associated.isNotEmpty()) FlowRow(Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (layout == FileLayout.UNBOUNDED && associated.isNotEmpty()) FlowRow(Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             associated.forEach { tag -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Box(Modifier.size(6.dp).background(metadataColor(tag.color, colors.primary), androidx.compose.foundation.shape.CircleShape))
                 Text(tag.name, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -187,7 +187,7 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
             }
             FileLayout.COMPACT -> Column(Modifier.fillMaxWidth().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.fillMaxWidth().height(56.dp)) { artwork(Modifier.size(40.dp).align(Alignment.CenterStart)) }
+                Box(Modifier.fillMaxWidth().height(56.dp)) { artwork(Modifier.size(40.dp).align(Alignment.Center)) }
                 caption(Modifier.fillMaxWidth())
             }
             FileLayout.UNBOUNDED -> Column(Modifier.fillMaxWidth()) {
@@ -219,7 +219,7 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
     AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(12.dp), containerColor = MaterialTheme.colorScheme.background,
         title = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("文件详情", style = MaterialTheme.typography.titleLarge)
-            actions?.invoke()
+            ProvideTextStyle(MaterialTheme.typography.bodyLarge) { actions?.invoke() }
         } }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

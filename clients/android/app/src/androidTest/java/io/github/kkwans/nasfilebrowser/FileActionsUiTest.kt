@@ -27,6 +27,14 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                 withTimeout(5000) { model.state.first { it.fileLayout == layout } }
                 assertTrue("The requested layout must be rendered before locating its button",
                     device.wait(Until.hasObject(By.desc(layout.collectionDescription())), 5000))
+                if (layout == FileLayout.COMPACT) {
+                    var card = text(path.substringAfterLast('/'))
+                    while (!card.isLongClickable) card = card.parent ?: error("Missing file card")
+                    val preview = action("${path.substringAfterLast('/')} 预览")
+                    assertTrue("Compact preview must be centred after removing its action button",
+                        kotlin.math.abs(preview.visibleBounds.centerX() - card.visibleBounds.centerX()) <= 2)
+                    capture("file-compact-centered")
+                }
                 val label = "文件操作：${path.substringAfterLast('/')}"
                 if (layout == FileLayout.LIST) {
                     var menu = action(label)
@@ -69,6 +77,12 @@ internal class FileActionsUiTest : LibraryUiHarness() {
             text("关闭").click()
             action("文件标签：本次测试")
             capture("file-tag-visible-on-card")
+            for (layout in FileLayout.entries) {
+                main { model.fileLayout(layout) }
+                assertTrue(device.wait(Until.hasObject(By.desc(layout.collectionDescription())), 5000))
+                if (layout == FileLayout.UNBOUNDED) action("文件标签：本次测试")
+                else assertTrue("Tags are shown only in unbounded layout", device.wait(Until.gone(By.desc("文件标签：本次测试")), 5000))
+            }
         }
     }
 }
