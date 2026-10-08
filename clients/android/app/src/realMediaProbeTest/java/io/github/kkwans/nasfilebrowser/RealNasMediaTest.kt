@@ -3,7 +3,6 @@ package io.github.kkwans.nasfilebrowser
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.net.LocalServerSocket
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -50,29 +49,7 @@ class RealNasMediaTest {
     @get:Rule val activity = ActivityScenarioRule(EngineProbeActivity::class.java)
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private suspend fun <T> main(block: () -> T): T = withContext(Dispatchers.Main) { block() }
-    private suspend fun configuration(): JSONObject = withContext(Dispatchers.IO) {
-        val name = "fileway-real-${UUID.randomUUID()}"
-        val server = LocalServerSocket(name)
-        try {
-            instrumentation.sendStatus(2, Bundle().apply { putString("stream", "REAL_MEDIA_SOCKET=$name\n") })
-            val socket = server.accept()
-            try {
-                check(socket.peerCredentials.uid in setOf(0, 2000)) { "Configuration must come from the authorized ADB host" }
-                socket.soTimeout = 20_000
-                val bytes = java.io.ByteArrayOutputStream()
-                while (true) {
-                    val value = socket.inputStream.read()
-                    check(value >= 0) { "Incomplete private configuration" }
-                    if (value == 10) break
-                    check(bytes.size() < 65_536) { "Configuration is too large" }
-                    bytes.write(value)
-                }
-                val result = JSONObject(bytes.toString("UTF-8"))
-                socket.outputStream.write("OK\n".toByteArray())
-                result
-            } finally { socket.close() }
-        } finally { server.close() }
-    }
+    private suspend fun configuration(): JSONObject = privateAdbConfiguration("REAL_MEDIA_SOCKET", "fileway-real-")
     private suspend fun verifiedConfiguration(): JSONObject {
         val config = configuration()
         if (config.has("token")) return config
