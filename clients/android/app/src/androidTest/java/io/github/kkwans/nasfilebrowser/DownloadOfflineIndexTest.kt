@@ -26,12 +26,14 @@ class DownloadOfflineIndexTest {
     @Test fun tailIndexedMp4StartsFromSavedPrefixWithoutNetwork(): Unit = runBlocking { verify("fixture-tail.mp4") }
     @Test fun offlineReadAheadKeepsPlayingSavedRangeAndResumesWhenFileGrows(): Unit = runBlocking { verify("fixture.mkv", boundary = true) }
     @Test fun manualPauseAtDownloadBoundarySurvivesDataArrival(): Unit = runBlocking { verify("fixture.mkv", boundary = true, pauseAtBoundary = true) }
+    @ExternalNetworkAcceptance // Requires explicit host process orchestration, not UTP discovery.
     @Test fun prepareOwnedPartialForProcessRestart(): Unit = runBlocking {
         assumeTrue("Requires the two-process host workflow", InstrumentationRegistry.getArguments().getString("nfbOfflineRestart") == "true")
         val prefs = InstrumentationRegistry.getInstrumentation().targetContext.getSharedPreferences("fileway-owned-offline-restart", 0)
         check(!prefs.contains("id")) { "Previous owned restart probe must be completed before another is prepared" }
         verify("fixture.mkv", persist = true)
     }
+    @ExternalNetworkAcceptance
     @Test fun reopenOwnedPartialInFreshProcessWithoutNetwork(): Unit = runBlocking {
         assumeTrue("Requires the two-process host workflow", InstrumentationRegistry.getArguments().getString("nfbOfflineRestart") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
