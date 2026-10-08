@@ -106,11 +106,9 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
     val colors = MaterialTheme.colorScheme
     val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open,
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
-    @Composable fun more(modifier: Modifier = Modifier, onImage: Boolean = false) {
-        IconButton(onClick = details, enabled = enabled, modifier = modifier.size(48.dp).semantics { contentDescription = "文件操作：${file.name}" }) {
-            Box(Modifier.size(32.dp).then(if (onImage) Modifier.background(colors.background.copy(alpha = .94f), androidx.compose.foundation.shape.CircleShape) else Modifier), contentAlignment = Alignment.Center) {
-                Icon(painterResource(R.drawable.ic_more_vert), null, Modifier.size(24.dp), tint = colors.onBackground)
-            }
+    @Composable fun more() {
+        IconButton(onClick = details, enabled = enabled, modifier = Modifier.size(48.dp).semantics { contentDescription = "文件操作：${file.name}" }) {
+            Icon(painterResource(R.drawable.ic_more_vert), null, Modifier.size(24.dp), tint = colors.onBackground)
         }
     }
     @Composable fun artwork(modifier: Modifier) {
@@ -169,30 +167,21 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
         shape = RoundedCornerShape(10.dp), color = colors.background) {
         when (layout) {
             FileLayout.COVER -> Column(Modifier.fillMaxWidth()) {
-                Box(Modifier.fillMaxWidth()) {
-                    artwork(Modifier.fillMaxWidth().aspectRatio(4f / 3f))
-                    more(Modifier.align(Alignment.TopEnd), onImage = true)
-                }
+                artwork(Modifier.fillMaxWidth().aspectRatio(4f / 3f))
                 caption(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp))
             }
             FileLayout.COMPACT -> Column(Modifier.fillMaxWidth().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.fillMaxWidth().height(56.dp)) {
-                    artwork(Modifier.size(40.dp).align(Alignment.CenterStart))
-                    more(Modifier.align(Alignment.CenterEnd))
-                }
+                Box(Modifier.fillMaxWidth().height(56.dp)) { artwork(Modifier.size(40.dp).align(Alignment.CenterStart)) }
                 caption(Modifier.fillMaxWidth())
             }
             FileLayout.UNBOUNDED -> Column(Modifier.fillMaxWidth()) {
-                Box(Modifier.fillMaxWidth()) {
-                    artwork(Modifier.fillMaxWidth())
-                    more(Modifier.align(Alignment.TopEnd), onImage = true)
-                }
+                artwork(Modifier.fillMaxWidth())
                 caption(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp))
             }
             FileLayout.DETAIL -> Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                artwork(Modifier.fillMaxWidth(.44f).aspectRatio(16f / 9f)); caption(Modifier.weight(1f)); more()
+                artwork(Modifier.fillMaxWidth(.44f).aspectRatio(16f / 9f)); caption(Modifier.weight(1f))
             }
             FileLayout.LIST -> Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
