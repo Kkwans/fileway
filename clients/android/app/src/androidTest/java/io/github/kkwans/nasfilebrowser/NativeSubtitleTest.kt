@@ -137,7 +137,9 @@ class NativeSubtitleTest {
                                     verify: suspend (ClientModel) -> Unit) {
         val media = instrumentation.context.assets.open("media/$asset").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(media)
-        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Native subtitle fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
@@ -162,7 +164,11 @@ class NativeSubtitleTest {
             capture("failure-${label}")
             android.util.Log.e("NfbSubtitleAcceptance", "Failure during $checking; state=${model.player.state.value}; trace=${model.player.diagnosticSnapshot()}")
             throw AssertionError("Native subtitle failure during $checking", error)
-        } finally { activeModel = null; onMain { model.disconnect() }; store.remove(profile); source.close() }
+        } finally { withContext(NonCancellable) {
+            activeModel = null; onMain { model.disconnect() }
+            try { store.remove(profile) } finally { source.close() }
+            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+        } }
     }
 
     private suspend fun select(model: ClientModel, marker: String) {
@@ -354,9 +360,15 @@ class NativeSubtitleTest {
             }
             checking = "ASS initial red"
             select(model, "NFB ASS Attachment")
+            // Red exists only before 1.5s in this fixture. Anchor its initial
+            // pixel check independently of emulator/compositor capture latency,
+            // then resume to require the real transform, movement and fade.
+            onMain { model.player.pause(); model.player.seek(900) }
+            withTimeout(5000) { model.player.state.first { !it.playing && it.positionMs in 850..1100 && it.phase != "正在跳转" } }
             val early = rendered(checking) { count(it, listOf(255, 0, 0)) > 300 }
             val firstX = yellowCenter(early)
             capture("animation-red")
+            onMain { model.player.toggle() }
             checking = "ASS same-bounds blue transform"
             rendered(checking) { count(it, listOf(0, 0, 255)) > 300 && count(it, listOf(255, 0, 0)) < 30 }
             capture("animation-blue")
