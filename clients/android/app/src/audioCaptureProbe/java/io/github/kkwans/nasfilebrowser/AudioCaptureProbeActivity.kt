@@ -20,6 +20,7 @@ class AudioCaptureProbeActivity : Activity() {
         private set
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        check(ownedAudioProbeDevice()) { "Explicitly supported owned test device required" }
         android.util.Log.i("FilewayAudioProbe", "activity-created")
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         viewport = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }

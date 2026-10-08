@@ -32,3 +32,14 @@ An output-mix pass is narrower than physical speaker/Bluetooth sound, A/V sync,
 actual playback tempo, HDR and long-film acceptance. Keep those gates separate.
 Preserve the first failure, output timeline and player trace before teardown.
 After diagnostics, restore an ordinary same-key APK without clearing user data.
+
+On devices that leave instrumentation Activity launches in the background, the
+host may foreground `.AudioCaptureProbeActivity` after the
+`AUDIO_PROBE_STAGE=activity-launch-requested` checkpoint. Use MAIN/LAUNCHER and
+NEW_TASK/SINGLE_TOP flags to match the ActivityScenario launch intent. Do not
+launch MainActivity over the probe. The diagnostic Activity is exported only in
+this opt-in variant and requires the platform `android.permission.DUMP` permission
+(verified on the owned ADB shell; callers without it are rejected). Its owned-device guard also runs
+at creation. The service remains non-exported, and actual projection consent and
+runtime permission are still required; foregrounding does not start capture.
+Normal debug and release contain neither this entry point nor capture permissions.

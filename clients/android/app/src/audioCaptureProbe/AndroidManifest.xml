@@ -4,7 +4,10 @@
     <application android:allowAudioPlaybackCapture="true">
         <activity android:name=".EngineProbeActivity" android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout" />
-        <activity android:name=".AudioCaptureProbeActivity" android:exported="false"
+        <!-- Diagnostic variant only. Foregrounding requires the caller to hold
+             the platform DUMP permission, verified on the owned ADB shell. -->
+        <activity android:name=".AudioCaptureProbeActivity" android:exported="true"
+            android:permission="android.permission.DUMP"
             android:configChanges="orientation|screenSize|screenLayout" />
         <service android:name=".PlaybackCaptureProbeService" android:exported="false"
             android:foregroundServiceType="mediaProjection" />
