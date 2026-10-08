@@ -32,6 +32,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import io.github.kkwans.nasfilebrowser.data.parsePlaybackRate
 import io.github.kkwans.nasfilebrowser.data.TextSubtitleAppearance
 import io.github.kkwans.nasfilebrowser.data.VideoDecodePolicy
+import io.github.kkwans.nasfilebrowser.data.isExternalSubtitle
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
@@ -161,8 +162,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         } ?: error("Missing subtitle filename")
                     }
                     if (requestedGeneration != model.player.state.value.mediaGeneration) return@launch
-                    if (name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT) !in setOf("srt", "vtt", "ass", "ssa", "ttml", "dfxp")) {
-                        feedback.showSnackbar("请选择 SRT、VTT、ASS、SSA 或 TTML 字幕")
+                    if (!isExternalSubtitle(name)) {
+                        feedback.showSnackbar("请选择 SRT、VTT、ASS、SSA、TTML/DFXP、SAMI/SMI 或 SUP 字幕")
                     } else if (!model.player.addSubtitle(uri.toString(), name)) {
                         feedback.showSnackbar("视频仍在加载，请稍后重试添加字幕")
                     }
