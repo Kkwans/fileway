@@ -67,8 +67,20 @@ class DownloadPlaybackTest {
             val device = UiDevice.getInstance(instrumentation)
             assertNotNull(device.wait(Until.findObject(By.text("本机下载")), 5000))
             withTimeout(5000) { model.downloads.state.first { it.items.any { row -> row.id == id } } }
-            val play = device.wait(Until.findObject(By.text("边下边播")), 5000)
-            assertNotNull(play); play!!.click()
+            waitFor("download window focus") {
+                var focused = false
+                activity.scenario.onActivity { focused = it.hasWindowFocus() }
+                focused
+            }
+            fun clickOwned(description: String) {
+                device.waitForIdle()
+                var button = device.wait(Until.findObject(By.desc(description)), 5000)
+                    ?: error("Missing owned download action $description")
+                while (!button.isClickable) button = button.parent ?: error("Owned download action has no clickable owner")
+                assertTrue(button.isEnabled)
+                button.click()
+            }
+            clickOwned("打开下载：${record.name}")
             waitFor("prefix playback") { model.player.state.value.let { it.firstFrameRendered && it.playing && it.seekable && it.positionMs > 600 } }
             assertTrue("The missing range must actually use authenticated transport", source.rawRequests.get() > 0)
             assertEquals(prefix.toLong(), dao.get(id)!!.downloaded)
@@ -76,8 +88,7 @@ class DownloadPlaybackTest {
             main { model.player.seek(8000) }
             waitFor("range seek") { model.player.state.value.let { it.positionMs >= 7500 && it.phase != "正在跳转" && !it.waitingForBuffer && it.playing } }
             main { model.leavePlayer() }
-            val resume = device.wait(Until.findObject(By.text("继续下载")), 5000)
-            assertNotNull(resume); resume!!.click()
+            clickOwned("继续下载：${record.name}")
             withTimeout(20_000) { dao.observe().first { rows -> rows.any { it.id == id && it.complete } } }
             val complete = dao.get(id)!!; saved = complete
             assertEquals(bytes.size.toLong(), complete.downloaded)

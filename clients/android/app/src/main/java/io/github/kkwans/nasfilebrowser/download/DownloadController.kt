@@ -56,9 +56,16 @@ class DownloadController(private val context: Context, private val scope: Corout
         }
         dao.observe().collect { mutable.value = mutable.value.copy(items = it) }
     } }
-    fun selectDirectory(uri: android.net.Uri?) {
-        try { target.selectTree(uri); mutable.value = mutable.value.copy(tree = target.selectedTree(), error = null, notice = "下载目录已保存") }
-        catch (failure: Exception) { mutable.value = mutable.value.copy(error = failure.message ?: "无法保存下载目录授权") }
+    fun selectDirectory(uri: android.net.Uri?) = perform {
+        withContext(Dispatchers.IO) { target.selectTree(uri) }
+        mutable.value = mutable.value.copy(tree = target.selectedTree())
+        "下载目录已保存"
+    }
+    fun reauthorizeDirectory(id: String, uri: android.net.Uri) = perform {
+        val record = dao.get(id) ?: error("下载记录不存在")
+        check(record.treeUri.isNotEmpty()) { "默认下载目录无需重新授权" }
+        withContext(Dispatchers.IO) { target.reauthorizeTree(record.treeUri, uri) }
+        "原目录授权已恢复；文件和默认目录保持不变，可重新打开或继续下载"
     }
     fun enqueue(binding: SessionContext, file: ResourceRef, current: () -> Boolean) = perform {
         require(!file.directory && file.downloadId.isEmpty()) { "请选择服务器上的文件" }
@@ -84,6 +91,7 @@ class DownloadController(private val context: Context, private val scope: Corout
     fun resume(record: DownloadRecord) = perform {
         val current = dao.get(record.id) ?: error("下载记录不存在")
         check(!current.complete && !current.active) { "下载已经开始或完成" }
+        check(withContext(Dispatchers.IO) { target.hasAccess(current.treeUri) }) { "原下载目录授权已失效，请先在更多菜单中重新授权目录" }
         withTimeout(30_000) { DownloadRuntime.get(context).awaitStopped(record.id) }
         check(dao.command(record.id, "queued", System.currentTimeMillis()) == 1)
         try { DownloadScheduler.start(context, dao.get(record.id) ?: error("下载记录不存在")) }

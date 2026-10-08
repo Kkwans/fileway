@@ -15,8 +15,28 @@ class DownloadTarget(private val context: Context) {
     private val preferences = context.getSharedPreferences("download-target", Context.MODE_PRIVATE)
     fun selectedTree(): String = preferences.getString("tree", "").orEmpty()
     fun selectTree(uri: Uri?) {
-        if (uri != null) resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        if (uri != null) authorizeTree(uri)
         check(preferences.edit().putString("tree", uri?.toString().orEmpty()).commit()) { "下载目录设置未能保存" }
+    }
+    private fun authorizeTree(uri: Uri) {
+        require(uri.scheme == "content" && DocumentsContract.isTreeUri(uri)) { "请选择系统文件管理器中的文件夹" }
+        try { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+        catch (failure: SecurityException) { throw IllegalStateException("未获得目录的读写授权，请重新选择并允许访问", failure) }
+        check(hasAccess(uri.toString())) { "目录的读写授权未能保留，请重新选择目录" }
+    }
+    fun reauthorizeTree(original: String, selected: Uri) {
+        require(sameTree(Uri.parse(original), selected)) { "请选择此下载原来的目录；重新授权不会移动文件或更改默认目录" }
+        authorizeTree(selected)
+    }
+    fun hasAccess(tree: String): Boolean = tree.isEmpty() || resolver.persistedUriPermissions.any {
+        it.isReadPermission && it.isWritePermission && sameTree(it.uri, Uri.parse(tree))
+    }
+    companion object {
+        internal fun sameTree(first: Uri, second: Uri): Boolean = runCatching {
+            first.scheme == "content" && second.scheme == "content" && first.authority == second.authority &&
+                DocumentsContract.isTreeUri(first) && DocumentsContract.isTreeUri(second) &&
+                DocumentsContract.getTreeDocumentId(first) == DocumentsContract.getTreeDocumentId(second)
+        }.getOrDefault(false)
     }
     fun allocate(record: DownloadRecord): Uri {
         val name = record.name.replace('/', '_').replace('\u0000', '_').ifBlank { "fileway-${record.id}" }
@@ -29,7 +49,7 @@ class DownloadTarget(private val context: Context) {
             }) ?: throw FileNotFoundException("无法在 Download/fileway 创建文件，请检查可用空间")
         }
         val tree = Uri.parse(record.treeUri)
-        check(resolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }) { "所选下载目录的授权已失效，请重新选择目录" }
+        check(hasAccess(record.treeUri)) { "原下载目录授权已失效，请在此下载的更多菜单中重新授权目录" }
         val folder = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
         return DocumentsContract.createDocument(resolver, folder, mime, name) ?: throw FileNotFoundException("所选目录无法创建文件")
     }

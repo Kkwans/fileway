@@ -37,7 +37,12 @@ import java.util.Locale
     var settings by rememberSaveable { mutableStateOf(false) }
     var remove by remember { mutableStateOf<DownloadRecord?>(null) }
     var deleteFile by remember { mutableStateOf(false) }
+    var reauthorizing by rememberSaveable { mutableStateOf<String?>(null) }
     val folder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> if (uri != null) model.downloads.selectDirectory(uri) }
+    val recoverFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val id = reauthorizing; reauthorizing = null
+        if (id != null && uri != null) model.downloads.reauthorizeDirectory(id, uri)
+    }
     val folderFallback = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
     fun openFolder(tree: String) {
         try { context.startActivity(model.downloads.target.directoryIntent(tree)) }
@@ -92,12 +97,18 @@ import java.util.Locale
                         if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, Modifier.semantics { contentDescription = "打开下载：${item.name}" }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
-                            if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
+                            if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) },
+                                Modifier.semantics { contentDescription = "${if (item.active) "暂停下载" else "继续下载"}：${item.name}" }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
                             var more by remember(item.id) { mutableStateOf(false) }
                             Box {
                                 TextButton({ more = true }, enabled = !state.busy) { Text("更多") }
                                 DropdownMenu(more, { more = false }) {
                                     DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri) })
+                                    if (item.treeUri.isNotEmpty()) DropdownMenuItem({ Text("重新授权目录") }, {
+                                        more = false; reauthorizing = item.id
+                                        try { recoverFolder.launch(Uri.parse(item.treeUri)) }
+                                        catch (_: Exception) { reauthorizing = null; model.downloads.reportError("无法打开目录选择器，请检查系统文件管理器") }
+                                    }, enabled = !item.active)
                                     DropdownMenuItem({ Text("移除记录") }, { more = false; deleteFile = false; remove = item }, enabled = item.complete)
                                     DropdownMenuItem({ Text("删除文件与记录") }, { more = false; deleteFile = true; remove = item }, enabled = !item.active)
                                 }
@@ -113,10 +124,13 @@ import java.util.Locale
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("下载目录", style = MaterialTheme.typography.titleLarge)
             Text(downloadDirectoryLabel(state.tree), style = MaterialTheme.typography.bodyLarge)
+            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("更改目录只影响新下载。现有文件留在原目录，不会自动移动或删除。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button({ try { folder.launch(state.tree.takeIf { it.isNotEmpty() }?.let(Uri::parse)) } catch (_: Exception) { model.downloads.reportError("无法打开目录选择器") } }, Modifier.fillMaxWidth()) { Text("选择下载目录") }
+            Button({ try { folder.launch(state.tree.takeIf { it.isNotEmpty() }?.let(Uri::parse)) } catch (_: Exception) { model.downloads.reportError("无法打开目录选择器") } }, Modifier.fillMaxWidth(), enabled = !state.busy) { Text("选择下载目录") }
             OutlinedButton({ openFolder(state.tree) }, Modifier.fillMaxWidth()) { Text("打开下载目录") }
-            if (state.tree.isNotEmpty()) TextButton({ model.downloads.selectDirectory(null) }, Modifier.fillMaxWidth()) { Text("恢复默认 · Download/fileway") }
+            if (state.tree.isNotEmpty()) TextButton({ model.downloads.selectDirectory(null) }, Modifier.fillMaxWidth(), enabled = !state.busy) { Text("恢复默认 · Download/fileway") }
         }
     }
     remove?.let { item -> AlertDialog(onDismissRequest = { remove = null }, title = { Text(if (deleteFile) "删除本机文件？" else "移除下载记录？") },
