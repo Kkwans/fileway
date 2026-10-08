@@ -171,35 +171,38 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
         dismissButton = { TextButton({ deleting = null }) { Text("取消") } }) }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun FavoriteFileAction(model: ClientModel, file: ResourceRef, enabled: Boolean = true) {
     val state by model.favorites.state.collectAsStateWithLifecycle()
     var choosing by remember(file, state.scope) { mutableStateOf(false) }
     var chosenGroup by remember(file, state.scope) { mutableStateOf("") }
     LaunchedEffect(file, state.scope) { model.favorites.refresh() }
     val existing = model.favorites.favorite(file.path)
-    Column {
-        OutlinedButton(onClick = { if (existing != null) model.favorites.remove(existing) else choosing = true },
-            modifier = Modifier.fillMaxWidth(), enabled = enabled && state.loaded && !state.loading && !state.changing && state.error == null) {
-            Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
-            Text(if (state.changing) "正在保存" else if (state.loading) "正在读取收藏" else if (existing == null) "加入收藏" else "取消收藏")
-        }
-        state.error?.let { Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(it, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-            TextButton(model.favorites::refresh) { Text("重试") }
-        } }
-        state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    FileActionIcon(R.drawable.ic_bookmark, if (existing == null) "加入收藏" else "取消收藏",
+        enabled && state.loaded && !state.loading && !state.changing && state.error == null, existing != null) {
+        if (existing != null) model.favorites.remove(existing) else choosing = true
     }
-    if (choosing) AlertDialog(onDismissRequest = { if (!state.changing) choosing = false }, title = { Text("加入收藏") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            Text(file.name, style = MaterialTheme.typography.bodyLarge)
+    if (choosing) ModalBottomSheet(onDismissRequest = { if (!state.changing) choosing = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("加入收藏", style = MaterialTheme.typography.titleLarge)
+            Text(file.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("选择收藏夹", style = MaterialTheme.typography.labelLarge)
             if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            FavoriteGroupChoice("", "未分组", chosenGroup, !state.changing) {
-                chosenGroup = ""; model.favorites.add(file) { choosing = false }
+            LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                item { FavoriteGroupChoice("", "未分组", chosenGroup, !state.changing) { chosenGroup = "" } }
+                items(state.groups, key = { it.id }) { group ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).selectable(chosenGroup == group.id, enabled = !state.changing, role = Role.RadioButton) { chosenGroup = group.id }, verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(12.dp).background(favoriteColor(group.color, MaterialTheme.colorScheme.primary), CircleShape))
+                        Text(group.name, Modifier.weight(1f).padding(horizontal = 12.dp))
+                        RadioButton(chosenGroup == group.id, null, enabled = !state.changing)
+                    }
+                }
             }
-            state.groups.forEach { group -> FavoriteGroupChoice(group.id, group.name, chosenGroup, !state.changing) {
-                chosenGroup = group.id; model.favorites.add(file, group.id) { choosing = false }
-            } }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton({ choosing = false }, enabled = !state.changing) { Text("取消") }
+                Button({ model.favorites.add(file, chosenGroup) { choosing = false } }, enabled = !state.changing) { Text(if (state.changing) "正在保存" else "保存收藏") }
+            }
         }
-    }, confirmButton = { TextButton({ choosing = false }, enabled = !state.changing) { Text("取消") } })
+    }
 }

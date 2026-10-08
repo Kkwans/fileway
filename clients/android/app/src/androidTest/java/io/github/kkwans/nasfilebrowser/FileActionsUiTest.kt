@@ -36,7 +36,10 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                     assertTrue("Preview layouts must not have per-file buttons", device.wait(Until.gone(By.desc(label)), 5000))
                     text(path.substringAfterLast('/')).longClick()
                 }
-                text("文件详情"); action("设置文件标签")
+                text("文件详情")
+                val toolbar = listOf("加入收藏", "设置文件标签", "下载到本机", "移入回收站").map { action(it).visibleBounds }
+                assertTrue("File actions must occupy one row above metadata", toolbar.all { it.bottom < text("名称").visibleBounds.top })
+                assertTrue("Action icons must share the same row", toolbar.maxOf { it.centerY() } - toolbar.minOf { it.centerY() } <= 2)
                 capture("file-actions-${layout.name.lowercase()}")
                 text("关闭").click()
                 assertTrue("The previous dialog must be gone before the next layout",
@@ -51,10 +54,15 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                 }
             }
             text(path.substringAfterLast('/')).longClick(); text("文件详情")
-            action("设置文件标签").click(); text("本次测试").click(); text("保存标记").click()
+            action("设置文件标签").click(); text("本次测试").click()
+            capture("file-tag-picker-colors")
+            text("保存标记").click()
             withTimeout(5000) { model.tags.state.first { !it.changing && it.items.singleOrNull()?.paths?.contains(path) == true } }
             assertTrue(data.mutations.contains("POST" to "/api/tags/tag-owned/paths"))
             assertFalse(data.mutations.any { it.first == "DELETE" })
+            text("关闭").click()
+            action("文件标签：本次测试")
+            capture("file-tag-visible-on-card")
         }
     }
 }

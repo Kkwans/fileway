@@ -350,6 +350,7 @@ class NativePlaybackTest {
                     val token = "header." + Base64.encodeToString(payload.toString().toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) + ".signature"
                     send(token.toByteArray(), "text/plain")
                 }
+                endpoint == "/api/tags" -> send("[]".toByteArray())
                 endpoint == "/api/resources/" -> {
                     val items = JSONArray()
                     videos.forEach { name -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name")

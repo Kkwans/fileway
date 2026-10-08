@@ -1,6 +1,8 @@
 package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
@@ -21,6 +23,19 @@ import kotlinx.coroutines.withTimeout
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
+import io.github.kkwans.nasfilebrowser.R
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun FileActionIcon(icon: Int, label: String, enabled: Boolean, active: Boolean = false, onClick: () -> Unit) {
+    TooltipBox(positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(), tooltip = { PlainTooltip { Text(label) } }, state = rememberTooltipState()) {
+        IconButton(onClick, enabled = enabled, modifier = Modifier.size(48.dp)) {
+            Icon(painterResource(icon), label, Modifier.size(24.dp), tint = if (!enabled) MaterialTheme.colorScheme.onSurface.copy(alpha = .38f)
+                else if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
 
 @Composable internal fun FileActions(model: ClientModel, file: ResourceRef, onMoved: () -> Unit = {}) {
     if (file.downloadId.isNotEmpty()) {
@@ -31,26 +46,30 @@ import androidx.compose.ui.platform.LocalContext
     val trash by model.trash.state.collectAsStateWithLifecycle()
     val client by model.state.collectAsStateWithLifecycle()
     val downloads by model.downloads.state.collectAsStateWithLifecycle()
+    val favorites by model.favorites.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     var labeling by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     var moving by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     val enabled = !trash.changing && !client.busy
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         FavoriteFileAction(model, file, enabled)
         val count = tags.items.count { collectionPath(file.path) in it.paths }
-        OutlinedButton({ labeling = true }, Modifier.fillMaxWidth().semantics {
-            contentDescription = "设置文件标签"
-            stateDescription = if (tags.loaded) "已关联 $count 个标签" else "尚未读取标签"
-        }, enabled = enabled && !tags.changing) { Text(if (tags.loaded) "标签 · $count" else "设置标签") }
-        if (!file.directory && client.permissions.download) OutlinedButton({
+        FileActionIcon(R.drawable.ic_tag, "设置文件标签", enabled && !tags.changing, count > 0) { labeling = true }
+        if (!file.directory && client.permissions.download) FileActionIcon(R.drawable.ic_download, "下载到本机", enabled && !downloads.busy) {
             model.download(file)
             if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-        }, Modifier.fillMaxWidth(), enabled = enabled && !downloads.busy) { Text("下载到本机") }
+        }
+        if (client.permissions.delete && file.path != "/") FileActionIcon(R.drawable.ic_trash, "移入回收站", enabled && !tags.changing) { moving = true }
+        }
+        favorites.error?.let { Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(it, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            TextButton(model.favorites::refresh) { Text("重试") }
+        } }
         downloads.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         downloads.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-        if (client.permissions.delete && file.path != "/") TextButton({ moving = true }, Modifier.fillMaxWidth(), enabled = enabled && !tags.changing) { Text("移入回收站") }
         if (!labeling) tags.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
     if (labeling) FileTagPicker(model, file) { labeling = false }
@@ -64,6 +83,7 @@ import androidx.compose.ui.platform.LocalContext
         dismissButton = { TextButton({ moving = false }, enabled = enabled) { Text("取消") } })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun FileTagPicker(model: ClientModel, file: ResourceRef, dismiss: () -> Unit) {
     val state by model.tags.state.collectAsStateWithLifecycle()
     var baseline by remember { mutableStateOf<Set<String>?>(null) }
@@ -85,9 +105,10 @@ import androidx.compose.ui.platform.LocalContext
         } catch (failure: Exception) { if (failure is kotlinx.coroutines.CancellationException) throw failure; error = failure.message ?: "标签读取失败，请重试" }
         finally { loading = false }
     }
-    AlertDialog(onDismissRequest = { if (!state.changing) dismiss() }, title = { Text("文件标签") }, text = {
-        Column {
-            Text(file.name, style = MaterialTheme.typography.bodyLarge)
+    ModalBottomSheet(onDismissRequest = { if (!state.changing) dismiss() }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("文件标签", style = MaterialTheme.typography.titleLarge)
+            Text(file.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (loading || state.changing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp))
             error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton({ attempt++ }) { Text("重试") } }
             if (error == null) state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -96,13 +117,17 @@ import androidx.compose.ui.platform.LocalContext
                 items(state.items, key = { it.id }) { tag -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .toggleable(tag.id in selected, enabled = !loading && !state.changing, role = Role.Checkbox) { checked -> selected = if (checked) selected + tag.id else selected - tag.id },
                     verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(12.dp).background(metadataColor(tag.color, MaterialTheme.colorScheme.primary), CircleShape))
+                    Text(tag.name, Modifier.weight(1f).padding(horizontal = 12.dp))
                     Checkbox(tag.id in selected, null)
-                    Text(tag.name, Modifier.weight(1f).padding(start = 8.dp))
                 } }
             }
             TextButton({ creating = true }, enabled = !loading && !state.changing) { Text("新建标签") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(dismiss, enabled = !state.changing) { Text("取消") }
+                Button({ model.tags.assign(file, baseline.orEmpty(), selected, onSaved = dismiss) }, enabled = baseline != null && !loading && error == null && !state.changing) { Text(if (state.changing) "正在保存" else "保存标记") }
+            }
         }
-    }, confirmButton = { TextButton({ model.tags.assign(file, baseline.orEmpty(), selected, onSaved = dismiss) }, enabled = baseline != null && !loading && error == null && !state.changing) { Text(if (state.changing) "正在保存" else "保存标记") } },
-        dismissButton = { TextButton(dismiss, enabled = !state.changing) { Text("取消") } })
+    }
     if (creating) TagEditor(model, null, { creating = false })
 }

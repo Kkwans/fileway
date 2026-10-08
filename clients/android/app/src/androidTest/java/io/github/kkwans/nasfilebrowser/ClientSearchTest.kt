@@ -231,6 +231,7 @@ class ClientSearchTest {
                     val bytes = value.toByteArray()
                     socket.getOutputStream().apply { write("HTTP/1.1 $status OK\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
                 } == true) return
+            if (uri.path == "/api/tags") { reply(socket, "[]"); return }
             if (uri.path.startsWith("/api/favorites")) {
                 val method = request.substringBefore(' ')
                 val response = synchronized(favoriteLock) {

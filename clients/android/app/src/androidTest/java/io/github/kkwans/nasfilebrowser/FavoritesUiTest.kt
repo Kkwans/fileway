@@ -54,11 +54,14 @@ class FavoritesUiTest {
             source.favoriteRecords.getJSONObject(0).put("name", "网页端更新的名称")
             action("刷新收藏").click(); text("网页端更新的名称")
             action("文件导航").click(); text("sample.png").longClick()
-            text("取消收藏").click()
+            action("取消收藏").click()
             withTimeout(5000) { model.favorites.state.first { !it.changing && it.items.isEmpty() } }
             assertEquals(0, source.favoriteRecords.length())
-            text("加入收藏").click()
+            action("加入收藏").click()
             text("电影").click()
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/favorite-group-picker.png")
+            text("保存收藏").click()
             withTimeout(5000) { model.favorites.state.first { !it.changing && it.items.size == 1 } }
             assertEquals("movie-group", source.favoriteRecords.getJSONObject(0).getString("groupId"))
             assertTrue(source.favoriteRecords.getJSONObject(0).getString("id").startsWith("server-"))

@@ -32,6 +32,7 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.FileCategory
 import io.github.kkwans.nasfilebrowser.app.mediaKind
+import io.github.kkwans.nasfilebrowser.data.collectionPath
 
 /** Official reference: restrained chrome, cover-led content and compact directory entries. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -48,6 +49,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
     )
     val layout = state.fileLayout
     val tags by model.tags.state.collectAsStateWithLifecycle()
+    LaunchedEffect(tags.scope) { if (tags.scope.isNotEmpty()) model.tags.refresh() }
     val displayed = remember(state.files, state.fileCategory, state.fileOrder, tags.items, tags.filterId, tags.globalFilter) { model.directoryItems() }
     var details by remember(state.wirePath) { mutableStateOf<ResourceRef?>(null) }
     MaterialTheme(colorScheme = colors) {
@@ -55,7 +57,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("文件", modifier = Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleLarge, color = colors.onBackground)
-                    IconButton(onClick = model::retry, enabled = !state.busy) {
+                    IconButton(onClick = { model.retry(); model.tags.refresh() }, enabled = !state.busy) {
                         Icon(painterResource(R.drawable.ic_refresh), "刷新", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
                     }
                     FileLayoutMenu(layout, select = model::fileLayout)
@@ -101,9 +103,12 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
 }
 
 /** Shared file card for directory and verified search results. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun FileEntry(model: ClientModel, file: ResourceRef, layout: FileLayout, enabled: Boolean,
     open: () -> Unit, details: () -> Unit, location: String? = null, metadata: @Composable (() -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
+    val tags by model.tags.state.collectAsStateWithLifecycle()
+    val associated = if (file.downloadId.isNotEmpty()) emptyList() else tags.items.filter { collectionPath(file.path) in it.paths }
     val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open,
         onLongClick = details, onLongClickLabel = "查看完整名称与路径")
     @Composable fun more() {
@@ -163,8 +168,18 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
             }
         }
     }
+    @Composable fun labels() {
+        if (associated.isNotEmpty()) FlowRow(Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            associated.forEach { tag -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.size(6.dp).background(metadataColor(tag.color, colors.primary), androidx.compose.foundation.shape.CircleShape))
+                Text(tag.name, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { contentDescription = "文件标签：${tag.name}" })
+            } }
+        }
+    }
     Surface(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).then(action),
         shape = RoundedCornerShape(10.dp), color = colors.background) {
+        Column {
         when (layout) {
             FileLayout.COVER -> Column(Modifier.fillMaxWidth()) {
                 artwork(Modifier.fillMaxWidth().aspectRatio(4f / 3f))
@@ -188,6 +203,8 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
                 artwork(Modifier.size(44.dp)); caption(Modifier.weight(1f)); more()
             }
         }
+        labels()
+        }
     }
 }
 
@@ -200,14 +217,16 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
         }
     }
     AlertDialog(onDismissRequest = onDismiss, shape = RoundedCornerShape(12.dp), containerColor = MaterialTheme.colorScheme.background,
-        title = { Text("文件详情", style = MaterialTheme.typography.titleLarge) }, text = {
+        title = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("文件详情", style = MaterialTheme.typography.titleLarge)
+            actions?.invoke()
+        } }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()).semantics { contentDescription = "文件详情内容" }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             field("名称", file.name); field("位置", file.path); field("类型", fileTypeLabel(file))
             if (showSize && !file.directory) field("大小", readableSize(file.size))
             field("修改时间", displayModified(file.modified) ?: "未提供")
         } }
-        actions?.invoke()
         }
     }, confirmButton = {
         if (onLocation != null) TextButton(onClick = onLocation, enabled = openEnabled) { Text("打开所在目录") }
