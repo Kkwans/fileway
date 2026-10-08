@@ -4,7 +4,7 @@ Native Android client for Fileway's Linux/Windows servers. Windows desktop is
 planned as a later delivery in this same repository.
 
 Android 10+ / arm64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
-and an embedded Go/tsnet transport. The published 0.6 preview uses this native
+and an embedded Go/tsnet transport. The published 0.6.1 preview uses this native
 playback chain; hardware HDR, audible continuity and long-play acceptance remain open.
 
 ## Status
@@ -16,33 +16,33 @@ plans and device-specific test evidence are maintained outside this repository.
 
 ## Install the UI preview
 
-[Android 0.6.0 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.6.0-0c3ed02/fileway-android-0.6.0-preview.apk)
+[Android 0.6.1 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.6.1-c3fe361/fileway-android-0.6.1-preview.apk)
 
-0.6 fixes large multi-track PGS subtitle caching, persists renewed login tokens,
-and adds an explicit encrypted keep-login option. It also adds SAMI multilingual
-subtitle support, local downloaded-image previews, original download-directory
-reauthorization, discoverable file actions in all five layouts, resilient library
-editors, and updated bright-blue connection/player layouts.
+0.6.1 fixes partial MKV startup, saves startup metadata for offline playback of
+incomplete MKV/MP4/WebM downloads, waits for missing bytes without overriding a
+manual pause, and shows the downloaded fraction and conservative indexed playable
+range on the timeline. It also fixes the playhead's vertical alignment, adds file
+multiselect and batch downloads, centers compact previews, limits visible tags to
+the unbounded grid, and improves file details and library selection sheets.
 
-The Media3/FFmpeg/libass chain, media queues, server favorites/tags/trash, task and
-storage tools, actual downloads and missing-range playback remain from 0.5.
-VersionCode 8 preserves the original package, signing certificate and Room6 data.
-Source `0c3ed02bdc6b622d6c6c343d3f11e94a958d12f2`.
+The native Media3/FFmpeg/libass chain and server library/task/storage features remain
+from 0.6. VersionCode 9 preserves the original package, signing certificate and
+Room6 data. Source `c3fe361df9f6d70376837809e36a2b59b6f70cfb`.
 
 This is a signed debug preview. Build/lint/unit/package checks passed. Scoped
-Xiaomi14 checks cover an original NAS movie's eight PGS tracks, 17 isolated
-login/storage cases (including native HTTP renewal and reopening), native playback,
-and downloaded-prefix/offline playback. These checks do not certify every format,
-actual HDR, audible continuity, long-play performance or full API35/API37 acceptance.
-Full CI still has failures, and the connection-form automation's first expand action
-remains unresolved despite independent ADB touch working. Keep those limits separate
-from verified feature results. See [0.6 scope and recovery](docs/preview-0.6.md) and
-[release assets with corresponding native sources](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.6.0-0c3ed02).
+Xiaomi14 checks include an original NAS movie's partial-prefix startup and offline
+startup without network reads, incomplete MKV and front/tail-indexed MP4, process
+restart and seek, missing-byte recovery/manual pause, batch-download bytes and
+related file/timeline UI. These do not certify every format, actual HDR, audible
+continuity, long-film performance, full API35/API37 CI or complete UI acceptance.
+See [0.6.1 scope and recovery](docs/preview-0.6.1.md) and
+[release assets with corresponding native sources](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.6.1-c3fe361).
 
-Cover-install; do not uninstall or clear personal data. Legacy accounts with expired
-JWTs and no saved password need one successful login with keep-login enabled.
-The native binary payload is unchanged from 0.5. Personal-device installation of
-the numbered 0.6 package is tracked separately from the pre-release test-package checks.
+Cover-install; do not uninstall or clear data. The release APK was cover-installed
+and its version and launch verified on Xiaomi14. Old partial videos need one online
+open to prepare startup metadata; new supported video downloads prepare it before
+the body. Existing tasks keep their original connection channel. Expired legacy
+accounts without a saved password need one login with keep-login enabled.
 
 Preview releases follow product significance: substantial feature groups advance the
 minor version (0.4, 0.5); important fixes advance the patch version (0.4.1, 0.4.2).
