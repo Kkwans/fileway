@@ -26,6 +26,7 @@ internal class MediaSubtitleExtractor(private val sink: Sink) : Extractor {
         fun format(format: Format)
         fun dialogue(trackId: String, startMs: Long, durationMs: Long, packet: ByteArray)
         fun textCues(trackId: String, cues: CuesWithTiming) = Unit
+        fun encodedPgs(trackId: String, timeUs: Long, packet: ByteArray) = Unit
     }
     private val streams = mutableListOf<Capture>()
     private val plainStreams = mutableListOf<PlainTextCapture>()
@@ -96,11 +97,13 @@ internal class MediaSubtitleExtractor(private val sink: Sink) : Extractor {
     /** Observe Media3's own encoded text cues, retaining their styles and timing. */
     private inner class PlainTextCapture(private val output: TrackOutput) : TrackOutput by output {
         private var id: String? = null
+        private var pgs = false
         private val pending = ByteArrayOutputStream()
         private val decoder = CueDecoder()
         fun clear() = pending.reset()
         override fun format(format: Format) {
             id = format.id.takeIf { format.sampleMimeType == MimeTypes.APPLICATION_MEDIA3_CUES && format.codecs != MimeTypes.TEXT_SSA }
+            pgs = format.codecs == MimeTypes.APPLICATION_PGS
             output.format(format)
         }
         override fun sampleData(data: ParsableByteArray, length: Int) = sampleData(data, length, TrackOutput.SAMPLE_DATA_PART_MAIN)
@@ -116,7 +119,11 @@ internal class MediaSubtitleExtractor(private val sink: Sink) : Extractor {
                 val data = pending.toByteArray()
                 val end = data.size - offset; val start = end - size
                 check(start >= 0 && end in start..data.size)
-                sink.textCues(track, decoder.decode(timeUs, data, start, size))
+                // Media3 serializes bitmap cues losslessly as PNG. Preserve that
+                // representation instead of eagerly retaining full canvases for
+                // every unselected PGS track in the read-ahead window.
+                if (pgs) sink.encodedPgs(track, timeUs, data.copyOfRange(start, end))
+                else sink.textCues(track, decoder.decode(timeUs, data, start, size))
                 pending.reset(); pending.write(data, end, offset)
             }
             output.sampleMetadata(timeUs, flags, size, offset, cryptoData)

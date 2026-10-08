@@ -10,6 +10,7 @@ import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.NoSampleRenderer
 import androidx.media3.extractor.text.CuesWithTiming
+import androidx.media3.extractor.text.CueDecoder
 import io.github.peerless2012.ass.Ass
 import io.github.peerless2012.ass.AssFrame
 import io.github.peerless2012.ass.AssTexType
@@ -33,6 +34,11 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
     private val tracks = mutableMapOf<String, AssTrack>()
     private val headers = mutableMapOf<String, List<ByteArray>>()
     private val cues = mutableMapOf<String, MutableList<CuesWithTiming>>()
+    private class PgsPacket(val timeUs: Long, val bytes: ByteArray)
+    private val pgs = mutableMapOf<String, java.util.TreeMap<Long, PgsPacket>>()
+    private val cueDecoder = CueDecoder()
+    private var lastPgsPacket: PgsPacket? = null
+    private var decodedPgs: CuesWithTiming? = null
     private var eventBytes = 0L
     private var cueBytes = 0L
     private var lastNative: AssFrame? = null
@@ -81,12 +87,32 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         val list = cues.getOrPut(trackId) { mutableListOf() }
         if (list.none { it.startTimeUs == value.startTimeUs && it.durationUs == value.durationUs && it.cues == value.cues }) {
             list.add(value); cueBytes += bytes(value)
-            while (cueBytes > 32L * 1024 * 1024 || cues.values.sumOf { it.size } > 20_000) {
-                val victim = cues.entries.filter { !it.key.startsWith("external:") && it.value.isNotEmpty() }.minByOrNull { it.value.first().startTimeUs } ?: break
-                cueBytes -= bytes(victim.value.removeAt(0))
-            }
+            trimCues()
         }
         requestFrame(timeMs.get())
+    }
+    override fun encodedPgs(trackId: String, timeUs: Long, packet: ByteArray) = submit {
+        if (timeUs == C.TIME_UNSET) return@submit
+        val list = pgs.getOrPut(trackId) { java.util.TreeMap() }
+        val old = list[timeUs]
+        if (old == null || !old.bytes.contentEquals(packet)) {
+            cueBytes -= old?.bytes?.size ?: 0
+            list[timeUs] = PgsPacket(timeUs, packet)
+            cueBytes += packet.size
+            trimCues()
+        }
+        requestFrame(timeMs.get())
+    }
+    private fun cueCount() = cues.values.sumOf { it.size } + pgs.values.sumOf { it.size }
+    private fun trimCues() {
+        while (cueBytes > 32L * 1024 * 1024 || cueCount() > 20_000) {
+            val text = cues.entries.filter { !it.key.startsWith("external:") && it.value.isNotEmpty() }.minByOrNull { it.value.first().startTimeUs }
+            val bitmap = pgs.values.filter { it.isNotEmpty() }.minByOrNull { it.firstKey() }
+            if (text == null && bitmap == null) break
+            if (bitmap != null && (text == null || bitmap.firstKey() <= text.value.first().startTimeUs)) {
+                cueBytes -= bitmap.pollFirstEntry().value.bytes.size
+            } else if (text != null) cueBytes -= bytes(text.value.removeAt(0))
+        }
     }
     fun externalAss(id: String, data: ByteArray, ready: () -> Unit) = submit {
         tracks.remove(id)?.release()
@@ -98,7 +124,7 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         val count = values.values.sumOf { it.size }
         val size = values.values.sumOf { items -> items.sumOf(::bytes) }
         check(count <= 20_000 && size <= 32L * 1024 * 1024)
-        check(cueBytes + size <= 32L * 1024 * 1024 && cues.values.sumOf { it.size } + count <= 20_000)
+        check(cueBytes + size <= 32L * 1024 * 1024 && cueCount() + count <= 20_000)
         // Attach only a fully parsed file. A partial/failed read never becomes
         // a selected track, and whole-file seek does not silently lose old cues.
         values.forEach { (id, items) -> cues[id] = items.toMutableList() }; cueBytes += size
@@ -120,9 +146,17 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
                 val selectedText = textId
                 val available = cues[selectedText].orEmpty()
                 val lastIndefinite = available.filter { it.durationUs == C.TIME_UNSET && it.startTimeUs <= at * 1000 }.maxByOrNull { it.startTimeUs }
-                val text = if (at < 0) emptyList() else available.filter {
+                val ordinary = if (at < 0) emptyList() else available.filter {
                     it.startTimeUs <= at * 1000 && (if (it.durationUs == C.TIME_UNSET) it === lastIndefinite else at * 1000 < it.endTimeUs)
                 }.flatMap { it.cues }
+                // PGS replaces the previous display set, including an explicit
+                // empty clear event. Only the selected display set is decoded.
+                val packet = if (at < 0) null else pgs[selectedText]?.floorEntry(at * 1000)?.value
+                if (packet !== lastPgsPacket) {
+                    decodedPgs = packet?.let { cueDecoder.decode(it.timeUs, it.bytes, 0, it.bytes.size) }
+                    lastPgsPacket = packet
+                }
+                val text = decodedPgs?.takeIf { it.durationUs == C.TIME_UNSET || at * 1000 < it.endTimeUs }?.cues ?: ordinary
                 val track = tracks[assId]
                 val output = if (track == null || at < 0 || frameWidth <= 0 || frameHeight <= 0) null else {
                     val render = renderer ?: ass().createRender().also { renderer = it; it.setCacheLimit(1000, 64) }
@@ -158,7 +192,8 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         selection.incrementAndGet(); frame = null; invalidate()
         worker.execute {
             renderer?.release(); tracks.values.forEach { it.release() }; library?.release()
-            tracks.clear(); cues.clear(); headers.clear(); lastNative = null
+            tracks.clear(); cues.clear(); pgs.clear(); headers.clear(); lastNative = null
+            lastPgsPacket = null; decodedPgs = null
         }
         worker.shutdown()
     }

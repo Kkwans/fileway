@@ -13,6 +13,10 @@ require(vlcProbeVersion == null || vlcProbeVersion == "3.7.7") { "Only the pinne
 val audioCaptureOption = providers.gradleProperty("filewayAudioCaptureProbe").orElse("false").get()
 require(audioCaptureOption in listOf("true", "false")) { "filewayAudioCaptureProbe must be true or false" }
 val audioCaptureProbe = audioCaptureOption == "true"
+val realMediaOption = providers.gradleProperty("filewayRealMediaProbe").orElse("false").get()
+require(realMediaOption in listOf("true", "false")) { "filewayRealMediaProbe must be true or false" }
+val realMediaProbe = realMediaOption == "true"
+require(!(realMediaProbe && audioCaptureProbe)) { "Use separate real-media and audio-capture diagnostics" }
 android {
     namespace = "io.github.kkwans.nasfilebrowser"
     compileSdk = 37
@@ -41,6 +45,10 @@ android {
         sourceSets.getByName("debug").kotlin.srcDir("src/audioCaptureProbe/java")
         sourceSets.getByName("androidTest").kotlin.srcDir("src/audioCaptureProbeTest/java")
     }
+    if (realMediaProbe) {
+        sourceSets.getByName("debug").manifest.srcFile("src/realMediaProbe/AndroidManifest.xml")
+        sourceSets.getByName("androidTest").kotlin.srcDir("src/realMediaProbeTest/java")
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -54,6 +62,7 @@ android {
             if (nativeVerbose == "true") versionNameSuffix = "-native-diagnostic"
             if (vlcProbeVersion != null) versionNameSuffix = (versionNameSuffix ?: "") + "-vlc-3.7.7-comparison"
             if (audioCaptureProbe) versionNameSuffix = (versionNameSuffix ?: "") + "-audio-diagnostic"
+            if (realMediaProbe) versionNameSuffix = (versionNameSuffix ?: "") + "-real-media-diagnostic"
         }
         release {
             isMinifyEnabled = true
