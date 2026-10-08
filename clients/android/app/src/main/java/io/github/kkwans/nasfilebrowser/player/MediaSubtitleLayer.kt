@@ -104,14 +104,31 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         requestFrame(timeMs.get())
     }
     private fun cueCount() = cues.values.sumOf { it.size } + pgs.values.sumOf { it.size }
+    private class Eviction(val id: String, val timeUs: Long, val current: Boolean, val text: CuesWithTiming? = null)
     private fun trimCues() {
+        val atUs = (timeMs.get() - delayMs) * 1000
         while (cueBytes > 32L * 1024 * 1024 || cueCount() > 20_000) {
-            val text = cues.entries.filter { !it.key.startsWith("external:") && it.value.isNotEmpty() }.minByOrNull { it.value.first().startTimeUs }
-            val bitmap = pgs.values.filter { it.isNotEmpty() }.minByOrNull { it.firstKey() }
-            if (text == null && bitmap == null) break
-            if (bitmap != null && (text == null || bitmap.firstKey() <= text.value.first().startTimeUs)) {
-                cueBytes -= bitmap.pollFirstEntry().value.bytes.size
-            } else if (text != null) cueBytes -= bytes(text.value.removeAt(0))
+            val candidates = sequence {
+                for ((id, values) in cues) {
+                    if (id.startsWith("external:")) continue
+                    val indefinite = values.filter { it.durationUs == C.TIME_UNSET && it.startTimeUs <= atUs }.maxByOrNull { it.startTimeUs }
+                    for (value in values) yield(Eviction(id, value.startTimeUs,
+                        value.startTimeUs <= atUs && (if (value.durationUs == C.TIME_UNSET) value === indefinite else atUs < value.endTimeUs), value))
+                }
+                for ((id, values) in pgs) {
+                    // Empty packets are display sets too: retaining the floor
+                    // event prevents an earlier caption surviving its clear.
+                    val floor = values.floorKey(atUs)
+                    for (time in values.keys) yield(Eviction(id, time, time == floor))
+                }
+            }
+            val victim = subtitleCacheVictim(candidates, atUs, { it.current }, { it.id == textId }, { it.timeUs }) ?: break
+            if (victim.text != null) {
+                cues[victim.id]?.remove(victim.text)
+                cueBytes -= bytes(victim.text)
+            } else {
+                cueBytes -= pgs[victim.id]?.remove(victim.timeUs)?.bytes?.size ?: 0
+            }
         }
     }
     fun externalAss(id: String, data: ByteArray, ready: () -> Unit) = submit {
