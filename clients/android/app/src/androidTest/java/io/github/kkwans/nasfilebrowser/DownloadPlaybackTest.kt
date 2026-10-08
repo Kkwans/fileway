@@ -2,6 +2,7 @@ package io.github.kkwans.nasfilebrowser
 
 import android.net.Uri
 import android.content.Intent
+import android.provider.DocumentsContract
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -31,11 +32,20 @@ class DownloadPlaybackTest {
         val context = instrumentation.targetContext
         val db = ClientDatabase.get(context); val dao = db.downloads()
         val previous = db.profiles().activeSession()
+        val target = DownloadTarget(context)
+        val useOwnedSaf = InstrumentationRegistry.getArguments().getString("nfbOwnedSafDownload") == "true"
+        val tree = if (useOwnedSaf) target.selectedTree() else ""
+        if (useOwnedSaf) {
+            val selected = Uri.parse(tree)
+            require(selected.authority == "com.android.externalstorage.documents" && DocumentsContract.isTreeUri(selected) &&
+                DocumentsContract.getTreeDocumentId(selected) == "primary:Download/fileway" && target.hasAccess(tree)) {
+                "SAF fixture requires explicitly selected, authorized project Download/fileway folder"
+            }
+        }
         val bytes = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(bytes, download = true)
         val store = ProfileStore(db, CredentialVault(context))
         val profile = store.save(ServerProfile(name = "Owned download fixture", address = source.url))
-        val target = DownloadTarget(context)
         var saved: DownloadRecord? = null
         lateinit var model: ClientModel
         lateinit var launchIntent: Intent
@@ -58,7 +68,7 @@ class DownloadPlaybackTest {
             val account = store.accounts(profile).single()
             val id = UUID.randomUUID().toString(); val prefix = minOf(bytes.size / 4, 8192)
             val record = DownloadRecord(id, dao.lastJobId() + 1, account.key, profile.id, profile.sourceRevision,
-                "/fixture.mkv", "/fixture.mkv", "fileway-owned-download-$id.mkv", "video", bytes.size.toLong(), "owned-download-v1", "${bytes.size}/owned-download-v1", "Owned fixture", "",
+                "/fixture.mkv", "/fixture.mkv", "fileway-owned-download-$id.mkv", "video", bytes.size.toLong(), "owned-download-v1", "${bytes.size}/owned-download-v1", "Owned fixture", tree,
                 status = "paused", downloaded = prefix.toLong(), createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis())
             val uri = target.allocate(record); saved = record.copy(localUri = uri.toString())
             context.contentResolver.openOutputStream(uri, "w")!!.use { it.write(bytes, 0, prefix) }

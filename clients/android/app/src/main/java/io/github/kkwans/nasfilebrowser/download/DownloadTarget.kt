@@ -3,6 +3,8 @@ package io.github.kkwans.nasfilebrowser.download
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.ActivityNotFoundException
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
@@ -57,10 +59,19 @@ class DownloadTarget(private val context: Context) {
         if (record.treeUri.isEmpty()) check(resolver.update(Uri.parse(record.localUri), ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) == 1) { "文件已经写入，但无法完成下载目录登记，请重试" }
     }
     fun delete(record: DownloadRecord): Boolean = if (record.treeUri.isNotEmpty()) DocumentsContract.deleteDocument(resolver, Uri.parse(record.localUri)) else resolver.delete(Uri.parse(record.localUri), null, null) > 0
-    private fun directoryUri(treeUri: String): Uri = if (treeUri.isEmpty())
+    fun directoryUri(treeUri: String): Uri = if (treeUri.isEmpty())
         DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download/fileway")
         else Uri.parse(treeUri).let { DocumentsContract.buildDocumentUriUsingTree(it, DocumentsContract.getTreeDocumentId(it)) }
+    private fun systemDirectoryBrowser(): String = context.packageManager.queryIntentActivities(
+        Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PackageManager.MATCH_SYSTEM_ONLY or PackageManager.MATCH_DEFAULT_ONLY,
+    ).firstOrNull()?.activityInfo?.packageName ?: throw ActivityNotFoundException("系统目录浏览器不可用")
     fun directoryIntent(treeUri: String): Intent = Intent(Intent.ACTION_VIEW).setDataAndType(directoryUri(treeUri), DocumentsContract.Document.MIME_TYPE_DIR)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    fun directoryPicker(treeUri: String): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).putExtra(DocumentsContract.EXTRA_INITIAL_URI, directoryUri(treeUri))
+        .setPackage(systemDirectoryBrowser())
+        .apply {
+            // MediaStore ownership does not give us a SAF directory grant to
+            // delegate. The system file manager can browse its own provider.
+            if (treeUri.isNotEmpty()) addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+    fun directoryPicker(treeUri: String): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        .setPackage(systemDirectoryBrowser()).putExtra(DocumentsContract.EXTRA_INITIAL_URI, directoryUri(treeUri))
 }

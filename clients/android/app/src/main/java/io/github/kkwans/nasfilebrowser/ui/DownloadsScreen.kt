@@ -43,13 +43,20 @@ import java.util.Locale
         val id = reauthorizing; reauthorizing = null
         if (id != null && uri != null) model.downloads.reauthorizeDirectory(id, uri)
     }
-    val folderFallback = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+    val folderFallback = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        model.downloads.reportNotice("目录浏览已结束，下载位置未更改")
+    }
     fun openFolder(tree: String) {
+        fun browseFolder() {
+            try {
+                model.downloads.reportNotice("使用系统目录浏览器查看文件，不会更改下载位置")
+                folderFallback.launch(model.downloads.target.directoryPicker(tree))
+            } catch (_: Exception) { model.downloads.reportError("此设备没有可用的目录浏览器，请检查系统文件管理器") }
+        }
         try { context.startActivity(model.downloads.target.directoryIntent(tree)) }
-        catch (_: android.content.ActivityNotFoundException) {
-            try { folderFallback.launch(model.downloads.target.directoryPicker(tree)) }
-            catch (_: Exception) { model.downloads.reportError("此设备没有可用的文件管理器，请安装后重试") }
-        } catch (_: Exception) { model.downloads.reportError("无法打开目录，请检查文件管理器及目录授权") }
+        catch (_: android.content.ActivityNotFoundException) { browseFolder() }
+        catch (_: SecurityException) { browseFolder() }
+        catch (_: Exception) { model.downloads.reportError("无法打开目录，请检查文件管理器及目录授权") }
     }
     val records = state.items.filter { when (filter) { "已完成" -> it.complete; "未完成" -> !it.complete; else -> true } }
     Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "downloads") }) { insets ->
@@ -106,7 +113,7 @@ import java.util.Locale
                                     DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri) })
                                     if (item.treeUri.isNotEmpty()) DropdownMenuItem({ Text("重新授权目录") }, {
                                         more = false; reauthorizing = item.id
-                                        try { recoverFolder.launch(Uri.parse(item.treeUri)) }
+                                        try { recoverFolder.launch(model.downloads.target.directoryUri(item.treeUri)) }
                                         catch (_: Exception) { reauthorizing = null; model.downloads.reportError("无法打开目录选择器，请检查系统文件管理器") }
                                     }, enabled = !item.active)
                                     DropdownMenuItem({ Text("移除记录") }, { more = false; deleteFile = false; remove = item }, enabled = item.complete)
@@ -128,7 +135,7 @@ import java.util.Locale
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("更改目录只影响新下载。现有文件留在原目录，不会自动移动或删除。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Button({ try { folder.launch(state.tree.takeIf { it.isNotEmpty() }?.let(Uri::parse)) } catch (_: Exception) { model.downloads.reportError("无法打开目录选择器") } }, Modifier.fillMaxWidth(), enabled = !state.busy) { Text("选择下载目录") }
+            Button({ try { folder.launch(model.downloads.target.directoryUri(state.tree)) } catch (_: Exception) { model.downloads.reportError("无法打开目录选择器") } }, Modifier.fillMaxWidth(), enabled = !state.busy) { Text("选择下载目录") }
             OutlinedButton({ openFolder(state.tree) }, Modifier.fillMaxWidth()) { Text("打开下载目录") }
             if (state.tree.isNotEmpty()) TextButton({ model.downloads.selectDirectory(null) }, Modifier.fillMaxWidth(), enabled = !state.busy) { Text("恢复默认 · Download/fileway") }
         }

@@ -116,5 +116,6 @@ class DownloadController(private val context: Context, private val scope: Corout
             catch (failure: Exception) { if (failure is CancellationException) throw failure; mutable.value = mutable.value.copy(busy = false, error = failure.message ?: "下载操作失败，请重试") }
         }
     }
-    fun reportError(message: String) { mutable.value = mutable.value.copy(error = message) }
+    fun reportError(message: String) { mutable.value = mutable.value.copy(error = message, notice = null) }
+    fun reportNotice(message: String) { mutable.value = mutable.value.copy(notice = message, error = null) }
 }
