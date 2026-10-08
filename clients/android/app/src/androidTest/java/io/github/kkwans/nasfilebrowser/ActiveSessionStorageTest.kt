@@ -18,7 +18,7 @@ class ActiveSessionStorageTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private fun open(file: File, backups: File) = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath)
-        .addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups), ActiveSessionMigration(backups)).build()
+        .addMigrations(*ClientDatabase.migrations(backups)).build()
 
     @Test fun activeAccountSurvivesReopenAndNeverFallsBackAfterSignoutOrSourceChange(): Unit = runBlocking {
         val folder = File(context.cacheDir, "active-${UUID.randomUUID()}").apply { check(mkdirs()) }

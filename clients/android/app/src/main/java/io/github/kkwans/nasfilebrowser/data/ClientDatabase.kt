@@ -96,13 +96,15 @@ abstract class ClientDatabase : RoomDatabase() {
     abstract fun downloads(): DownloadDao
     companion object {
         @Volatile private var instance: ClientDatabase? = null
+        /** One upgrade chain for the app and isolated historical-database checks. */
+        internal fun migrations(backups: java.io.File): Array<androidx.room.migration.Migration> = arrayOf(
+            HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups),
+            ActiveSessionMigration(backups), DownloadMigration(),
+        )
         fun get(context: Context): ClientDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, ClientDatabase::class.java, "nfb-client.db")
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-                .addMigrations(HistoryMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
-                    AppearanceMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
-                    FileLayoutMigration(java.io.File(context.noBackupFilesDir, "state-backups")),
-                    ActiveSessionMigration(java.io.File(context.noBackupFilesDir, "state-backups")), DownloadMigration())
+                .addMigrations(*migrations(java.io.File(context.noBackupFilesDir, "state-backups")))
                 // Never silently delete state when a future migration is missing.
                 .build().also { instance = it }
         }

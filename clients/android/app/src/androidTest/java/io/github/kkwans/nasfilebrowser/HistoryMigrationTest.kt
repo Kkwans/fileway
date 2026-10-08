@@ -36,7 +36,7 @@ class HistoryMigrationTest {
             database.version = 1
         }
         val backups = File(folder, "backups")
-        val upgraded = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath).addMigrations(HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups), ActiveSessionMigration(backups)).build()
+        val upgraded = Room.databaseBuilder(context, ClientDatabase::class.java, file.absolutePath).addMigrations(*ClientDatabase.migrations(backups)).build()
         try {
             assertEquals("Fixture", upgraded.profiles().profile("profile")?.name)
             assertEquals("/films", upgraded.profiles().directory("account")?.wirePath)
