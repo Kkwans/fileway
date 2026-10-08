@@ -36,7 +36,7 @@ class PlayerSliderGeometryTest {
                 Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).statusBarsPadding().padding(16.dp)) {
                     Text("播放器进度条校准")
                     values.indices.forEach { index ->
-                        PlayerSlider(values[index], 100f, "进度校准$index", true, { values[index] = it })
+                        PlayerSlider(values[index], 100f, "进度校准$index", true, { values[index] = it }, downloadedValue = 75f)
                     }
                 }
             }
@@ -62,6 +62,10 @@ class PlayerSliderGeometryTest {
                 assertTrue("Track must be visibly rendered", track.size > bounds.width() / 2)
                 assertEquals("Thumb/track vertical centre at ${values[index]}%", track[track.size / 2], thumb.second, 1f)
             }
+            val range = device.findObject(By.desc("进度校准2")).visibleBounds
+            val downloaded = pixels.getPixel(range.left + range.width() * 7 / 10, range.centerY())
+            val unavailable = pixels.getPixel(range.left + range.width() * 9 / 10, range.centerY())
+            assertTrue("Downloaded time range must be visibly distinct from unavailable track", Color.red(downloaded) > Color.red(unavailable) + 40)
         } finally { pixels.recycle(); shot.recycle() }
         device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
         device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/slider-centres.png")

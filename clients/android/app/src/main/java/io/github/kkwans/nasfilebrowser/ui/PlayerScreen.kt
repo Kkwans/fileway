@@ -90,6 +90,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
+import io.github.kkwans.nasfilebrowser.download.DownloadIndex
+import io.github.kkwans.nasfilebrowser.download.DownloadRuntime
 
 private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE }
 private tailrec fun Context.activity(): Activity? = when (this) {
@@ -119,6 +121,20 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var subtitleOffset by remember(file) { mutableStateOf("") }
     var subtitleOffsetError by remember(file) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
+    val download = downloads.items.firstOrNull { it.id == file.downloadId }
+    val downloadIndex by produceState<DownloadIndex.Info?>(null, download?.id, download?.complete, client.busy) {
+        val item = download
+        value = if (item == null || item.complete) null else withContext(Dispatchers.IO) {
+            runCatching { DownloadIndex.get(context).info(item) }.getOrNull()
+        }
+    }
+    val downloadedBytes = download?.let { item ->
+        (if (item.complete) item.expectedSize else maxOf(item.downloaded, DownloadRuntime.get(context).prefix(item))).coerceIn(0, item.expectedSize.coerceAtLeast(0))
+    } ?: 0L
+    val downloadedUntil = download?.let { item ->
+        if (item.complete && state.durationMs > 0) state.durationMs
+        else downloadIndex?.takeIf { it.points.isNotEmpty() }?.availableMs(downloadedBytes)
+    }
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     val maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
     var mediaVolume by remember { mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
@@ -412,7 +428,19 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             PlayerSlider(seek ?: state.positionMs.toFloat().coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)), state.durationMs.toFloat().coerceAtLeast(1f),
                                 "播放进度", state.seekable && state.durationMs > 0,
                                 { gestureSeek.reset(); seek = it; touch() }, { seek?.let { model.player.seek(it.toLong()) }; seek = null; touch() },
-                                clock((seek ?: state.positionMs.toFloat()).toLong()) + "，共 " + clock(state.durationMs))
+                                clock((seek ?: state.positionMs.toFloat()).toLong()) + "，共 " + clock(state.durationMs), downloadedValue = downloadedUntil?.toFloat())
+                            download?.let { item ->
+                                val percent = if (item.expectedSize > 0) (downloadedBytes.toDouble() * 100 / item.expectedSize).toInt().coerceIn(0, 100) else 0
+                                val coverage = if (item.complete) "已全部下载" else downloadedUntil?.let { "可离线播放至 ${clock(it)}" } ?: "可播放范围暂未知"
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp).semantics {
+                                    contentDescription = "文件下载进度"
+                                    stateDescription = "已下载 $percent%，$coverage"
+                                    progressBarRangeInfo = ProgressBarRangeInfo(percent / 100f, 0f..1f)
+                                }, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("已下载 $percent%", color = PlayerSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                                    Text(coverage, color = PlayerSecondary, fontSize = 11.sp, maxLines = 1)
+                                }
+                            }
                             if (!landscape) Row(Modifier.fillMaxWidth().height(20.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(clock((seek ?: state.positionMs.toFloat()).toLong()), color = PlayerSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
                                 Text(if (state.durationMs > 0) clock(state.durationMs) else "--:--", color = PlayerSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
@@ -685,7 +713,7 @@ private val PlayerDivider = Color(0xFF293342)
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun PlayerSlider(value: Float, maximum: Float, label: String, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit = {}, description: String = "${value.toInt()}%") {
+@Composable internal fun PlayerSlider(value: Float, maximum: Float, label: String, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit = {}, description: String = "${value.toInt()}%", downloadedValue: Float? = null) {
     // Preserve Material's drag and keyboard handling. Export one named range
     // with meaningful time/volume state, rather than split label/range nodes
     // and the default raw millisecond number. Accessibility uses the same
@@ -710,6 +738,9 @@ private val PlayerDivider = Color(0xFF293342)
         track = { Canvas(Modifier.fillMaxWidth().height(48.dp)) {
             val y = size.height / 2
             drawLine(Color.White.copy(alpha = 0.28f), Offset(0f, y), Offset(size.width, y), 3.dp.toPx(), StrokeCap.Round)
+            downloadedValue?.let { available ->
+                drawLine(Color.White.copy(alpha = .65f), Offset(0f, y), Offset(size.width * (available / maximum).coerceIn(0f, 1f), y), 3.dp.toPx(), StrokeCap.Round)
+            }
             drawLine(if (enabled) PlayerAccent else PlayerSecondary, Offset(0f, y), Offset(size.width * (value / maximum).coerceIn(0f, 1f), y), 3.dp.toPx(), StrokeCap.Round)
         } })
     }

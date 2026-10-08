@@ -92,6 +92,7 @@ class DownloadPlaybackTest {
             }
             clickOwned("打开下载：${record.name}")
             waitFor("prefix playback") { model.player.state.value.let { it.firstFrameRendered && it.playing && it.seekable && it.positionMs > 600 } }
+            assertTrue(device.wait(Until.hasObject(By.desc("文件下载进度")), 5000))
             assertTrue("The missing range must actually use authenticated transport", source.rawRequests.get() > 0)
             assertEquals(prefix.toLong(), dao.get(id)!!.downloaded)
             assertEquals("paused", dao.get(id)!!.status)
