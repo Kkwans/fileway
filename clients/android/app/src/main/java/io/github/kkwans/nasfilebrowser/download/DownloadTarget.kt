@@ -58,7 +58,11 @@ class DownloadTarget(private val context: Context) {
     fun complete(record: DownloadRecord) {
         if (record.treeUri.isEmpty()) check(resolver.update(Uri.parse(record.localUri), ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) == 1) { "文件已经写入，但无法完成下载目录登记，请重试" }
     }
-    fun delete(record: DownloadRecord): Boolean = if (record.treeUri.isNotEmpty()) DocumentsContract.deleteDocument(resolver, Uri.parse(record.localUri)) else resolver.delete(Uri.parse(record.localUri), null, null) > 0
+    fun delete(record: DownloadRecord): Boolean {
+        val removed = if (record.treeUri.isNotEmpty()) DocumentsContract.deleteDocument(resolver, Uri.parse(record.localUri)) else resolver.delete(Uri.parse(record.localUri), null, null) > 0
+        if (removed) runCatching { DownloadIndex.get(context).remove(record) }
+        return removed
+    }
     fun directoryUri(treeUri: String): Uri = if (treeUri.isEmpty())
         DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Download/fileway")
         else Uri.parse(treeUri).let { DocumentsContract.buildDocumentUriUsingTree(it, DocumentsContract.getTreeDocumentId(it)) }

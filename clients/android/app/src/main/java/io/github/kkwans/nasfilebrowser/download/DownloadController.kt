@@ -126,6 +126,7 @@ class DownloadController(private val context: Context, private val scope: Corout
         withTimeout(30_000) { DownloadRuntime.get(context).awaitStopped(record.id) }
         if (file && current.localUri.isNotEmpty()) check(target.delete(current)) { "无法删除本机文件，请检查目录授权" }
         check(dao.removeRecord(record.id) == 1)
+        withContext(Dispatchers.IO) { DownloadIndex.get(context).remove(record) }
         if (file) "文件与记录已删除" else "记录已移除，本机文件保留"
     }
     private fun perform(action: suspend () -> String) {

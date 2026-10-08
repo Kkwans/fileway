@@ -120,6 +120,10 @@ class DownloadRuntime private constructor(private val context: Context) {
                 }
                 target = target.copy(localUri = uri.toString())
             }
+            if (record.name.substringAfterLast('.').lowercase() in setOf("mkv", "mp4", "m4v", "mov", "webm")) {
+                try { DownloadIndex.get(context).prepare(target) }
+                catch (failure: Exception) { if (failure is CancellationException) throw failure /* Full download remains available if metadata is unsupported. */ }
+            }
             val descriptor = context.contentResolver.openFileDescriptor(Uri.parse(target.localUri), "rw") ?: throw IOException("无法写入下载文件，请检查目录授权")
             android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
                     // A crash may leave bytes after the last committed checkpoint.
@@ -159,6 +163,7 @@ class DownloadRuntime private constructor(private val context: Context) {
             access?.api?.token()
             destinations.complete(target)
             dao.finish(id, record.generation, "completed", "", System.currentTimeMillis())
+            runCatching { DownloadIndex.get(context).remove(record) }
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) { dao.finish(id, record.generation, "interrupted", "任务被暂停或系统停止，已保存的部分保留", System.currentTimeMillis()) }
             throw cancelled

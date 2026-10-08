@@ -426,6 +426,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                         mutable.value = mutable.value.copy(image = file, selected = null, busy = false, stage = "", progressStatus = null)
                     }
                     MediaKind.VIDEO -> {
+                        if (!item.complete) {
+                            mutable.value = mutable.value.copy(stage = "正在准备播放索引")
+                            try { withContext(Dispatchers.IO) { io.github.kkwans.nasfilebrowser.download.DownloadIndex.get(getApplication()).prepare(item) } }
+                            catch (failure: Exception) { if (failure is CancellationException) throw failure }
+                            currentCoroutineContext().ensureActive()
+                            if (mediaRequest != request) return@launch
+                        }
                         localPlayback = item; lastSaved = null
                         mutable.value = mutable.value.copy(selected = file, busy = false, stage = "", progressStatus = "续播仅保存本机", downloadBytesPerSecond = 0)
                         val uri = android.net.Uri.Builder().scheme("fileway-download").authority(item.id).appendPath(item.name).build().toString()

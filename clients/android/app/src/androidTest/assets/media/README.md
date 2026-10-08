@@ -13,6 +13,15 @@ ffmpeg -f lavfi -i 'testsrc2=size=320x180:rate=15:duration=12' \
 
 ## Subtitle and audio fixture
 
+`fixture-front.mp4` and `fixture-tail.mp4` are stream-copy remuxes of the same
+owned H.264/AAC fixture. They cover both MP4 index positions during partial
+offline playback; no additional film content is introduced:
+
+```sh
+ffmpeg -i fixture.mkv -map 0:v:0 -map 0:a:0 -c copy -movflags +faststart fixture-front.mp4
+ffmpeg -i fixture.mkv -map 0:v:0 -map 0:a:0 -c copy fixture-tail.mp4
+```
+
 `subtitle-fixture.mkv` is a generated 12-second 640×360 black H.264 video with:
 
 - Four generated tones: default stereo TrueHD 220 Hz, AAC 440 Hz, FLAC 660 Hz and Opus 880 Hz.

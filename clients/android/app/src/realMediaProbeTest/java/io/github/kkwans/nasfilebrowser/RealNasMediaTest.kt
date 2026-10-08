@@ -34,6 +34,7 @@ import io.github.kkwans.nasfilebrowser.data.ProfileStore
 import io.github.kkwans.nasfilebrowser.download.DownloadRecord
 import io.github.kkwans.nasfilebrowser.download.DownloadTarget
 import io.github.kkwans.nasfilebrowser.download.DownloadDataSource
+import io.github.kkwans.nasfilebrowser.download.DownloadIndex
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DataSpec
 
@@ -88,7 +89,10 @@ class RealNasMediaTest {
         return count
     }
     @ExternalNetworkAcceptance
-    @Test fun downloadedPrefixOfRealMovieProducesFirstFrame(): Unit = runBlocking {
+    @Test fun downloadedPrefixOfRealMovieProducesFirstFrame(): Unit = realPrefix(false)
+    @ExternalNetworkAcceptance
+    @Test fun downloadedPrefixOfRealMovieStartsWithoutNetwork(): Unit = realPrefix(true)
+    private fun realPrefix(offline: Boolean): Unit = runBlocking {
         require(Build.DEVICE == "houji" && InstrumentationRegistry.getArguments().getString("nfbRealMedia") == "true")
         val config = configuration()
         val context = instrumentation.targetContext
@@ -122,17 +126,18 @@ class RealNasMediaTest {
                 } finally { input.close() }
             }
             database.downloads().insert(requireNotNull(owned))
+            if (offline) withContext(Dispatchers.IO) { DownloadIndex.get(context).prepare(requireNotNull(owned)) }
             val started = SystemClock.elapsedRealtime()
             activity.scenario.onActivity { host ->
                 val view = PlayerViewport(host); host.viewport.addView(view, FrameLayout.LayoutParams(-1, -1))
-                player = NativePlayer(host).also { it.attach(view); it.open("fileway-download://$id/probe.mkv", dataSourceFactory = DownloadDataSource.Factory(context)) }
+                player = NativePlayer(host).also { it.attach(view); it.open("fileway-download://$id/probe.mkv", dataSourceFactory = DownloadDataSource.Factory(context, networkAllowed = !offline)) }
             }
             val native = requireNotNull(player)
             try { withTimeout(20_000) { native.state.first { it.firstFrameRendered && it.playing && it.positionMs > 300 } } }
             finally {
                 val state = native.state.value
                 instrumentation.addResults(Bundle().apply { putString("filewayPartialDownload", JSONObject()
-                    .put("prefixBytes", prefix).put("totalBytes", size).put("elapsedMs", SystemClock.elapsedRealtime() - started)
+                    .put("prefixBytes", prefix).put("totalBytes", size).put("networkAllowed", !offline).put("elapsedMs", SystemClock.elapsedRealtime() - started)
                     .put("firstFrame", state.firstFrameRendered).put("positionMs", state.positionMs).put("durationMs", state.durationMs).put("phase", state.phase).toString()) })
             }
         } finally { withContext(NonCancellable) {

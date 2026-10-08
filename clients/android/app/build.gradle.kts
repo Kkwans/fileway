@@ -86,6 +86,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-database:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("io.github.peerless2012:ass-kt:0.5.1")
     androidTestImplementation("org.videolan.android:libvlc-all:${vlcProbeVersion ?: "3.7.6"}")
