@@ -21,12 +21,18 @@ internal class LibraryFixtureData {
     @Volatile var rejectTrashPathOnce: String? = null
     val trashAttempts = mutableListOf<String>()
     var renameAllowed = false
+    var createAllowed = true
     var liveDirectoryListing = false
     @Volatile var rejectNextRename = false
     val renameAttempts = mutableListOf<String>()
     @Volatile var rejectNextTransferStatus = 0
     val transferAttempts = mutableListOf<JSONObject>()
     private val transferJobs = linkedMapOf<String, JSONObject>()
+    @Volatile var rejectNextMkdirStatus = 0
+    @Volatile var mkdirResponseLostOnce = false
+    @Volatile var mkdirMetadataUnavailable = false
+    val mkdirAttempts = mutableListOf<String>()
+    private var lastMkdirPath: String? = null
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
         files[path] = JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
@@ -126,8 +132,23 @@ internal class LibraryFixtureData {
             tasks.put(task); transferJobs[id] = JSONObject(input.toString()).put("items", normalized)
             mutations.add(method to path); reply(task.toString(), 202); return true
         }
-        if (path.startsWith("/api/resources/") && method == "GET" && uri.rawQuery == "metadata=1" && files.containsKey(path.removePrefix("/api/resources"))) {
-            reply(files.getValue(path.removePrefix("/api/resources")).toString(), 200); return true
+        if (path.startsWith("/api/resources/") && method == "GET" && uri.rawQuery == "metadata=1" && (liveDirectoryListing || files.containsKey(path.removePrefix("/api/resources")))) {
+            val requested = path.removePrefix("/api/resources")
+            if (requested == lastMkdirPath && mkdirMetadataUnavailable) { reply("{}", 503); return true }
+            val item = if (requested == "/") JSONObject().put("path", "/").put("wirePath", "/").put("name", "根目录").put("isDir", true) else files[requested]
+            reply(item?.toString() ?: "{}", if (item == null) 404 else 200); return true
+        }
+        if (path.startsWith("/api/resources/") && method == "POST" && path.endsWith('/')) {
+            check(query(uri)["override"] == "false")
+            mkdirAttempts.add(uri.rawPath)
+            if (!createAllowed) { reply("{}", 403); return true }
+            if (rejectNextMkdirStatus != 0) { val status = rejectNextMkdirStatus; rejectNextMkdirStatus = 0; reply("{}", status); return true }
+            val requested = path.removePrefix("/api/resources").trimEnd('/')
+            if (files[requested]?.optBoolean("isDir") == false) { reply("{}", 500); return true }
+            if (!files.containsKey(requested)) file(requested, true)
+            lastMkdirPath = requested; mutations.add(method to path)
+            if (mkdirResponseLostOnce) { mkdirResponseLostOnce = false; reply("{}", 503) } else reply("", 200)
+            return true
         }
         if (liveDirectoryListing && path.startsWith("/api/resources/") && method == "GET" && uri.rawQuery == null) {
             val directory = path.removePrefix("/api/resources").trimEnd('/')

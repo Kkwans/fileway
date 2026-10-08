@@ -81,6 +81,9 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("文件", modifier = Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleLarge, color = colors.onBackground)
+                    if (state.permissions.create) IconButton({ model.startDirectoryCreation(state.previewScope) }, enabled = !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null) {
+                        Icon(painterResource(R.drawable.ic_create_folder), "新建文件夹", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
+                    }
                     IconButton(onClick = { model.retry(); model.tags.refresh() }, enabled = !state.busy) {
                         Icon(painterResource(R.drawable.ic_refresh), "刷新", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
                     }

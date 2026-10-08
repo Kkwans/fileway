@@ -9,7 +9,10 @@ import org.json.JSONObject
 
 data class FileOperationsState(val scope: String = "", val changing: Boolean = false,
     val error: String? = null, val notice: String? = null, val transfer: FileTransferDraft? = null,
-    val lastTask: ServerTask? = null, val lastDestination: DirectoryCrumb? = null, val lastSources: List<ResourceRef> = emptyList(), val taskError: String? = null)
+    val lastTask: ServerTask? = null, val lastDestination: DirectoryCrumb? = null, val lastSources: List<ResourceRef> = emptyList(), val taskError: String? = null,
+    val creation: DirectoryCreateDraft? = null)
+data class DirectoryCreateDraft(val parent: DirectoryCrumb, val name: String = "", val error: String? = null,
+    val existing: DirectoryCrumb? = null, val unknownTarget: DirectoryCrumb? = null)
 data class FileTransferDraft(val files: List<ResourceRef>, val action: FileTransferAction, val directory: DirectoryCrumb,
     val directories: List<ResourceRef> = emptyList(), val loading: Boolean = false, val error: String? = null,
     val reviewed: Boolean = false, val conflicts: Set<String> = emptySet(), val choices: Map<String, FileConflictChoice> = emptyMap(),
@@ -19,7 +22,8 @@ private data class PendingFileTransfer(val task: ServerTask, val sources: List<R
 /** Existing resource mutations stay bound to their original server/account. */
 class FileOperationsController(private val scope: CoroutineScope, private val isCurrent: (SessionContext) -> Boolean,
     private val onRenamed: (SessionContext, ResourceRef, RenameTarget) -> Unit,
-    private val onTransferFinished: (SessionContext, ServerTask, List<ResourceRef>) -> Unit = { _, _, _ -> }) {
+    private val onTransferFinished: (SessionContext, ServerTask, List<ResourceRef>) -> Unit = { _, _, _ -> },
+    private val onDirectoryReady: (SessionContext, DirectoryCrumb) -> Unit = { _, _ -> }) {
     private val mutable = MutableStateFlow(FileOperationsState())
     val state = mutable.asStateFlow()
     private var bound: SessionContext? = null
@@ -37,7 +41,7 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
     private fun current(context: SessionContext) = bound === context && isCurrent(context)
     fun startTransfer(files: List<ResourceRef>, action: FileTransferAction, directory: DirectoryCrumb) {
         val context = bound ?: return
-        if (!current(context) || mutable.value.changing || mutable.value.transfer != null) return
+        if (!current(context) || mutable.value.changing || mutable.value.transfer != null || mutable.value.creation != null) return
         directoryRead?.cancel(); directoryEpoch++
         mutable.value = mutable.value.copy(error = null, notice = null, transfer = FileTransferDraft(files.toList(), action, directory))
         readTransferDirectory(directory)
@@ -191,9 +195,99 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
     fun dismissTaskNotice() {
         mutable.value = mutable.value.copy(lastTask = null, lastDestination = null, lastSources = emptyList(), taskError = null, notice = null)
     }
+    fun startDirectoryCreation(parent: DirectoryCrumb) {
+        val context = bound ?: return
+        if (!current(context) || mutable.value.changing || mutable.value.transfer != null || mutable.value.creation != null) return
+        mutable.value = mutable.value.copy(creation = DirectoryCreateDraft(parent), error = null, notice = null)
+    }
+    fun directoryName(value: String) {
+        val draft = mutable.value.creation ?: return
+        if (!mutable.value.changing && draft.unknownTarget == null)
+            mutable.value = mutable.value.copy(creation = draft.copy(name = value, error = null, existing = null))
+    }
+    fun closeDirectoryCreation() {
+        if (!mutable.value.changing) mutable.value = mutable.value.copy(creation = null)
+    }
+    private suspend fun readCreationTarget(context: SessionContext, target: DirectoryCrumb): org.json.JSONObject? {
+        return try {
+            val item = context.api.request("GET", "/api/resources${target.wirePath}?metadata=1")
+            check(item.getString("path") == target.path && resourceWireBytes(item.optString("wirePath").ifEmpty { SearchResult.encodePath(target.path) })
+                .contentEquals(resourceWireBytes(target.wirePath!!))) { "目录来源已变化，请刷新核对" }
+            item
+        } catch (error: ServiceException) { if (error.status == 404) null else throw error }
+    }
+    private fun creationReady(context: SessionContext, target: DirectoryCrumb) {
+        if (!current(context)) return
+        mutable.value = mutable.value.copy(changing = false, creation = null, error = null, notice = "文件夹已就绪：${target.label}")
+        onDirectoryReady(context, target)
+    }
+    fun createDirectory() {
+        val context = bound ?: return
+        val draft = mutable.value.creation ?: return
+        if (!current(context) || mutable.value.changing || draft.unknownTarget != null) return
+        mutable.value = mutable.value.copy(changing = true, creation = draft.copy(error = null, existing = null))
+        write = scope.launch {
+            var target: DirectoryCrumb? = null
+            var sending = false
+            var acknowledged = false
+            try {
+                target = directoryCreationTarget(draft.parent, draft.name)
+                check(context.api.permissions().create) { "当前账号没有创建权限" }
+                val parent = readCreationTarget(context, draft.parent)
+                check(parent?.getBoolean("isDir") == true) { "父目录已不可用，请退出并刷新后再试" }
+                val existing = readCreationTarget(context, target)
+                if (existing != null) {
+                    if (current(context)) mutable.value = mutable.value.copy(changing = false, creation = draft.copy(
+                        error = if (existing.getBoolean("isDir")) "同名文件夹已存在，可修改名称或直接打开" else "已有同名文件，请修改名称",
+                        existing = target.takeIf { existing.getBoolean("isDir") }))
+                    return@launch
+                }
+                check(current(context)) { "连接已切换" }; sending = true
+                context.api.action("POST", "/api/resources${target.wirePath}/?override=false")
+                acknowledged = true
+                check(readCreationTarget(context, target)?.getBoolean("isDir") == true) { "创建请求已受理，暂时无法确认目录，请核对" }
+                creationReady(context, target)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (!current(context)) return@launch
+                val uncertain = sending && (acknowledged || error !is ServiceException || error.status >= 500)
+                if (uncertain && target != null) {
+                    try {
+                        val actual = readCreationTarget(context, target)
+                        if (!current(context)) return@launch
+                        if (actual?.getBoolean("isDir") == true) { creationReady(context, target); return@launch }
+                        mutable.value = mutable.value.copy(changing = false, creation = draft.copy(error =
+                            if (actual != null) "目标已有同名文件，请修改名称" else "未找到目标文件夹，输入已保留，可重试"))
+                        return@launch
+                    } catch (readError: Exception) { if (readError is CancellationException) throw readError }
+                }
+                if (current(context)) mutable.value = mutable.value.copy(changing = false, creation = draft.copy(
+                    unknownTarget = target.takeIf { uncertain }, error = if (uncertain) "无法确认创建结果，请先核对目标文件夹" else error.message ?: "创建失败，输入已保留"))
+            }
+        }
+    }
+    fun checkDirectoryCreation() {
+        val context = bound ?: return
+        val draft = mutable.value.creation ?: return
+        val target = draft.unknownTarget ?: return
+        if (!current(context) || mutable.value.changing) return
+        mutable.value = mutable.value.copy(changing = true)
+        write = scope.launch {
+            try {
+                val actual = readCreationTarget(context, target)
+                if (!current(context)) return@launch
+                if (actual?.getBoolean("isDir") == true) creationReady(context, target)
+                else mutable.value = mutable.value.copy(changing = false, creation = draft.copy(unknownTarget = null,
+                    error = if (actual == null) "未找到目标文件夹，可重试" else "目标已有同名文件，请修改名称"))
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (current(context)) mutable.value = mutable.value.copy(changing = false, creation = draft.copy(error = "仍无法核对创建结果，请恢复连接后重试"))
+            }
+        }
+    }
     fun rename(file: ResourceRef, name: String, done: () -> Unit = {}) {
         val context = bound ?: return
-        if (!current(context) || mutable.value.changing) return
+        if (!current(context) || mutable.value.changing || mutable.value.creation != null || mutable.value.transfer != null) return
         mutable.value = mutable.value.copy(changing = true, error = null, notice = null)
         write = scope.launch {
             var applied = false

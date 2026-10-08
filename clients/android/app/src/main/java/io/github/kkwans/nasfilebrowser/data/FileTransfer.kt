@@ -15,6 +15,19 @@ data class FileTransferEntry(val file: ResourceRef, val targetPath: String, val 
  */
 fun taskResourcePath(path: String, wirePath: String): String {
     val wire = wirePath.ifEmpty { SearchResult.encodePath(path) }
+    val bytes = resourceWireBytes(wire)
+    val decoded = try {
+        Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes)).toString()
+    } catch (_: java.nio.charset.CharacterCodingException) {
+        error("服务器的复制／移动任务暂不支持这个旧编码路径，未提交操作")
+    }
+    require(decoded == path && !decoded.contains('\u0000') && decoded.split('/').none { it == "." || it == ".." }) { "路径已变化，请刷新后重新选择" }
+    return decoded
+}
+
+/** Decode wire bytes exactly once, without interpreting legacy filename bytes. */
+fun resourceWireBytes(wire: String): ByteArray {
     require(wire.startsWith('/') && !wire.startsWith("//") && !wire.contains('?') && !wire.contains('#')) { "路径来源无效，请刷新后重试" }
     val input = wire.toByteArray(Charsets.UTF_8); val output = ByteArrayOutputStream()
     var index = 0
@@ -27,14 +40,7 @@ fun taskResourcePath(path: String, wirePath: String): String {
             output.write(high * 16 + low); index += 3
         } else { output.write(input[index].toInt()); index++ }
     }
-    val decoded = try {
-        Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-            .decode(ByteBuffer.wrap(output.toByteArray())).toString()
-    } catch (_: java.nio.charset.CharacterCodingException) {
-        error("服务器的复制／移动任务暂不支持这个旧编码路径，未提交操作")
-    }
-    require(decoded == path && !decoded.contains('\u0000') && decoded.split('/').none { it == "." || it == ".." }) { "路径已变化，请刷新后重新选择" }
-    return decoded
+    return output.toByteArray()
 }
 
 fun fileTransferEntries(files: List<ResourceRef>, directory: DirectoryCrumb, action: FileTransferAction): List<FileTransferEntry> {

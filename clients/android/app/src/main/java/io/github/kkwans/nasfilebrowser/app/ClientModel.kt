@@ -114,7 +114,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
-    val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished)
+    val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished,
+        { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
     val storageTools = StorageToolsController(viewModelScope) { context === it && generation == it.generation }
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
@@ -330,6 +331,18 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         librarySection(LibrarySection.TASKS)
         tasks.filter(TaskFilter(category = "file"))
         id?.let(tasks::select)
+    }
+    fun startDirectoryCreation(sourceScope: String) {
+        val current = mutable.value
+        if (!current.connected || current.busy || trash.state.value.changing || current.previewScope != sourceScope) return
+        fileOperations.startDirectoryCreation(DirectoryCrumb("当前目录", current.path, current.wirePath))
+    }
+    fun openExistingCreationDirectory() {
+        val draft = fileOperations.state.value.creation ?: return
+        val directory = draft.existing ?: return
+        fileOperations.closeDirectoryCreation()
+        navigation.addLast(mutable.value.path to mutable.value.wirePath)
+        browse(directory.path, directory.wirePath!!)
     }
     fun openTransferDestination() {
         val target = fileOperations.state.value.lastDestination ?: return
