@@ -62,9 +62,11 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
         readJob?.cancel(); pathJob?.cancel(); pathEpoch++; readEpoch++
         mutable.value = mutable.value.copy(changing = true, loading = false, pathsLoading = false, error = null, notice = null)
         writeJob = scope.launch {
+            var applied = false
             try {
-                action(context); val rows = read(context)
-                if (current(context)) { apply(rows); mutable.value = mutable.value.copy(notice = notice); onSaved() }
+                action(context); applied = true
+                val rows = read(context)
+                if (current(context)) { apply(rows); mutable.value = mutable.value.copy(notice = notice) }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 // A multi-label save can partly succeed. Re-read the authority
@@ -72,17 +74,22 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
                 val refreshed = try { read(context) } catch (e: Exception) { if (e is CancellationException) throw e; null }
                 if (current(context)) {
                     if (refreshed != null) apply(refreshed)
-                    mutable.value = mutable.value.copy(changing = false, error = error.message ?: "标签操作未完成，请确认当前标记后重试")
+                    mutable.value = mutable.value.copy(changing = false,
+                        notice = notice.takeIf { applied },
+                        error = if (applied) {
+                            if (refreshed == null) "操作已保存，列表刷新失败，请刷新后查看" else null
+                        } else error.message ?: "标签操作未完成，请确认当前标记后重试")
                 }
             }
+            if (applied && current(context)) onSaved()
         }
     }
-    fun save(tag: ServerTag?, name: String, color: String) {
+    fun save(tag: ServerTag?, name: String, color: String, onSaved: () -> Unit = {}) {
         require(name.isNotBlank())
         if ((tag == null || !color.equals(tag.color, true)) && !colorAvailable(color, tag?.id)) {
             mutable.value = mutable.value.copy(error = "这个颜色已有标签使用，请选择其他颜色"); return
         }
-        change("标签已保存") { context ->
+        change("标签已保存", onSaved) { context ->
             val body = JSONObject().put("name", name.trim())
             if (tag == null || !color.equals(tag.color, true)) body.put("color", color.uppercase(java.util.Locale.ROOT))
             context.api.action(if (tag == null) "POST" else "PUT", "/api/tags" + (tag?.let { "/${android.net.Uri.encode(it.id)}" } ?: ""), body)

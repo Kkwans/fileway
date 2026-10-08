@@ -17,6 +17,7 @@ internal class LibraryFixtureData {
     val reports = linkedMapOf<String, JSONObject>()
     var conflictOnce = false
     @Volatile var rejectNextTagWrite = false
+    @Volatile var rejectNextFavoriteWrite = false
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
         files[path] = JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
@@ -31,6 +32,11 @@ internal class LibraryFixtureData {
     }
     fun route(method: String, uri: URI, body: String, favorites: JSONArray, reply: (String, Int) -> Unit): Boolean = synchronized(this) {
         val path = uri.path; val input = if (body.isBlank()) JSONObject() else JSONObject(body)
+        if (path.startsWith("/api/favorites") && method != "GET" && rejectNextFavoriteWrite) {
+            rejectNextFavoriteWrite = false
+            reply("{\"error\":\"本次收藏保存失败，请重试\"}", 503)
+            return true
+        }
         if (path == "/api/analysis/recent") {
             val tool = query(uri)["tool"] ?: "storage"
             val values = (0 until tasks.length()).map { tasks.getJSONObject(it) }.filter { it.getString("type") == "analysis.$tool" }

@@ -109,23 +109,25 @@ internal fun metadataColor(value: String, fallback: Color): Color = try { Color(
     var name by remember(tag?.id) { mutableStateOf(tag?.name.orEmpty()) }
     var color by remember(tag?.id) { mutableStateOf(tag?.color ?: TAG_COLORS.firstOrNull { model.tags.colorAvailable(it) } ?: TAG_COLORS.first()) }
     val colorValid = color.equals(tag?.color, true) || model.tags.colorAvailable(color, tag?.id)
-    AlertDialog(onDismissRequest = dismiss, title = { Text(if (tag == null) "新建标签" else "编辑标签") }, text = {
+    AlertDialog(onDismissRequest = { if (!state.changing) dismiss() }, title = { Text(if (tag == null) "新建标签" else "编辑标签") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(name, { name = it }, label = { Text("标签名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            OutlinedTextField(name, { name = it }, label = { Text("标签名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !state.changing)
             Text("选择标记颜色", style = MaterialTheme.typography.titleSmall)
             if (!colorValid) Text("这些预设颜色已有标签使用，请先调整已有标签的颜色。", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             FlowRow {
                 TAG_COLORS.forEachIndexed { index, value ->
                     val available = model.tags.colorAvailable(value, tag?.id) || value.equals(tag?.color, true)
-                    Box(Modifier.size(48.dp).selectable(value.equals(color, true), enabled = available, role = Role.RadioButton) { color = value }
+                    Box(Modifier.size(48.dp).selectable(value.equals(color, true), enabled = available && !state.changing, role = Role.RadioButton) { color = value }
                         .semantics { contentDescription = "标签颜色 ${index + 1}${if (!available) "，已被使用" else ""}" }, contentAlignment = Alignment.Center) {
                         Box(Modifier.size(28.dp).border(if (value.equals(color, true)) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape).padding(3.dp)
                             .background(metadataColor(value, MaterialTheme.colorScheme.primary).copy(alpha = if (available) 1f else .25f), CircleShape))
                     }
                 }
             }
-            remove?.let { TextButton(it) { Text("删除标签") } }
+            remove?.let { TextButton(it, enabled = !state.changing) { Text("删除标签") } }
         }
-    }, confirmButton = { TextButton({ model.tags.save(tag, name, color); dismiss() }, enabled = name.isNotBlank() && colorValid && !state.changing) { Text("保存") } },
-        dismissButton = { TextButton(dismiss) { Text("取消") } })
+    }, confirmButton = { TextButton({ model.tags.save(tag, name, color, onSaved = dismiss) }, enabled = name.isNotBlank() && colorValid && !state.changing) { Text(if (state.changing) "正在保存" else "保存") } },
+        dismissButton = { TextButton(dismiss, enabled = !state.changing) { Text("取消") } })
 }

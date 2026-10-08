@@ -88,28 +88,30 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
     editing?.let { item ->
         var name by remember(item.id) { mutableStateOf(item.name) }
         var group by remember(item.id) { mutableStateOf(item.groupId) }
-        AlertDialog(onDismissRequest = { editing = null }, title = { Text("编辑收藏") }, text = {
+        AlertDialog(onDismissRequest = { if (!state.changing) editing = null }, title = { Text("编辑收藏") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("显示名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedTextField(name, { name = it }, label = { Text("显示名称") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = enabled)
                 Text(item.path, style = MaterialTheme.typography.bodySmall)
                 Text("收藏分组", style = MaterialTheme.typography.titleSmall)
-                FavoriteGroupChoice("", "未分组", group) { group = "" }
-                state.groups.forEach { folder -> FavoriteGroupChoice(folder.id, folder.name, group) { group = folder.id } }
+                FavoriteGroupChoice("", "未分组", group, enabled) { group = "" }
+                state.groups.forEach { folder -> FavoriteGroupChoice(folder.id, folder.name, group, enabled) { group = folder.id } }
                 Row {
-                    TextButton(onClick = { model.favorites.move(item, -1); editing = null }, enabled = enabled && state.items.firstOrNull()?.id != item.id) { Text("上移") }
-                    TextButton(onClick = { model.favorites.move(item, 1); editing = null }, enabled = enabled && state.items.lastOrNull()?.id != item.id) { Text("下移") }
-                    TextButton(onClick = { model.favorites.remove(item); editing = null }, enabled = enabled) { Text("取消收藏") }
+                    TextButton(onClick = { model.favorites.move(item, -1) }, enabled = enabled && state.items.firstOrNull()?.id != item.id) { Text("上移") }
+                    TextButton(onClick = { model.favorites.move(item, 1) }, enabled = enabled && state.items.lastOrNull()?.id != item.id) { Text("下移") }
+                    TextButton(onClick = { model.favorites.remove(item) { editing = null } }, enabled = enabled) { Text("取消收藏") }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { model.favorites.update(item, name, group); editing = null }, enabled = enabled && name.isNotBlank()) { Text("保存") } },
-            dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } })
+        }, confirmButton = { TextButton(onClick = { model.favorites.update(item, name, group) { editing = null } }, enabled = enabled && name.isNotBlank()) { Text(if (state.changing) "正在保存" else "保存") } },
+            dismissButton = { TextButton(onClick = { editing = null }, enabled = !state.changing) { Text("取消") } })
     }
     if (managing) FavoriteGroupsDialog(model) { managing = false }
 }
 
-@Composable private fun FavoriteGroupChoice(id: String, name: String, selected: String, choose: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = id == selected, role = Role.RadioButton, onClick = choose), verticalAlignment = Alignment.CenterVertically) {
-        RadioButton(id == selected, onClick = null); Text(name, Modifier.padding(start = 8.dp))
+@Composable private fun FavoriteGroupChoice(id: String, name: String, selected: String, enabled: Boolean = true, choose: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = id == selected, enabled = enabled, role = Role.RadioButton, onClick = choose), verticalAlignment = Alignment.CenterVertically) {
+        RadioButton(id == selected, onClick = null, enabled = enabled); Text(name, Modifier.padding(start = 8.dp))
     }
 }
 
@@ -120,7 +122,7 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
     var editing by remember { mutableStateOf<FavoriteGroup?>(null) }
     var deleting by remember { mutableStateOf<FavoriteGroup?>(null) }
     val enabled = !state.changing && !state.loading
-    AlertDialog(onDismissRequest = dismiss, title = { Text("收藏分组") }, text = {
+    AlertDialog(onDismissRequest = { if (!state.changing) dismiss() }, title = { Text("收藏分组") }, text = {
         Column {
             if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
             state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -140,26 +142,28 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
                 }
             }
         }
-    }, confirmButton = { TextButton({ create = true }, enabled = enabled) { Text("新建分组") } }, dismissButton = { TextButton(dismiss) { Text("完成") } })
+    }, confirmButton = { TextButton({ create = true }, enabled = enabled) { Text("新建分组") } }, dismissButton = { TextButton(dismiss, enabled = !state.changing) { Text("完成") } })
     if (create || editing != null) {
         val group = editing
         var name by remember(group) { mutableStateOf(group?.name.orEmpty()) }
         var color by remember(group) { mutableStateOf(group?.color ?: "#3F72D8") }
         val palette = listOf("#E5484D", "#D95876", "#F06A5B", "#F28C28", "#DDAA1D", "#D6BE21", "#86B83E", "#35A867", "#2AA889", "#28AFC0", "#3A9BD9", "#3F72D8", "#5B62D9", "#7656C9", "#9B4DB5", "#C34F90", "#758195")
-        AlertDialog(onDismissRequest = { create = false; editing = null }, title = { Text(if (group == null) "新建分组" else "编辑分组") }, text = {
+        AlertDialog(onDismissRequest = { if (!state.changing) { create = false; editing = null } }, title = { Text(if (group == null) "新建分组" else "编辑分组") }, text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("分组名称") }, singleLine = true)
+                if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("分组名称") }, singleLine = true, enabled = enabled)
                 Text("标记颜色", style = MaterialTheme.typography.titleSmall)
                 FlowRow {
-                    palette.forEachIndexed { index, value -> Box(Modifier.size(48.dp).selectable(selected = value == color, role = Role.RadioButton) { color = value }
+                    palette.forEachIndexed { index, value -> Box(Modifier.size(48.dp).selectable(selected = value == color, enabled = enabled, role = Role.RadioButton) { color = value }
                         .semantics { contentDescription = "分组颜色 ${index + 1}" }, contentAlignment = Alignment.Center) {
                         Box(Modifier.size(28.dp).border(if (value == color) 3.dp else 0.dp, MaterialTheme.colorScheme.onSurface, CircleShape)
                             .padding(3.dp).background(favoriteColor(value, MaterialTheme.colorScheme.primary), CircleShape))
                     } }
                 }
             }
-        }, confirmButton = { TextButton({ model.favorites.saveGroup(group, name, color); create = false; editing = null }, enabled = enabled && name.isNotBlank()) { Text("保存") } },
-            dismissButton = { TextButton({ create = false; editing = null }) { Text("取消") } })
+        }, confirmButton = { TextButton({ model.favorites.saveGroup(group, name, color) { create = false; editing = null } }, enabled = enabled && name.isNotBlank()) { Text(if (state.changing) "正在保存" else "保存") } },
+            dismissButton = { TextButton({ create = false; editing = null }, enabled = !state.changing) { Text("取消") } })
     }
     deleting?.let { group -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除分组“${group.name}”？") },
         text = { Text("组内收藏将移到“未分组”，文件保持原位。网页端也会同步此变更。") },
@@ -169,7 +173,8 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
 
 @Composable internal fun FavoriteFileAction(model: ClientModel, file: ResourceRef, enabled: Boolean = true) {
     val state by model.favorites.state.collectAsStateWithLifecycle()
-    var choosing by remember(file) { mutableStateOf(false) }
+    var choosing by remember(file, state.scope) { mutableStateOf(false) }
+    var chosenGroup by remember(file, state.scope) { mutableStateOf("") }
     LaunchedEffect(file, state.scope) { model.favorites.refresh() }
     val existing = model.favorites.favorite(file.path)
     Column {
@@ -184,11 +189,17 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
         } }
         state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
-    if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text("加入收藏") }, text = {
+    if (choosing) AlertDialog(onDismissRequest = { if (!state.changing) choosing = false }, title = { Text("加入收藏") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             Text(file.name, style = MaterialTheme.typography.bodyLarge)
-            FavoriteGroupChoice("", "未分组", "") { model.favorites.add(file); choosing = false }
-            state.groups.forEach { group -> FavoriteGroupChoice(group.id, group.name, "") { model.favorites.add(file, group.id); choosing = false } }
+            if (state.changing) LinearProgressIndicator(Modifier.fillMaxWidth())
+            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            FavoriteGroupChoice("", "未分组", chosenGroup, !state.changing) {
+                chosenGroup = ""; model.favorites.add(file) { choosing = false }
+            }
+            state.groups.forEach { group -> FavoriteGroupChoice(group.id, group.name, chosenGroup, !state.changing) {
+                chosenGroup = group.id; model.favorites.add(file, group.id) { choosing = false }
+            } }
         }
-    }, confirmButton = { TextButton({ choosing = false }) { Text("取消") } })
+    }, confirmButton = { TextButton({ choosing = false }, enabled = !state.changing) { Text("取消") } })
 }

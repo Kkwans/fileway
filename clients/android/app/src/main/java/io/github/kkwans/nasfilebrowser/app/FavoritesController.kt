@@ -54,7 +54,7 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
         }
     }
     fun favorite(path: String) = mutable.value.items.firstOrNull { it.path.trimEnd('/') == path.trimEnd('/') }
-    private fun mutate(method: String, endpoint: String, body: JSONObject? = null, notice: String) {
+    private fun mutate(method: String, endpoint: String, body: JSONObject? = null, notice: String, onSaved: () -> Unit = {}) {
         val context = bound ?: return
         if (!isCurrent(context) || mutable.value.changing) return
         reads?.cancel(); revision++
@@ -68,20 +68,24 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
                     if (bound === context && isCurrent(context)) mutable.value = mutable.value.copy(
                         items = items, groups = groups, loaded = true, changing = false, notice = notice)
                 } catch (error: Exception) {
-                    if (error !is CancellationException && bound === context && isCurrent(context)) mutable.value = mutable.value.copy(
+                    if (error is CancellationException) throw error
+                    if (bound === context && isCurrent(context)) mutable.value = mutable.value.copy(
                         changing = false, error = if (applied) "操作已保存，列表刷新失败，请刷新后查看" else error.message ?: "收藏操作失败，请重试")
                 }
+                // An acknowledged write must not be submitted again just because
+                // its follow-up read failed. The parent retains the refresh warning.
+                if (applied && bound === context && isCurrent(context)) onSaved()
             }
         }
     }
     private fun id(value: String) = android.net.Uri.encode(value)
-    fun add(file: ResourceRef, group: String = "") = mutate("POST", "/api/favorites", JSONObject()
-        .put("path", file.path.trimEnd('/').ifEmpty { "/" }).put("name", file.name).put("groupId", group), "已加入收藏")
-    fun remove(item: Favorite) = mutate("DELETE", "/api/favorites/${id(item.id)}", notice = "已取消收藏")
-    fun update(item: Favorite, name: String, group: String) = mutate("PUT", "/api/favorites/${id(item.id)}",
-        JSONObject().put("name", name.trim()).put("groupId", group), "收藏已更新")
-    fun saveGroup(group: FavoriteGroup?, name: String, color: String) = mutate(if (group == null) "POST" else "PUT",
-        "/api/favorites/groups" + (group?.let { "/${id(it.id)}" } ?: ""), JSONObject().put("name", name.trim()).put("color", color), "分组已保存")
+    fun add(file: ResourceRef, group: String = "", onSaved: () -> Unit = {}) = mutate("POST", "/api/favorites", JSONObject()
+        .put("path", file.path.trimEnd('/').ifEmpty { "/" }).put("name", file.name).put("groupId", group), "已加入收藏", onSaved)
+    fun remove(item: Favorite, onSaved: () -> Unit = {}) = mutate("DELETE", "/api/favorites/${id(item.id)}", notice = "已取消收藏", onSaved = onSaved)
+    fun update(item: Favorite, name: String, group: String, onSaved: () -> Unit = {}) = mutate("PUT", "/api/favorites/${id(item.id)}",
+        JSONObject().put("name", name.trim()).put("groupId", group), "收藏已更新", onSaved)
+    fun saveGroup(group: FavoriteGroup?, name: String, color: String, onSaved: () -> Unit = {}) = mutate(if (group == null) "POST" else "PUT",
+        "/api/favorites/groups" + (group?.let { "/${id(it.id)}" } ?: ""), JSONObject().put("name", name.trim()).put("color", color), "分组已保存", onSaved)
     fun removeGroup(group: FavoriteGroup) = mutate("DELETE", "/api/favorites/groups/${id(group.id)}", notice = "分组已删除，收藏已移到未分组")
     fun move(item: Favorite, delta: Int) {
         val items = mutable.value.items.toMutableList(); val from = items.indexOfFirst { it.id == item.id }

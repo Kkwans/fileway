@@ -12,6 +12,41 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 internal class TagsUiTest : LibraryUiHarness() {
+    @Test fun editorsRetainNamesAndChoicesAfterRejectedSaves(): Unit = runBlocking {
+        val data = LibraryFixtureData(); data.file("/owned.png")
+        fixture(data) { source ->
+            source.favoriteRecords.put(JSONObject().put("id", "owned-favorite").put("path", "/owned.png")
+                .put("name", "原始收藏").put("groupId", "").put("order", 0))
+            // Establish the editor's starting page directly; navigation itself is
+            // covered by multiTagWritesUseUnicodePathsAndFilterTheNativeFileList.
+            main { model.librarySection(io.github.kkwans.nasfilebrowser.app.LibrarySection.TAGS) }
+            withTimeout(5000) { model.tags.state.first { it.loaded && !it.loading } }
+            text("新建标签").click()
+            val name = device.wait(androidx.test.uiautomator.Until.findObject(By.clazz("android.widget.EditText")), 5000)
+            assertNotNull(name); name!!.text = "保留输入的标签"
+            action("标签颜色 4").click()
+            data.rejectNextTagWrite = true; text("保存").click()
+            val failed = withTimeout(5000) { model.tags.state.first { !it.changing && it.error != null } }
+            text(requireNotNull(failed.error)); text("保留输入的标签")
+            assertEquals(0, data.tags.length())
+            text("保存").click()
+            withTimeout(5000) { model.tags.state.first { !it.changing && it.items.singleOrNull()?.name == "保留输入的标签" } }
+            assertTrue(device.wait(androidx.test.uiautomator.Until.gone(By.clazz("android.widget.EditText")), 5000))
+            assertEquals(io.github.kkwans.nasfilebrowser.data.TAG_COLORS[3], data.tags.getJSONObject(0).getString("color"))
+            action("收藏资料页").click(); text("原始收藏"); text("编辑").click()
+            val favoriteName = device.wait(androidx.test.uiautomator.Until.findObject(By.clazz("android.widget.EditText")), 5000)
+            assertNotNull(favoriteName); favoriteName!!.text = "保留输入的收藏"
+            data.rejectNextFavoriteWrite = true; text("保存").click()
+            val rejected = withTimeout(5000) { model.favorites.state.first { !it.changing && it.error != null } }
+            text("编辑收藏"); text(requireNotNull(rejected.error)); text("保留输入的收藏")
+            assertEquals("原始收藏", source.favoriteRecords.getJSONObject(0).getString("name"))
+            text("保存").click()
+            withTimeout(5000) { model.favorites.state.first { !it.changing && it.items.singleOrNull()?.name == "保留输入的收藏" } }
+            assertTrue(device.wait(androidx.test.uiautomator.Until.gone(By.text("编辑收藏")), 5000))
+            assertEquals("保留输入的收藏", source.favoriteRecords.getJSONObject(0).getString("name"))
+            capture("library-editor-retry-phone")
+        }
+    }
     @Test fun multiTagWritesUseUnicodePathsAndFilterTheNativeFileList(): Unit = runBlocking {
         val data = LibraryFixtureData(); val path = "/中文 #? %.png"
         data.file(path); data.file("/未标记.png")

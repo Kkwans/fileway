@@ -20,11 +20,15 @@ class FavoritesContractTest {
         val token = "owned." + android.util.Base64.encodeToString("{\"user\":{\"id\":1,\"username\":\"fixture\"}}".toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP) + ".fixture"
         val mutations = mutableListOf<JSONObject>()
         var hold: CompletableDeferred<Unit>? = null
+        var rejectWrites = false
+        var failReads = false
         suspend fun call(command: JSONObject): Any = when (command.getString("op")) {
             "open" -> "owned-session"
             "token" -> token
             "request" -> {
                 val endpoint = command.getString("endpoint"); val method = command.getString("method")
+                if (method == "GET" && failReads) error("Owned refresh failure")
+                if (method != "GET" && rejectWrites) error("Owned save rejection")
                 var status = 200
                 val body = if (method == "GET") when (endpoint) {
                     "/api/favorites" -> rows.toString()
@@ -104,5 +108,31 @@ class FavoritesContractTest {
             assertEquals("new", controller.state.value.scope)
             assertEquals("new-account-id", controller.state.value.items.single().id)
         } finally { old.hold?.complete(Unit); scope.cancel() }
+    }
+    @Test fun saveAcknowledgementDistinguishesRejectedWriteFromFailedRefresh(): Unit = runBlocking {
+        val authority = Authority(); val context = authority.context("one")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val controller = FavoritesController(scope) { it === context }
+        var saved = 0
+        val file = ResourceRef("/owned.png", "/owned.png", "owned.png", false, "image", 12)
+        try {
+            withContext(Dispatchers.Main) { controller.bind(context); controller.refresh() }
+            withTimeout(3000) { controller.state.first { it.loaded && !it.loading } }
+            authority.rejectWrites = true
+            withContext(Dispatchers.Main) { controller.add(file) { saved++ } }
+            withTimeout(3000) { controller.state.first { !it.changing && it.error != null } }
+            withContext(Dispatchers.Main) { assertEquals(0, saved) }
+            assertTrue(authority.mutations.isEmpty())
+            authority.rejectWrites = false; authority.failReads = true
+            withContext(Dispatchers.Main) { controller.add(file) { saved++ } }
+            withTimeout(3000) { controller.state.first { !it.changing && it.error?.startsWith("操作已保存") == true } }
+            withContext(Dispatchers.Main) { assertEquals(1, saved) }
+            assertEquals(1, authority.mutations.size)
+            authority.failReads = false
+            withContext(Dispatchers.Main) { controller.refresh() }
+            withTimeout(3000) { controller.state.first { !it.loading && it.error == null && it.items.size == 2 } }
+            assertEquals(1, authority.mutations.size)
+            assertNotNull(controller.favorite(file.path))
+        } finally { scope.cancel() }
     }
 }
