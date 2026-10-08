@@ -29,6 +29,8 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.rules.TestRule
+import org.junit.runners.model.Statement
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 import java.util.regex.Pattern
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,8 +41,22 @@ import kotlin.math.sin
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
 class NativeAudioOutputTest {
-    @get:Rule val activity = ActivityScenarioRule(AudioCaptureProbeActivity::class.java)
+    private val activity = ActivityScenarioRule(AudioCaptureProbeActivity::class.java)
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private fun checkpoint(stage: String) {
+        instrumentation.sendStatus(2, Bundle().apply { putString("stream", "AUDIO_PROBE_STAGE=$stage\n") })
+    }
+    // This rule encloses ActivityScenarioRule: a launch stall must be visible even
+    // when JUnit has not entered the test body yet.
+    @get:Rule val launchTrace = TestRule { base, description ->
+        object : Statement() {
+            override fun evaluate() {
+                checkpoint("activity-launch-requested")
+                try { activity.apply(base, description).evaluate() }
+                finally { checkpoint("activity-rule-finished") }
+            }
+        }
+    }
     private suspend fun <T> main(block: () -> T): T = withContext(Dispatchers.Main) { block() }
     private lateinit var meter: CapturedPlaybackMeter
     private var captureClock: AudioTrack? = null
@@ -101,6 +117,7 @@ class NativeAudioOutputTest {
         .put("maximumSilentMs", value.maximumSilentMs).put("maximumReadGapMs", value.maximumReadGapMs)
 
     @Test fun realPlaybackMixSurvivesTracksSubtitlesAndRates(): Unit = runBlocking {
+        checkpoint("activity-resumed-test-entered")
         require(InstrumentationRegistry.getArguments().getString("nfbOwnedAudioCapture") == "true")
         require(ownedAudioProbeDevice())
         val captureClockMode = InstrumentationRegistry.getArguments().getString("nfbCaptureClock") ?: "silent"
@@ -118,10 +135,12 @@ class NativeAudioOutputTest {
             instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
             audio.setStreamVolume(AudioManager.STREAM_MUSIC, maxOf(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) / 2), 0)
             activity.scenario.onActivity { it.requestOwnedPlaybackCapture() }
+            checkpoint("projection-consent-requested")
             val confirm = device.wait(Until.findObject(By.pkg("com.android.systemui")
                 .text(Pattern.compile("(?i)start now|start recording|share screen|start|立即开始|开始录制|开始录屏|开始"))), 10_000)
                 ?: error("Platform projection confirmation missing")
             confirm.click()
+            checkpoint("projection-consent-confirmed")
             withTimeout(10_000) {
                 while (PlaybackCaptureProbeService.meter == null) {
                     check(PlaybackCaptureProbeService.failure == null) { "Capture service: ${PlaybackCaptureProbeService.failure}" }
@@ -130,9 +149,12 @@ class NativeAudioOutputTest {
                 }
             }
             meter = requireNotNull(PlaybackCaptureProbeService.meter)
+            checkpoint("capture-service-ready")
             withTimeout(5000) { while (meter.snapshot(0).frames < 9600) { check(meter.error == null); delay(25) } }
             stage = "calibration-tone-and-silence"
+            checkpoint(stage)
             calibrate(this, captureClockMode == "silent")
+            checkpoint("calibration-passed")
             observations.put(JSONObject().put("stage", stage).put("status", "PASS"))
 
             val media = instrumentation.context.assets.open("media/subtitle-fixture.mkv").use { it.readBytes() }

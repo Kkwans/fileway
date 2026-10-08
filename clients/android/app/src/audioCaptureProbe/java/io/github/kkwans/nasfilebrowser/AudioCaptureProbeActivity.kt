@@ -20,9 +20,16 @@ class AudioCaptureProbeActivity : Activity() {
         private set
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        android.util.Log.i("FilewayAudioProbe", "activity-created")
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         viewport = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         setContentView(viewport)
+    }
+    override fun onResume() { super.onResume(); android.util.Log.i("FilewayAudioProbe", "activity-resumed") }
+    override fun onPause() { android.util.Log.i("FilewayAudioProbe", "activity-paused"); super.onPause() }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        android.util.Log.i("FilewayAudioProbe", "window-focus=$hasFocus")
     }
     fun requestOwnedPlaybackCapture() {
         check(ownedAudioProbeDevice()) { "Explicitly supported owned test device required" }
