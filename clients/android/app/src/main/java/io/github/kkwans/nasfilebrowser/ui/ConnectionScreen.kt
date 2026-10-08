@@ -159,9 +159,21 @@ import io.github.kkwans.nasfilebrowser.data.*
                             }
                         }
                     }
-                    ConnectionSection("服务器") {
+                    ConnectionSection("服务器", actions = {
+                        TextButton(onClick = { focus.clearFocus(); optionsOpen = !optionsOpen }, enabled = !state.busy) {
+                            Text(if (optionsOpen) "收起连接选项" else "更多连接选项")
+                        }
+                    }) {
                         ConnectionField(url, { url = it }, "服务器地址", R.drawable.ic_link, enabled = !state.busy,
                             placeholder = "https://nas.example.com:8080", keyboardType = KeyboardType.Uri)
+                        if (optionsOpen) {
+                            ConnectionField(name, { name = it }, "档案名称（选填）", R.drawable.ic_storage, enabled = !state.busy, placeholder = "留空时使用 IP 或域名")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("服务类型", style = MaterialTheme.typography.bodySmall)
+                                FilterChip(selected = backend == BackendKind.NAS, onClick = { backend = BackendKind.NAS }, enabled = !state.busy, label = { Text("NAS") })
+                                FilterChip(selected = backend == BackendKind.WINDOWS, onClick = { backend = BackendKind.WINDOWS }, enabled = !state.busy, label = { Text("Windows") })
+                            }
+                        }
                         Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             ConnectionMode("本地网络", R.drawable.ic_storage, mode == "direct", Modifier.weight(1f), !state.busy) { focus.clearFocus(); mode = "direct" }
                             ConnectionMode("Tailscale", R.drawable.ic_network, mode == "tailnet", Modifier.weight(1f), !state.busy) { focus.clearFocus(); mode = "tailnet" }
@@ -218,17 +230,6 @@ import io.github.kkwans.nasfilebrowser.data.*
                         }
                         }
                     }
-                    TextButton(onClick = { optionsOpen = !optionsOpen }, enabled = !state.busy, contentPadding = PaddingValues(0.dp)) {
-                        Text(if (optionsOpen) "收起连接选项" else "更多连接选项")
-                    }
-                    if (optionsOpen) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ConnectionField(name, { name = it }, "档案名称（选填）", R.drawable.ic_storage, enabled = !state.busy, placeholder = "留空时使用 IP 或域名")
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("服务类型", style = MaterialTheme.typography.bodySmall)
-                            FilterChip(selected = backend == BackendKind.NAS, onClick = { backend = BackendKind.NAS }, enabled = !state.busy, label = { Text("NAS") })
-                            FilterChip(selected = backend == BackendKind.WINDOWS, onClick = { backend = BackendKind.WINDOWS }, enabled = !state.busy, label = { Text("Windows") })
-                        }
-                    }
                     state.error?.let { message ->
                         Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(10.dp)) {
                             Text(message, Modifier.fillMaxWidth().padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer, fontSize = 14.sp)
@@ -252,9 +253,12 @@ import io.github.kkwans.nasfilebrowser.data.*
     }
 }
 
-@Composable private fun ConnectionSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+@Composable private fun ConnectionSection(title: String, actions: @Composable RowScope.() -> Unit = {}, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            actions()
+        }
         content()
     }
 }
