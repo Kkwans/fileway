@@ -137,6 +137,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var gestureMessage by remember(file) { mutableStateOf<String?>(null) }
     var interaction by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf<PlayerSheet?>(null) }
+    var expandedTitle by remember(file) { mutableStateOf(false) }
     var seek by remember(file) { mutableStateOf<Float?>(null) }
     val seekPreview = rememberSeekPreview(model, file, state.mediaGeneration, seek != null)
     var showRequest by remember(file) { mutableStateOf(false) }
@@ -417,51 +418,54 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 PlayerIcon(R.drawable.ic_skip_previous, "上一个视频", { touch(); model.previousMedia() }, queue?.hasPrevious == true)
-                                if (landscape) PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { step(-10_000) }, state.seekable && !client.busy)
+                                PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { step(-10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(if (state.playing) R.drawable.art_pause else R.drawable.art_play, if (state.playing) "暂停播放" else "开始播放", { touch(); model.togglePlayback() }, !client.busy)
-                                if (landscape) PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { step(10_000) }, state.seekable && !client.busy)
+                                PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { step(10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(R.drawable.ic_skip_next, "下一个视频", { touch(); model.nextMedia() }, queue?.hasNext == true)
                                 if (landscape) Text(clock((seek ?: state.positionMs.toFloat()).toLong()) + " / " + if (state.durationMs > 0) clock(state.durationMs) else "--:--",
                                     color = Color(0xFFDADADA), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
                                 else Spacer(Modifier.weight(1f))
-                                PlayerIcon(R.drawable.ic_playlist_play, "播放列表", { touch(); sheet = PlayerSheet.QUEUE }, queue != null)
                                 if (landscape) {
+                                    PlayerIcon(R.drawable.ic_playlist_play, "播放列表", { touch(); sheet = PlayerSheet.QUEUE }, queue != null)
                                     PlayerLabel("音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
                                     PlayerLabel("字幕", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
                                     PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
                                     PlayerIcon(R.drawable.art_volume, "媒体系统音量", { touch(); sheet = PlayerSheet.VOLUME })
                                     PlayerLabel("亮度", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
-                                } else PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
+                                }
                                 PlayerIcon(if (landscape) R.drawable.art_fullscreen_off else R.drawable.art_fullscreen_on, if (landscape) "退出全屏" else "横屏全屏", { fullscreen(landscape) })
                             }
                         }
                     }
-                    if (!landscape) Column(Modifier.weight(1f).semantics { contentDescription = "播放详情" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(file.name, fontSize = 22.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
-                            Text(client.serverLabel, color = PlayerSecondary, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text("原生播放", color = PlayerAccent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    if (!landscape) Column(Modifier.weight(1f).semantics { contentDescription = "播放详情" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(file.name, fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.SemiBold,
+                                maxLines = if (expandedTitle) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button,
+                                    onClickLabel = if (expandedTitle) "收起完整名称" else "展开完整名称") { expandedTitle = !expandedTitle; touch() })
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(client.serverLabel, Modifier.weight(1f), color = PlayerSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (state.width > 0) Text("${state.width} × ${state.height}", color = PlayerSecondary, fontSize = 12.sp)
-                                Text(state.phase, color = PlayerSecondary, fontSize = 12.sp)
                             }
                         }
-                        HorizontalDivider(color = Color(0xFF29292C))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            JumpAction(R.drawable.ic_replay_10, "后退十秒", state.seekable && !client.busy) { step(-10_000) }
-                            Text("左右双击跳转 · 中间暂停", color = PlayerSecondary, fontSize = 12.sp)
-                            JumpAction(R.drawable.ic_forward_10, "快进十秒", state.seekable && !client.busy) { step(10_000) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                PlayerIcon(R.drawable.ic_playlist_play, "播放列表", { touch(); sheet = PlayerSheet.QUEUE }, queue != null)
+                                Text(queue?.let { "${it.index + 1} / ${it.items.size}" } ?: "单个视频", fontSize = 13.sp, color = PlayerSecondary)
+                            }
+                            PlayerLabel("${state.rate}× 倍速", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
                         }
-                        Column(Modifier.clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
+                        HorizontalDivider(color = PlayerDivider)
+                        Column {
                             DetailAction(R.drawable.ic_audio, "音轨", state.pendingAudio?.let { id -> "正在切换 · ${state.audio.firstOrNull { it.id == id }?.title ?: "音轨"}" }
                                 ?: state.audio.firstOrNull { it.id == state.selectedAudio }?.title ?: "暂无音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
-                            HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
+                            HorizontalDivider(Modifier.padding(start = 32.dp), color = PlayerDivider)
                             DetailAction(R.drawable.ic_subtitles, "字幕", state.pendingSubtitle?.let { id -> "正在切换 · ${state.subtitles.firstOrNull { it.id == id }?.title ?: "字幕"}" }
                                 ?: state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.title ?: "关闭", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
-                            HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
-                            DetailAction(R.drawable.art_volume, "媒体音量", "${(mediaVolume * 100f / maximumVolume).roundToInt()}%", "媒体系统音量") { touch(); sheet = PlayerSheet.VOLUME }
-                            HorizontalDivider(Modifier.padding(start = 52.dp), color = Color(0xFF2B2B2F))
-                            DetailAction(R.drawable.ic_visibility, "画面亮度", if (brightness < 0) "跟随系统" else "${(brightness * 100).roundToInt()}%", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            PlayerLabel("音量 ${(mediaVolume * 100f / maximumVolume).roundToInt()}%", "媒体系统音量") { touch(); sheet = PlayerSheet.VOLUME }
+                            PlayerLabel(if (brightness < 0) "亮度 · 自动" else "亮度 ${(brightness * 100).roundToInt()}%", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
                         }
                     }
                 }
@@ -654,10 +658,11 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     }
 }
 
-private val PlayerCanvas = Color(0xFF141416)
-private val PlayerPanel = Color(0xFF202023)
-private val PlayerAccent = Color(0xFFFF80A6)
-private val PlayerSecondary = Color(0xFFB5B5BE)
+private val PlayerCanvas = Color(0xFF0D1015)
+private val PlayerPanel = Color(0xFF1B212B)
+private val PlayerAccent = Color(0xFF69A8FF)
+private val PlayerSecondary = Color(0xFFADB9CB)
+private val PlayerDivider = Color(0xFF293342)
 
 @Composable private fun PlayerIcon(icon: Int, label: String, click: () -> Unit, enabled: Boolean = true) {
     IconButton(onClick = click, enabled = enabled, modifier = Modifier.size(48.dp).clearAndSetSemantics {
@@ -704,20 +709,17 @@ private val PlayerSecondary = Color(0xFFB5B5BE)
         } })
     }
 }
-@Composable private fun JumpAction(icon: Int, label: String, enabled: Boolean, click: () -> Unit) {
-    PlayerIcon(icon, label, click, enabled)
-}
 @Composable private fun DetailAction(icon: Int, title: String, value: String, label: String, enabled: Boolean = true, click: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 60.dp).clickable(enabled = enabled, role = Role.Button, onClick = click).clearAndSetSemantics {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = enabled, role = Role.Button, onClick = click).clearAndSetSemantics {
         contentDescription = label
         stateDescription = value
         role = Role.Button
         if (enabled) onClick { click(); true } else disabled()
-    }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(painterResource(icon), null, Modifier.size(20.dp), tint = PlayerSecondary)
         Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Text(value, modifier = Modifier.weight(1f), fontSize = 13.sp, color = PlayerSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text("›", color = PlayerSecondary, fontSize = 20.sp)
+        Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(18.dp), tint = PlayerSecondary)
     }
 }
 @Composable private fun PlayerPanel(landscape: Boolean, title: String, dismiss: () -> Unit, content: @Composable () -> Unit) {
