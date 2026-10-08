@@ -2,7 +2,9 @@ package io.github.kkwans.nasfilebrowser
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.data.FileLayout
+import io.github.kkwans.nasfilebrowser.ui.collectionDescription
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -22,6 +24,8 @@ internal class FileActionsUiTest : LibraryUiHarness() {
             for (layout in FileLayout.entries) {
                 main { model.fileLayout(layout) }
                 withTimeout(5000) { model.state.first { it.fileLayout == layout } }
+                assertTrue("The requested layout must be rendered before locating its button",
+                    device.wait(Until.hasObject(By.desc(layout.collectionDescription())), 5000))
                 var menu = action("文件操作：${path.substringAfterLast('/')}")
                 while (!menu.isClickable) menu = menu.parent ?: error("File action has no clickable owner")
                 assertTrue("The explicit menu must be an accessible click action", menu.isClickable)
@@ -30,6 +34,16 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                 menu.click(); text("文件详情"); action("设置文件标签")
                 capture("file-actions-${layout.name.lowercase()}")
                 text("关闭").click()
+                assertTrue("The previous dialog must be gone before the next layout",
+                    device.wait(Until.gone(By.text("文件详情")), 5000))
+                withTimeout(5000) {
+                    while (true) {
+                        var focused = false
+                        activity.scenario.onActivity { focused = it.hasWindowFocus() }
+                        if (focused) break
+                        delay(25)
+                    }
+                }
             }
             action("文件操作：${path.substringAfterLast('/')}").click(); text("文件详情")
             action("设置文件标签").click(); text("本次测试").click(); text("保存标记").click()
