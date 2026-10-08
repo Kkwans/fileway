@@ -94,6 +94,29 @@ class TrashController(private val scope: CoroutineScope, private val isCurrent: 
         context.api.action("DELETE", "/api/resources$wire?mode=trash")
         TrashResult("已移入回收站", moved = file)
     }
+    fun moveAll(files: List<ResourceRef>, moved: (ResourceRef) -> Unit, done: () -> Unit) = change(done) { context ->
+        val snapshot = files.distinctBy { it.wirePath.ifEmpty { it.path } }
+        require(snapshot.isNotEmpty() && snapshot.all { it.path != "/" && it.path.startsWith('/') && it.downloadId.isEmpty() }) { "请选择服务器上的文件或文件夹，不能移动根目录" }
+        check(context.api.permissions().delete) { "当前账号没有删除权限" }
+        var completed = 0
+        for (file in snapshot) {
+            currentCoroutineContext().ensureActive()
+            check(current(context)) { "连接已切换，已停止剩余操作" }
+            try {
+                val wire = file.wirePath.ifEmpty { SearchResult.encodePath(file.path) }
+                context.api.action("DELETE", "/api/resources$wire?mode=trash")
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                throw IllegalStateException("已移入 $completed / ${snapshot.size} 项；${file.name}：${failure.message ?: "结果未确认"}。请刷新核对未完成项后再处理。", failure)
+            }
+            if (!current(context)) return@change TrashResult("连接已切换")
+            completed++
+            onMoved(context, file); moved(file)
+            if (!current(context)) return@change TrashResult("连接已切换")
+            mutable.value = mutable.value.copy(notice = "已移入 $completed / ${snapshot.size} 项")
+        }
+        TrashResult("已将 $completed 项移入回收站")
+    }
     fun restore(item: TrashItem, conflict: String = "fail") = change { context ->
         require(conflict in setOf("fail", "keep-both", "replace", "skip"))
         val perm = context.api.permissions()

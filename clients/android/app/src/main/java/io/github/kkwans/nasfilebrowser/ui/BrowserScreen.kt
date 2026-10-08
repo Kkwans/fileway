@@ -65,6 +65,11 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
     LaunchedEffect(shownKeys) { selected = selected.intersect(shownKeys) }
     val chosen = displayed.filter { key(it) in selected }
     val downloads by model.downloads.state.collectAsStateWithLifecycle()
+    val trash by model.trash.state.collectAsStateWithLifecycle()
+    var batchKind by remember(state.previewScope, state.wirePath) { mutableStateOf("") }
+    var pendingTrash by remember(state.previewScope, state.wirePath) { mutableStateOf<List<ResourceRef>?>(null) }
+    var trashAttempted by remember(state.previewScope, state.wirePath) { mutableStateOf(false) }
+    val selectionBusy = downloads.busy || trash.changing
     val context = LocalContext.current
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     BackHandler(selecting) { selecting = false; selected = emptySet() }
@@ -84,26 +89,32 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
                 if (state.path != "/") DirectoryBreadcrumbs(state.path, state.wirePath, state.busy, { model.back() }, model::jumpDirectory)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     FileCategoryMenu(state.fileCategory, !state.busy, model::fileCategory)
-                    if (!selecting) TextButton({ selecting = true; selected = emptySet() }, enabled = !state.busy && displayed.isNotEmpty()) { Text("多选") }
+                    if (!selecting) TextButton({ selecting = true; selected = emptySet(); batchKind = "" }, enabled = !state.busy && displayed.isNotEmpty()) { Text("多选") }
                     Spacer(Modifier.weight(1f))
                     FileOrderMenu(state.fileOrder, !state.busy, model::fileOrder)
                 }
                 if (selecting) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("已选 ${chosen.size} 项", Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium)
-                        TextButton({ selected = if (selected == shownKeys) emptySet() else shownKeys }, enabled = !downloads.busy && !state.busy) { Text(if (selected == shownKeys) "全不选" else "全选") }
-                        TextButton({ selected = shownKeys - selected }, enabled = !downloads.busy && !state.busy) { Text("反选") }
-                        FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !downloads.busy && chosen.isNotEmpty() && chosen.none { it.directory } && state.permissions.download) {
+                        TextButton({ selected = if (selected == shownKeys) emptySet() else shownKeys }, enabled = !selectionBusy && !state.busy) { Text(if (selected == shownKeys) "全不选" else "全选") }
+                        TextButton({ selected = shownKeys - selected }, enabled = !selectionBusy && !state.busy) { Text("反选") }
+                        FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !selectionBusy && chosen.isNotEmpty() && chosen.none { it.directory } && state.permissions.download) {
+                            batchKind = "download"
                             model.downloadFiles(chosen) { file -> selected = selected - key(file) }
                             if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                         }
+                        if (state.permissions.delete) FileActionIcon(R.drawable.ic_trash, "批量移入回收站", !state.busy && !selectionBusy && chosen.isNotEmpty()) {
+                            pendingTrash = chosen.toList(); trashAttempted = false
+                        }
                         FileActionIcon(R.drawable.ic_arrow_back, "退出多选", true) { selecting = false; selected = emptySet() }
                     }
                     if (chosen.any { it.directory }) Text("文件夹暂不支持批量下载，请只选择文件", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                    if (downloads.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    (downloads.error ?: downloads.notice)?.let { Text(it, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,
-                        color = if (downloads.error != null) colors.error else colors.onSurfaceVariant) }
+                    if (selectionBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    val error = if (batchKind == "trash") trash.error else if (batchKind == "download") downloads.error else null
+                    val notice = if (batchKind == "trash") trash.notice else if (batchKind == "download") downloads.notice else null
+                    (error ?: notice)?.let { Text(it, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,
+                        color = if (error != null) colors.error else colors.onSurfaceVariant) }
                 }
                 state.error?.let { message ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -128,7 +139,7 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
                     }
                 } else FileCollection(displayed, layout, Modifier.weight(1f), layout.collectionDescription(),
                     resetKey = listOf(state.previewScope, state.wirePath, state.fileCategory, state.fileOrder), keyOf = { it.wirePath.ifEmpty { it.path } }) { file ->
-                    FileEntry(model, file, layout, !state.busy && (!selecting || !downloads.busy), {
+                    FileEntry(model, file, layout, !state.busy && (!selecting || !selectionBusy), {
                         if (selecting) selected = if (key(file) in selected) selected - key(file) else selected + key(file)
                         else model.open(file)
                     }, { details = file }, selected = if (selecting) key(file) in selected else null)
@@ -136,6 +147,23 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
             }
         }
         details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) { details = null } }, onDismiss = { details = null }) }
+        pendingTrash?.let { pending -> AlertDialog(onDismissRequest = { if (!trash.changing) pendingTrash = null },
+            title = { Text("将 ${pending.size} 项移入回收站？") }, text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        pending.forEach { Text(it.name, style = MaterialTheme.typography.bodyMedium) }
+                    }
+                    Text("可从回收站恢复，收藏和标签会随服务端操作同步。", style = MaterialTheme.typography.bodySmall)
+                    if (trashAttempted) trash.error?.let { Text(it, color = colors.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            }, confirmButton = { TextButton({
+                batchKind = "trash"; trashAttempted = true
+                model.trash.moveAll(pending, { file ->
+                    selected = selected - key(file)
+                    pendingTrash = pendingTrash?.filterNot { key(it) == key(file) }
+                }, { pendingTrash = null })
+            }, enabled = !selectionBusy && pending.isNotEmpty()) { Text(if (trash.changing) "正在移动" else "移入回收站") } },
+            dismissButton = { TextButton({ pendingTrash = null }, enabled = !trash.changing) { Text("取消") } }) }
     }
 }
 

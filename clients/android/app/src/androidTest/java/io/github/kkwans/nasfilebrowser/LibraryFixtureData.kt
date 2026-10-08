@@ -18,6 +18,8 @@ internal class LibraryFixtureData {
     var conflictOnce = false
     @Volatile var rejectNextTagWrite = false
     @Volatile var rejectNextFavoriteWrite = false
+    @Volatile var rejectTrashPathOnce: String? = null
+    val trashAttempts = mutableListOf<String>()
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
         files[path] = JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
@@ -96,7 +98,14 @@ internal class LibraryFixtureData {
         }
         if (path.startsWith("/api/resources/") && method == "DELETE") {
             check(query(uri)["mode"] == "trash")
-            val original = path.removePrefix("/api/resources"); val value = files.remove(original)
+            val original = path.removePrefix("/api/resources")
+            trashAttempts.add(uri.rawPath)
+            if (original == rejectTrashPathOnce) {
+                rejectTrashPathOnce = null
+                reply("{\"error\":\"本次回收操作失败，请重试\"}", 503)
+                return true
+            }
+            val value = files.remove(original)
             if (value == null) { reply("{}", 404); return true }
             val id = "trash-${++sequence}"
             snapshots[id] = favorites.toString() to tags.toString()
