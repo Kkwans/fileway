@@ -15,13 +15,15 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class BatchDownloadTest {
-    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    private val activity = ActivityScenarioRule(MainActivity::class.java)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(OwnedUiTraceRule()).around(activity)
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private val database = ClientDatabase.get(context)
@@ -39,6 +41,14 @@ class BatchDownloadTest {
         try {
             main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             withTimeout(15000) { model.state.first { it.connected && !it.busy && it.files.size == 2 } }
+            withTimeout(5000) {
+                while (true) {
+                    var focused = false
+                    activity.scenario.onActivity { focused = it.hasWindowFocus() }
+                    if (focused) break
+                    delay(50)
+                }
+            }
             block(model, profile, bytes)
         } finally { withContext(NonCancellable) {
             main { model.disconnect() }
@@ -56,10 +66,20 @@ class BatchDownloadTest {
     @Test fun globalSelectionQueuesBothFilesAndDownloadsOriginalBytes(): Unit = runBlocking {
         fixture { model, profile, bytes ->
             val device = UiDevice.getInstance(instrumentation)
-            fun text(value: String) = device.wait(Until.findObject(By.text(value)), 5000) ?: error("Missing $value")
-            text("多选").click(); text("全选").click(); text("已选 2 项")
-            text("反选").click(); text("已选 0 项")
-            text("全选").click()
+            fun text(value: String): androidx.test.uiautomator.UiObject2 {
+                device.waitForIdle()
+                return device.wait(Until.findObject(By.text(value)), 5000) ?: error("Missing $value")
+            }
+            fun click(value: String) {
+                var button = text(value)
+                while (!button.isClickable) button = button.parent ?: error("Missing clickable owner for $value")
+                assertTrue("$value must be enabled", button.isEnabled)
+                OwnedUiTraceRule.trace("batch-button label=$value bounds=${button.visibleBounds}")
+                button.click()
+            }
+            click("多选"); click("全选"); text("已选 2 项")
+            click("反选"); text("已选 0 项")
+            click("全选")
             val download = device.wait(Until.findObject(By.desc("批量下载")), 5000) ?: error("Missing batch download")
             download.click()
             val rows = withTimeout(30000) { dao.observe().first { values -> values.count { it.profileId == profile.id && it.complete } == 2 } }
