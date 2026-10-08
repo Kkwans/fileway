@@ -31,6 +31,9 @@ import java.util.UUID
 import io.github.kkwans.nasfilebrowser.data.ClientDatabase
 import io.github.kkwans.nasfilebrowser.data.CredentialVault
 import io.github.kkwans.nasfilebrowser.data.ProfileStore
+import io.github.kkwans.nasfilebrowser.data.BackendKind
+import io.github.kkwans.nasfilebrowser.data.SearchResult
+import io.github.kkwans.nasfilebrowser.data.restoreSavedSession
 import io.github.kkwans.nasfilebrowser.download.DownloadRecord
 import io.github.kkwans.nasfilebrowser.download.DownloadTarget
 import io.github.kkwans.nasfilebrowser.download.DownloadDataSource
@@ -38,8 +41,8 @@ import io.github.kkwans.nasfilebrowser.download.DownloadIndex
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DataSpec
 
-/** Explicit real-source diagnostic. No Room, credential file or history writer.
- * The token arrives only over an ADB-forwarded local socket and remains in memory.
+/** Opt-in real-source diagnostics. Tokens never leave the app or enter reports.
+ * Download probes own temporary records/files; existing source accounts are preserved.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -70,6 +73,29 @@ class RealNasMediaTest {
             } finally { socket.close() }
         } finally { server.close() }
     }
+    private suspend fun verifiedConfiguration(): JSONObject {
+        val config = configuration()
+        if (config.has("token")) return config
+        check(config.optBoolean("useSavedAndroidSession")) { "No authorized session source" }
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
+        val address = config.getString("baseUrl").trimEnd('/')
+        val profiles = store.profiles.first().filter { it.backend == BackendKind.NAS && it.address.trimEnd('/') == address }
+        val bindings = profiles.flatMap { profile -> store.accounts(profile).map { profile to it } }
+        val active = database.profiles().activeSession()?.accountKey
+        val (profile, account) = bindings.singleOrNull { it.second.key == active } ?: bindings.singleOrNull()
+            ?: error("No unambiguous saved account for the requested NAS")
+        val wire = SearchResult.encodePath(config.getString("path"))
+        val saved = restoreSavedSession(store, profile, account, "/api/resources$wire?metadata=1")
+        try {
+            check(!saved.verification.getBoolean("isDir"))
+            val token = saved.api.token()
+            store.refreshToken(profile, account, token)
+            config.put("token", token).put("path", saved.verification.getString("path"))
+                .put("wirePath", saved.verification.getString("wirePath")).put("size", saved.verification.getLong("size"))
+            return config
+        } finally { saved.api.close() }
+    }
     private fun subtitlePixels(): Int {
         var count = 0
         activity.scenario.onActivity { host ->
@@ -94,7 +120,7 @@ class RealNasMediaTest {
     @Test fun downloadedPrefixOfRealMovieStartsWithoutNetwork(): Unit = realPrefix(true)
     private fun realPrefix(offline: Boolean): Unit = runBlocking {
         require(Build.DEVICE == "houji" && InstrumentationRegistry.getArguments().getString("nfbRealMedia") == "true")
-        val config = configuration()
+        val config = verifiedConfiguration()
         val context = instrumentation.targetContext
         val database = ClientDatabase.get(context)
         val store = ProfileStore(database, CredentialVault(context))
@@ -149,7 +175,7 @@ class RealNasMediaTest {
     @ExternalNetworkAcceptance
     @Test fun directNasMovieRendersEveryEmbeddedPgsTrack(): Unit = runBlocking {
         require(Build.DEVICE == "houji" && InstrumentationRegistry.getArguments().getString("nfbRealMedia") == "true")
-        val config = configuration()
+        val config = verifiedConfiguration()
         val token = config.getString("token")
         val profile = ServerProfile(name = "Direct NAS media diagnostic", address = config.getString("baseUrl"))
         val session = NasSession.restore(profile, token, NasSession.parseIdentity(token).id)
