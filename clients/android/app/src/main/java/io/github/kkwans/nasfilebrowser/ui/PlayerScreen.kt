@@ -685,7 +685,7 @@ private val PlayerDivider = Color(0xFF293342)
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun PlayerSlider(value: Float, maximum: Float, label: String, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit = {}, description: String = "${value.toInt()}%") {
+@Composable internal fun PlayerSlider(value: Float, maximum: Float, label: String, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit = {}, description: String = "${value.toInt()}%") {
     // Preserve Material's drag and keyboard handling. Export one named range
     // with meaningful time/volume state, rather than split label/range nodes
     // and the default raw millisecond number. Accessibility uses the same
@@ -702,8 +702,12 @@ private val PlayerDivider = Color(0xFF293342)
     }) {
         Slider(value = value.coerceIn(0f, maximum), onValueChange = change, onValueChangeFinished = finish, valueRange = 0f..maximum, enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(48.dp),
-        thumb = { Box(Modifier.size(10.dp).background(if (enabled) PlayerAccent else PlayerSecondary, CircleShape)) },
-        track = { Canvas(Modifier.fillMaxWidth().height(3.dp)) {
+        // Equal slot heights give track and thumb the same vertical origin;
+        // the visible 3dp line and 10dp circle are drawn around that centre.
+        thumb = { Canvas(Modifier.width(10.dp).height(48.dp)) {
+            drawCircle(if (enabled) PlayerAccent else PlayerSecondary, radius = 5.dp.toPx(), center = center)
+        } },
+        track = { Canvas(Modifier.fillMaxWidth().height(48.dp)) {
             val y = size.height / 2
             drawLine(Color.White.copy(alpha = 0.28f), Offset(0f, y), Offset(size.width, y), 3.dp.toPx(), StrokeCap.Round)
             drawLine(if (enabled) PlayerAccent else PlayerSecondary, Offset(0f, y), Offset(size.width * (value / maximum).coerceIn(0f, 1f), y), 3.dp.toPx(), StrokeCap.Round)
