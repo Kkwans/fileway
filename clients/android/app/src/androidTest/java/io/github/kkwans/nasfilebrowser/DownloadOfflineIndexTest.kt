@@ -23,7 +23,8 @@ class DownloadOfflineIndexTest {
     @Test fun mkvStartsFromSavedPrefixWithoutNetwork(): Unit = runBlocking { verify("fixture.mkv") }
     @Test fun frontIndexedMp4StartsFromSavedPrefixWithoutNetwork(): Unit = runBlocking { verify("fixture-front.mp4") }
     @Test fun tailIndexedMp4StartsFromSavedPrefixWithoutNetwork(): Unit = runBlocking { verify("fixture-tail.mp4") }
-    private suspend fun verify(asset: String) {
+    @Test fun offlineReadAheadKeepsPlayingSavedRangeAndResumesWhenFileGrows(): Unit = runBlocking { verify("fixture.mkv", boundary = true) }
+    private suspend fun verify(asset: String, boundary: Boolean = false) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val bytes = instrumentation.context.assets.open("media/$asset").use { it.readBytes() }
@@ -37,7 +38,7 @@ class DownloadOfflineIndexTest {
         var player: NativePlayer? = null
         try {
             val account = store.saveLogin(profile, session.identity.id, session.identity.username, session.token())
-            val id = UUID.randomUUID().toString(); val prefix = bytes.size / 2
+            val id = UUID.randomUUID().toString(); val prefix = if (boundary) bytes.size * 3 / 4 else bytes.size / 2
             val record = DownloadRecord(id, database.downloads().lastJobId() + 1, account.key, profile.id, profile.sourceRevision,
                 "/fixture.mkv", "/fixture.mkv", "owned-$id-$asset", "video", bytes.size.toLong(), "owned-download-v1", "${bytes.size}/owned-download-v1", "Owned fixture", "",
                 status = "paused", downloaded = prefix.toLong(), createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis())
@@ -59,6 +60,21 @@ class DownloadOfflineIndexTest {
             assertEquals(requests, source.rawRequests.get())
             assertFalse(database.downloads().get(id)!!.complete)
             assertEquals(prefix.toLong(), database.downloads().get(id)!!.downloaded)
+            if (boundary) {
+                val available = info.availableMs(prefix.toLong())
+                val reached = withTimeout(20_000) { native.state.first { it.error != null || it.positionMs >= available - 250 } }
+                assertTrue("Read-ahead must not stop saved playback early: available=$available actual=${reached.positionMs} error=${reached.error}", reached.positionMs >= available - 250)
+                val waiting = withTimeout(15_000) { native.state.first { it.error != null || it.waitingForBuffer } }
+                assertNull("Missing bytes must remain recoverable while offline", waiting.error)
+                context.contentResolver.openOutputStream(uri, "wa")!!.use { it.write(bytes, prefix, bytes.size - prefix) }
+                val dao = database.downloads()
+                dao.command(id, "queued", System.currentTimeMillis()); dao.claim(id, System.currentTimeMillis())
+                val generation = requireNotNull(dao.get(id)).generation
+                dao.progress(id, generation, bytes.size.toLong(), System.currentTimeMillis())
+                dao.finish(id, generation, "completed", "", System.currentTimeMillis())
+                withTimeout(15_000) { native.state.first { it.playing && it.positionMs > waiting.positionMs + 300 } }
+                assertNull(native.state.value.error)
+            }
         } finally { withContext(NonCancellable) {
             withContext(Dispatchers.Main) { player?.release() }
             owned?.let { target.delete(it); database.downloads().removeRecord(it.id) }
