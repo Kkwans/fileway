@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.net.LocalServerSocket
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -138,11 +139,34 @@ class RealNasMediaTest {
             rendered(false)
             main { native.subtitleDelay(0) }
             rendered(true)
-            for (target in listOf(at + 120_000, at)) {
+            val seeks = JSONArray()
+            // The short forward/backward fixture did not exercise remote MKV
+            // index jumps across a full-length film. Return to a known caption
+            // after distant seeks and verify every track, not just selection.
+            val duration = native.state.value.durationMs
+            val targets = listOf(at + 120_000, at, duration * 3 / 4, at, duration / 4, at, duration * 9 / 10, at)
+            for (target in targets) {
+                val started = SystemClock.elapsedRealtime()
                 main { native.seek(target) }
                 withTimeout(20_000) { native.state.first {
                     !it.playing && !it.waitingForBuffer && it.positionMs in (target - 500)..(target + 500) && it.phase != "正在跳转"
                 } }
+                val settledMs = SystemClock.elapsedRealtime() - started
+                val restored = JSONArray()
+                if (target == at) {
+                    withTimeout(20_000) { native.state.first { it.bufferedPositionMs >= at + 15_000 } }
+                    for ((index, track) in tracks.withIndex()) {
+                        main { native.subtitle(-1) }
+                        rendered(false)
+                        main { native.subtitle(track.id) }
+                        withTimeout(5000) { native.state.first { it.selectedSubtitle == track.id && it.pendingSubtitle == null } }
+                        rendered(true)
+                        restored.put(JSONObject().put("track", index).put("pixels", subtitlePixels()))
+                    }
+                }
+                seeks.put(JSONObject().put("targetMs", target).put("settledMs", settledMs)
+                    .put("restoredTracks", restored))
+                instrumentation.addResults(Bundle().apply { putString("filewayRealMediaSeeks", seeks.toString()) })
             }
             rendered(true)
             assertFalse("Subtitle/seek commands must retain the paused intent", native.state.value.playing)
