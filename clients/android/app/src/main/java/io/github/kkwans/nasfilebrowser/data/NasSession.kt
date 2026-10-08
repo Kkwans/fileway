@@ -33,12 +33,17 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         token
     }
     suspend fun permissions(): ServerPermissions = parseIdentity(token()).permissions
-    private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200)): String {
+    private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200), statusTextBody: Boolean = false): String {
         val command = JSONObject().put("op", "request").put("session", id).put("method", method).put("endpoint", endpoint)
         body?.let { command.put("body", it) }
         val result = native(command) as JSONObject
         when (result.getInt("status")) {
-            in accepted -> { token(); return result.getString("body") }
+            in accepted -> {
+                token()
+                val text = result.getString("body")
+                val expected = when (result.getInt("status")) { 200 -> "200 OK"; 201 -> "201 Created"; 202 -> "202 Accepted"; 204 -> "204 No Content"; else -> null }
+                return if (statusTextBody && expected != null && text.trim() == expected) "" else text
+            }
             401 -> throw ServiceException(401, "登录已过期，请重新登录")
             403 -> throw ServiceException(403, "当前账号没有访问权限")
             404 -> throw ServiceException(404, "文件、目录或服务功能不存在")
@@ -49,7 +54,7 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
     }
     suspend fun request(method: String, endpoint: String, body: JSONObject? = null) = JSONObject(response(method, endpoint, body))
     suspend fun action(method: String, endpoint: String, body: JSONObject? = null): JSONObject {
-        val text = response(method, endpoint, body, setOf(200, 201, 202, 204))
+        val text = response(method, endpoint, body, setOf(200, 201, 202, 204), statusTextBody = true)
         return if (text.isBlank()) JSONObject() else JSONObject(text)
     }
     suspend fun spriteMetadata(path: String): JSONObject {
