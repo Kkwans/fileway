@@ -3,6 +3,8 @@ package io.github.kkwans.nasfilebrowser
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Until
+import android.graphics.Rect
+import android.view.accessibility.AccessibilityWindowInfo
 import io.github.kkwans.nasfilebrowser.data.BackendKind
 import io.github.kkwans.nasfilebrowser.data.SearchResult
 import kotlinx.coroutines.*
@@ -13,6 +15,15 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 internal class DirectoryCreationUiTest : LibraryUiHarness() {
+    private suspend fun keyboardBounds(): Rect = withTimeout(5000) {
+        while (true) {
+            val ime = instrumentation.uiAutomation.windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            val bounds = Rect(); ime?.getBoundsInScreen(bounds)
+            if (bounds.height() > 0 && bounds.top < device.displayHeight) return@withTimeout bounds
+            delay(50)
+        }
+        @Suppress("UNREACHABLE_CODE") error("Keyboard window missing")
+    }
     private fun clickText(label: String) {
         var button = text(label)
         while (!button.isClickable) button = button.parent ?: error("Missing clickable owner for $label")
@@ -75,6 +86,23 @@ internal class DirectoryCreationUiTest : LibraryUiHarness() {
             main { model.startDirectoryCreation(model.state.value.previewScope); model.fileOperations.directoryName("不应创建"); model.fileOperations.createDirectory() }
             withTimeout(5000) { model.fileOperations.state.first { !it.changing && it.creation?.error != null } }
             assertTrue(data.mkdirAttempts.isEmpty()); assertFalse(data.files.containsKey("/不应创建"))
+        }
+    }
+    @Test fun keyboardKeepsCreationAndExistingFolderActionsPhysicallyVisible(): Unit = runBlocking {
+        val data = LibraryFixtureData().apply { liveDirectoryListing = true }; data.file("/已存在", true)
+        fixture(data) {
+            start(); input().text = "已存在"
+            val ime = keyboardBounds()
+            val create = text("创建").visibleBounds; val cancel = text("取消").visibleBounds
+            assertTrue("Create must stay above the actual IME", create.bottom <= ime.top)
+            assertTrue("Cancel must stay above the actual IME", cancel.bottom <= ime.top)
+            clickText("创建")
+            withTimeout(5000) { model.fileOperations.state.first { !it.changing && it.creation?.existing != null } }
+            val existing = text("打开已有文件夹").visibleBounds
+            assertTrue("Existing-folder action must stay above IME", existing.bottom <= keyboardBounds().top)
+            capture("directory-ime-actions-visible")
+            clickText("打开已有文件夹")
+            withTimeout(5000) { model.state.first { !it.busy && it.path == "/已存在" } }
         }
     }
 }

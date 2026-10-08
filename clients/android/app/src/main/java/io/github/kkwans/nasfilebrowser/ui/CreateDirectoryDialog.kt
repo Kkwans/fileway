@@ -13,6 +13,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.data.renameNameError
@@ -25,7 +26,8 @@ import io.github.kkwans.nasfilebrowser.data.renameNameError
     val editable = !state.changing && draft.unknownTarget == null
     val canCreate = editable && nameError == null
     LaunchedEffect(state.scope, draft.parent) { focus.requestFocus() }
-    AlertDialog(onDismissRequest = model.fileOperations::closeDirectoryCreation, title = { Text("新建文件夹") }, text = {
+    AlertDialog(onDismissRequest = model.fileOperations::closeDirectoryCreation, modifier = Modifier.imePadding(),
+        properties = DialogProperties(decorFitsSystemWindows = false), title = { Text("新建文件夹") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(draft.parent.path, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
