@@ -62,7 +62,9 @@ class NativePlaybackTest {
         require(visualVariant.matches(Regex("[a-z0-9-]{0,32}")))
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = Fixture(media)
-        val storage = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
+        val storage = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = storage.save(ServerProfile(name = "Native playback fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
@@ -186,7 +188,12 @@ class NativePlaybackTest {
                 instrumentation.uiAutomation.rootInActiveWindow?.let(::inspect)
             }
             assertNotNull("The volume slider must expose an accessible range", slider)
-            val expectedVolume = (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * .35f).roundToInt()
+            val maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val preferredVolume = (maximumVolume * .35f).roundToInt()
+            // A no-op setProgress correctly returns false. The CI emulator
+            // starts at 5/15, exactly the rounded 35% target; exercise a change.
+            val expectedVolume = if (preferredVolume != audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) preferredVolume
+                else if (preferredVolume < maximumVolume) preferredVolume + 1 else preferredVolume - 1
             val progress = Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, expectedVolume.toFloat()) }
             assertTrue(slider!!.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id, progress))
             waitUntil { audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == expectedVolume }
@@ -279,11 +286,13 @@ class NativePlaybackTest {
             }.onFailure { error.addSuppressed(it) }
             throw error
         } finally {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0)
-            source.releaseRead.countDown()
-            onMain { model.disconnect() }
-            storage.remove(profile)
-            source.close()
+            withContext(NonCancellable) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, originalVolume, 0)
+                source.releaseRead.countDown()
+                onMain { model.disconnect() }
+                try { storage.remove(profile) } finally { source.close() }
+                previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+            }
         }
     }
 
