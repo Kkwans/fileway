@@ -82,6 +82,54 @@ class ExternalSubtitleNativeTest {
         } finally { main { model.disconnect() }; store.remove(profile); source.close() }
     }
 
+    @Test fun samiLanguagesClearAndSeekWithOffsetWhileVideoStaysPaused(): Unit = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext; val database = ClientDatabase.get(context)
+        val previous = database.profiles().activeSession()
+        val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
+        val caption = """<SAMI><HEAD><STYLE>.EN {Name:English;lang:en-US;SAMI_Type:CC;} .ZH {Name:中文;lang:zh-CN;SAMI_Type:CC;}</STYLE></HEAD><BODY>
+            <SYNC Start=2000><P Class=EN>EXTERNAL SAMI <b>SUBTITLE</b><br>SECOND LINE<P Class=ZH>外挂字幕
+            <SYNC Start=4000><P Class=EN>&nbsp;<P Class=ZH>&nbsp;</BODY></SAMI>""".toByteArray()
+        val source = NativePlaybackTest.Fixture(media, mapOf("external.smi" to caption))
+        val store = ProfileStore(database, CredentialVault(context))
+        val profile = store.save(ServerProfile(name = "Owned SAMI subtitle fixture", address = source.url))
+        lateinit var model: ClientModel
+        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        suspend fun main(action: suspend () -> Unit) = withContext(Dispatchers.Main) { action() }
+        suspend fun white(expected: Boolean) = withTimeout(6000) { while ((subtitleWhitePixels() > 20) != expected) delay(50) }
+        try {
+            main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
+            withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
+            main { model.open(ResourceRef("/fixture.mkv", "/fixture.mkv", "Owned SAMI media.mkv", false, "video", media.size.toLong())) }
+            withTimeout(20_000) { model.player.state.first { it.firstFrameRendered && it.seekable } }
+            main { model.pausePlayback(); model.player.subtitle(-1); model.player.seek(2500) }
+            withTimeout(6000) { model.player.state.first { !it.playing && kotlin.math.abs(it.positionMs - 2500) < 250 && it.phase != "正在跳转" } }
+            val generation = model.player.state.value.mediaGeneration
+            main { model.addExternalSubtitle(ResourceRef("/external.smi", "/external.smi", "external.smi", false, "", caption.size.toLong())) }
+            withTimeout(10_000) { model.player.state.first { !it.subtitleLoading && it.subtitles.count { track -> track.codec == "application/x-sami" } == 2 } }
+            assertEquals("en-US", model.player.state.value.subtitles.single { it.id == model.player.state.value.selectedSubtitle }.language)
+            white(true)
+            main { model.player.subtitleDelay(1000) }; white(false)
+            main { model.player.subtitleDelay(0) }; white(true)
+            val chinese = model.player.state.value.subtitles.single { it.language == "zh-CN" }
+            main { model.player.subtitle(chinese.id) }; white(true)
+            main { model.player.seek(4500) }
+            withTimeout(6000) { model.player.state.first { kotlin.math.abs(it.positionMs - 4500) < 250 && it.phase != "正在跳转" } }
+            white(false)
+            main { model.player.seek(2500) }
+            withTimeout(6000) { model.player.state.first { kotlin.math.abs(it.positionMs - 2500) < 250 && it.phase != "正在跳转" } }
+            white(true)
+            main { model.player.subtitle(-1) }; white(false)
+            assertFalse(model.player.state.value.playing)
+            assertEquals(generation, model.player.state.value.mediaGeneration)
+            assertTrue(source.subtitleRequests.get() > 0)
+            assertEquals(0, source.unexpected.get())
+        } finally { withContext(NonCancellable) {
+            main { model.disconnect() }; store.remove(profile); source.close()
+            previous?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+        } }
+    }
+
     @Test fun nasSubtitlePickerLoadsAuthenticatedExternalNativeTrack(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)

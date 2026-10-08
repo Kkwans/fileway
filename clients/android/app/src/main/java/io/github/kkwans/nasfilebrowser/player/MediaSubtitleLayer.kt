@@ -93,13 +93,15 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         tracks[id] = ass().createTrack().also { it.readBuffer(data) }
         post { if (!closed.get()) ready() }
     }
-    fun externalText(id: String, values: List<CuesWithTiming>, ready: () -> Unit) = submit {
-        val size = values.sumOf(::bytes)
-        check(values.size <= 20_000 && size <= 32L * 1024 * 1024)
-        check(cueBytes + size <= 32L * 1024 * 1024 && cues.values.sumOf { it.size } + values.size <= 20_000)
+    fun externalText(id: String, values: List<CuesWithTiming>, ready: () -> Unit) = externalTexts(mapOf(id to values), ready)
+    fun externalTexts(values: Map<String, List<CuesWithTiming>>, ready: () -> Unit) = submit {
+        val count = values.values.sumOf { it.size }
+        val size = values.values.sumOf { items -> items.sumOf(::bytes) }
+        check(count <= 20_000 && size <= 32L * 1024 * 1024)
+        check(cueBytes + size <= 32L * 1024 * 1024 && cues.values.sumOf { it.size } + count <= 20_000)
         // Attach only a fully parsed file. A partial/failed read never becomes
         // a selected track, and whole-file seek does not silently lose old cues.
-        cues[id] = values.toMutableList(); cueBytes += size
+        values.forEach { (id, items) -> cues[id] = items.toMutableList() }; cueBytes += size
         post { if (!closed.get()) ready() }
     }
     fun select(assTrack: String?, textTrack: String?, positionMs: Long) {

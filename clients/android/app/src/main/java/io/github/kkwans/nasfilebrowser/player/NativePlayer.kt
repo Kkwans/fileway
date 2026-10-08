@@ -469,7 +469,31 @@ class NativePlayer(context: Context) {
                 }
                 ensureActive()
                 if (!session.accepts(epoch) || externalRequest != request) return@launch
-                val mime = when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+                val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                if (extension in setOf("smi", "sami")) {
+                    val tracks = withContext(Dispatchers.IO) { SamiSubtitles.parse(bytes).map { track ->
+                        track to track.captions.map { caption ->
+                            val safeHtml = Regex("<img\\b[^>]*>", RegexOption.IGNORE_CASE).replace(caption.html, "")
+                            val text = android.text.Html.fromHtml(safeHtml, android.text.Html.FROM_HTML_MODE_LEGACY).trim { it.isWhitespace() || it == '\u00a0' }
+                            androidx.media3.extractor.text.CuesWithTiming(if (text.isEmpty()) emptyList() else listOf(androidx.media3.common.text.Cue.Builder().setText(text).build()),
+                                caption.startMs * 1000, caption.durationMs?.times(1000) ?: C.TIME_UNSET)
+                        }
+                    } }
+                    ensureActive()
+                    if (!session.accepts(epoch) || externalRequest != request) return@launch
+                    val ids = tracks.mapIndexed { index, _ -> if (index == 0) id else nextId++ }
+                    currentLayer.externalTexts(tracks.mapIndexed { index, (_, values) -> "external:${ids[index]}" to values }.toMap()) {
+                        if (!session.accepts(epoch) || externalRequest != request) return@externalTexts
+                        tracks.forEachIndexed { index, (track, _) ->
+                            external[ids[index]] = NativeTrack(ids[index], if (tracks.size == 1) name else "$name · ${track.title}", "application/x-sami", track.language)
+                        }
+                        externalJob = null
+                        mutable.value = mutable.value.copy(subtitleLoading = false)
+                        subtitle(id)
+                    }
+                    return@launch
+                }
+                val mime = when (extension) {
                     "ass", "ssa" -> MimeTypes.TEXT_SSA
                     "srt" -> MimeTypes.APPLICATION_SUBRIP
                     "vtt" -> MimeTypes.TEXT_VTT
