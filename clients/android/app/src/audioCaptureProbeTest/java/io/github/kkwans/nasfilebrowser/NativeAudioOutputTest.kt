@@ -137,10 +137,13 @@ class NativeAudioOutputTest {
             activity.scenario.onActivity { it.requestOwnedPlaybackCapture() }
             checkpoint("projection-consent-requested")
             val confirm = device.wait(Until.findObject(By.pkg("com.android.systemui")
-                .text(Pattern.compile("(?i)start now|start recording|share screen|start|立即开始|开始录制|开始录屏|开始"))), 10_000)
-                ?: error("Platform projection confirmation missing")
+                .text(Pattern.compile("(?i)start now|start recording|share screen|start|立即开始|开始录制|开始录屏|开始|共享屏幕")).enabled(true)), 10_000)
+                ?: run {
+                    device.dumpWindowHierarchy(java.io.File(context.getExternalFilesDir(null), "owned-audio-consent.xml"))
+                    error("Platform projection confirmation missing; preserved owned-audio-consent.xml")
+                }
             confirm.click()
-            checkpoint("projection-consent-confirmed")
+            checkpoint("projection-confirmation-clicked")
             withTimeout(10_000) {
                 while (PlaybackCaptureProbeService.meter == null) {
                     check(PlaybackCaptureProbeService.failure == null) { "Capture service: ${PlaybackCaptureProbeService.failure}" }
