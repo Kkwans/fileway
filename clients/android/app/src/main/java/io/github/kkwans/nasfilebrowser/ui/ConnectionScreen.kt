@@ -47,11 +47,11 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.data.*
 
 @Composable internal fun ConnectionScreen(model: ClientModel, state: ClientState) {
-    LibraryTheme { ConnectionForm(model, state) }
+    val network by model.networkState.collectAsStateWithLifecycle()
+    LibraryTheme { ConnectionForm(model, state, network) }
 }
 
-@Composable private fun ConnectionForm(model: ClientModel, state: ClientState) {
-    val network by model.networkState.collectAsStateWithLifecycle()
+@Composable internal fun ConnectionForm(model: ClientModel, state: ClientState, network: io.github.kkwans.nasfilebrowser.core.NetworkState) {
     val profiles by model.profiles.collectAsStateWithLifecycle()
     val focus = LocalFocusManager.current
     val context = LocalContext.current
@@ -132,7 +132,7 @@ import io.github.kkwans.nasfilebrowser.data.*
                     if (profiles.isNotEmpty()) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Box(Modifier.weight(1f)) {
-                                OutlinedButton(onClick = { profilesOpen = true }, enabled = !state.busy,
+                                OutlinedButton(onClick = { focus.clearFocus(); profilesOpen = true }, enabled = !state.busy,
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = "选择服务器档案" },
                                     shape = RoundedCornerShape(12.dp)) {
                                     Icon(painterResource(R.drawable.ic_storage), null, Modifier.size(20.dp))
@@ -159,11 +159,11 @@ import io.github.kkwans.nasfilebrowser.data.*
                         ConnectionField(url, { url = it }, "服务器地址", R.drawable.ic_link, enabled = !state.busy,
                             placeholder = "https://nas.example.com:8080", keyboardType = KeyboardType.Uri)
                         Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ConnectionMode("本地网络", R.drawable.ic_storage, mode == "direct", Modifier.weight(1f), !state.busy) { mode = "direct" }
-                            ConnectionMode("Tailscale", R.drawable.ic_network, mode == "tailnet", Modifier.weight(1f), !state.busy) { mode = "tailnet" }
+                            ConnectionMode("本地网络", R.drawable.ic_storage, mode == "direct", Modifier.weight(1f), !state.busy) { focus.clearFocus(); mode = "direct" }
+                            ConnectionMode("Tailscale", R.drawable.ic_network, mode == "tailnet", Modifier.weight(1f), !state.busy) { focus.clearFocus(); mode = "tailnet" }
                         }
                     }
-                    if (mode == "tailnet") NetworkCard(model)
+                    if (mode == "tailnet") NetworkSection(model, network)
                     if (Build.VERSION.SDK_INT >= 37 && !localAccess) {
                         Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(10.dp)) {
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {

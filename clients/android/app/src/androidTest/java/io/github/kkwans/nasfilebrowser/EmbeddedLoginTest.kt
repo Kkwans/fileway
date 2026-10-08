@@ -77,7 +77,7 @@ class EmbeddedLoginTest {
             device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/embedded-first-login.png")
             click("取消连接")
-            assertTrue(device.wait(Until.hasObject(By.text("应用内 Tailscale · 未连接")), 10_000))
+            assertTrue(device.wait(Until.hasObject(By.text("未连接")), 10_000))
             assertFalse(device.hasObject(By.text("打开登录页")))
             assertFalse(device.hasObject(By.text("退出 Tailscale 账号")))
         }

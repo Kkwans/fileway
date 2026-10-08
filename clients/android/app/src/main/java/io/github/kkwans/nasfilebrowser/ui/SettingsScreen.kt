@@ -158,7 +158,7 @@ import kotlinx.coroutines.launch
         }
     }
     if (networkDetails) AlertDialog(onDismissRequest = { networkDetails = false }, title = { Text("应用内 Tailscale") }, text = {
-        Column(Modifier.heightIn(max = 420.dp).verticalScroll(androidx.compose.foundation.rememberScrollState())) { NetworkCard(model) }
+        Column(Modifier.heightIn(max = 420.dp).verticalScroll(androidx.compose.foundation.rememberScrollState())) { NetworkSection(model) }
     }, confirmButton = { TextButton(onClick = { networkDetails = false }) { Text("关闭") } })
     if (profileDetails) AlertDialog(onDismissRequest = { profileDetails = false }, title = { Text("服务器档案") }, text = {
         Column(Modifier.heightIn(max = 320.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {

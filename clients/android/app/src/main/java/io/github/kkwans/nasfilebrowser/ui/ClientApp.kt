@@ -17,12 +17,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.platform.LocalContext
-import android.content.Intent
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.net.Uri
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientState
@@ -135,48 +129,6 @@ import java.util.Locale
             modifier = Modifier.fillMaxWidth().height(3.dp), color = colors.primary,
             trackColor = colors.outlineVariant, gapSize = 0.dp, drawStopIndicator = {})
     }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun NetworkCard(model: ClientModel) {
-    val network by model.networkState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    var actionMessage by remember(network.authUrl) { mutableStateOf<String?>(null) }
-    var confirmLogout by remember { mutableStateOf(false) }
-    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("应用内 Tailscale · ${network.label}", style = MaterialTheme.typography.bodyMedium)
-            if (network.ips.isNotEmpty()) Text(network.ips.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-            if (network.connected && network.acceptSubnets) Text("已启用子网路由", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (network.state == "NeedsMachineAuth") Text("请在 Tailscale 管理页面批准这台设备。")
-            network.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            actionMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                val actionColors = ButtonDefaults.filledTonalButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
-                if (!network.connected && network.authUrl.isEmpty() && network.state != "NeedsMachineAuth") FilledTonalButton(onClick = model::connectNetwork, enabled = network.state != "Starting", colors = actionColors, shape = RoundedCornerShape(8.dp)) { Text(if (network.state == "Starting") "正在连接" else "连接 Tailscale") }
-                if (network.authUrl.isNotEmpty()) FilledTonalButton(onClick = {
-                    val uri = Uri.parse(network.authUrl)
-                    val host = uri.host.orEmpty()
-                    if (uri.scheme != "https" || (host != "tailscale.com" && !host.endsWith(".tailscale.com"))) {
-                        actionMessage = "登录地址无法验证，请重新连接。"
-                    } else try { context.startActivity(Intent(Intent.ACTION_VIEW, uri)); actionMessage = null }
-                    catch (_: Exception) { actionMessage = "无法打开浏览器，可复制登录链接后手动打开。" }
-                }, colors = actionColors, shape = RoundedCornerShape(8.dp)) { Text("打开登录页") }
-                if (network.state in listOf("Starting", "NeedsLogin", "NeedsMachineAuth", "Running")) TextButton(onClick = { model.stopNetwork() }) { Text(if (network.connected) "断开" else "取消连接") }
-            }
-            if (network.authUrl.isNotEmpty()) TextButton(onClick = {
-                try {
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    val clip = ClipData.newPlainText("Tailscale 登录", network.authUrl)
-                    clip.description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
-                    clipboard.setPrimaryClip(clip)
-                    actionMessage = "登录链接已复制，请勿分享。"
-                } catch (_: Exception) { actionMessage = "无法复制链接，请检查系统权限后重试。" }
-            }) { Text("复制登录链接") }
-            if (network.canLogout) TextButton(onClick = { confirmLogout = true }) { Text("退出 Tailscale 账号") }
-        }
-    }
-    if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false }, title = { Text("退出 Tailscale？") }, text = { Text("将停止当前播放并退出内嵌节点，下次连接需要重新登录。") }, confirmButton = { TextButton(onClick = { confirmLogout = false; model.stopNetwork(logout = true) }) { Text("退出账号") } }, dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } })
 }
 
 internal fun readableSize(size: Long): String {

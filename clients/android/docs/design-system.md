@@ -16,12 +16,34 @@ Do not use generic dashboard statistics, oversized gradients, repeated card cont
 | Surface | #FFFFFF | #141416 |
 | Primary text | #202023 | #F3F3F6 |
 | Secondary text | #63636D | #B5B5BE |
-| Accent | #C63262 | #FF80A6 |
+| Accent | #1767E8 | #69A8FF |
 | Divider | #E9E9ED | #34343A |
 
 Native sans family with deliberate roles: 20sp page title, 22sp connection introduction, 16sp medium file title/body, 13sp metadata; tabular numerals for times and sizes. Respect system font scale. Normal text contrast ≥4.5:1.
 
 Spacing: 4/8/12/16/24/32dp. Connection page gutters and section padding 16dp; media page gutters 12–16dp. Corners: 10dp on category/form cards and 8dp on their inner controls. Outline icons form a consistent family; controls ≥48dp.
+
+## Connection alignment and system navigation
+
+The connection page owns one 16dp gutter. Address/account fields, connection-mode
+controls and the Tailscale section share that same left/right boundary. Network
+content must not add a card with another 16dp inset. The status row, explanation,
+full-width network action and errors belong to the form's existing grid. Cancel
+and disconnect stay directly reachable; confirmed account logout is a secondary
+menu action. IPs and health details expand only when requested.
+
+Use the approved bright blue identity, matching the layered storage icon. Primary
+server login stays in the bottom action area; network setup uses a tonal action.
+Check unconfigured, connecting, login-required and connected states in both
+palettes. Assert actual heading/button geometry, then inspect the rendered page;
+a passing action test alone is not visual acceptance.
+
+Compose draws the page/bottom surface through the system gesture area, with safe
+insets protecting touch targets. Disable the Activity's extra navigation contrast
+scrim. Preserve the native system gesture handle and correct light/dark icon mode.
+The owner's input method owns its own window/navigation styling; verify that state
+separately instead of calling a transient IME inset or an absent keyboard screenshot
+full keyboard acceptance. Switching connection modes clears editing focus.
 
 ## Layout
 

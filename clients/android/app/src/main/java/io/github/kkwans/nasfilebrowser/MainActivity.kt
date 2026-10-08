@@ -38,6 +38,9 @@ class MainActivity : ComponentActivity() {
                 val style = if (lightBars) SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
                     else SystemBarStyle.dark(Color.TRANSPARENT)
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+                // Compose paints the surface behind the gesture area. Do not
+                // let a separate system contrast scrim turn it into a gray strip.
+                window.isNavigationBarContrastEnforced = false
                 val bars = WindowCompat.getInsetsController(window, window.decorView)
                 bars.isAppearanceLightStatusBars = lightBars
                 bars.isAppearanceLightNavigationBars = lightBars
