@@ -26,6 +26,7 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                 while (!menu.isClickable) menu = menu.parent ?: error("File action has no clickable owner")
                 assertTrue("The explicit menu must be an accessible click action", menu.isClickable)
                 assertTrue("The button must retain a 48dp target", menu.visibleBounds.width() >= (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt() - 2)
+                OwnedUiTraceRule.trace("file-action layout=$layout bounds=${menu.visibleBounds}")
                 menu.click(); text("文件详情"); action("设置文件标签")
                 capture("file-actions-${layout.name.lowercase()}")
                 text("关闭").click()

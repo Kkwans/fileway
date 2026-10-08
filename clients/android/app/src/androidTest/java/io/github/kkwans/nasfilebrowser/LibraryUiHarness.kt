@@ -9,9 +9,11 @@ import io.github.kkwans.nasfilebrowser.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.Rule
+import org.junit.rules.RuleChain
 
 internal open class LibraryUiHarness {
-    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    protected val activity = ActivityScenarioRule(MainActivity::class.java)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(OwnedUiTraceRule()).around(activity)
     protected val instrumentation = InstrumentationRegistry.getInstrumentation()
     protected val device get() = UiDevice.getInstance(instrumentation)
     protected lateinit var model: ClientModel

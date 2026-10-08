@@ -15,6 +15,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
@@ -22,7 +23,8 @@ import java.util.UUID
 /** Only owned fixture profile/file/record; preserves the previously active account. */
 @RunWith(AndroidJUnit4::class)
 class DownloadPlaybackTest {
-    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    private val activity = ActivityScenarioRule(MainActivity::class.java)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(OwnedUiTraceRule()).around(activity)
     @Test fun savedPrefixStreamsMissingRangesThenCompletedFilePlaysOffline(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -88,9 +90,11 @@ class DownloadPlaybackTest {
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/download-offline-phone.png")
             // Exercise the actual notification PendingIntent while the viewer
             // owns the foreground: the original Activity/model must navigate.
+            OwnedUiTraceRule.trace("notification-send")
             DownloadNotice.notification(context, complete).contentIntent.send()
             withTimeout(5000) { model.state.first { it.tab == "downloads" && it.selected == null && it.image == null } }
             assertTrue(device.wait(Until.hasObject(By.text("本机下载")), 5000))
+            OwnedUiTraceRule.trace("notification-navigation-confirmed")
         } finally {
             withContext(NonCancellable) {
                 main { model.leavePlayer(); model.disconnect() }
