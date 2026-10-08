@@ -158,8 +158,11 @@ class NativePlayer(context: Context) {
             }.toTypedArray()
         }
         val bufferControl = PlaybackLoadControl().also { loadControl = it }
+        val mediaSources = if (dataSourceFactory == null) DefaultMediaSourceFactory(context, extractors) else DefaultMediaSourceFactory(dataSourceFactory, extractors)
+        if (dataSourceFactory is io.github.kkwans.nasfilebrowser.download.DownloadDataSource.Factory)
+            mediaSources.setLoadErrorHandlingPolicy(dataSourceFactory.errorPolicy())
         val player = ExoPlayer.Builder(context, factory).setLoadControl(bufferControl)
-            .setMediaSourceFactory(if (dataSourceFactory == null) DefaultMediaSourceFactory(context, extractors) else DefaultMediaSourceFactory(dataSourceFactory, extractors)).build()
+            .setMediaSourceFactory(mediaSources).build()
         engine = player
         trace.record(PlaybackTraceAction.ENGINE_READY); trace.record(PlaybackTraceAction.PLAYER_READY)
         fun current() = !released && engine === player && session.accepts(epoch)

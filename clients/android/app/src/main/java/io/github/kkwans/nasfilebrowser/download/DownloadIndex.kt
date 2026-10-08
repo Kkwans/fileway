@@ -37,7 +37,7 @@ internal class DownloadIndex private constructor(private val context: Context) {
     }
     fun info(record: DownloadRecord): Info? = known[record.id] ?: runCatching {
         val json = JSONObject(AtomicFile(mapFile(record)).readFully().decodeToString())
-        check(json.getString("identity") == record.identity && json.getInt("version") == 1)
+        check(json.getString("identity") == record.identity && json.getInt("version") == 2)
         val rows = json.getJSONArray("points")
         Info(json.getLong("durationUs"), (0 until rows.length()).map { rows.getJSONArray(it).let { row -> Point(row.getLong(0), row.getLong(1)) } })
             .also { known[record.id] = it }
@@ -46,6 +46,13 @@ internal class DownloadIndex private constructor(private val context: Context) {
     fun reader(record: DownloadRecord, networkAllowed: Boolean = true, write: Boolean = false): DataSource {
         val factory = CacheDataSource.Factory().setCache(cache).setCacheKeyFactory { record.id }
         if (networkAllowed) factory.setUpstreamDataSourceFactory { Remote(context, record) }
+        else factory.setUpstreamDataSourceFactory { object : DataSource {
+            override fun open(spec: DataSpec): Long = throw DownloadPendingException()
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int = throw DownloadPendingException()
+            override fun getUri(): Uri? = null
+            override fun addTransferListener(listener: TransferListener) = Unit
+            override fun close() = Unit
+        } }
         if (!write) factory.setCacheWriteDataSinkFactory(null)
         return factory.createDataSource()
     }
@@ -109,19 +116,31 @@ internal class DownloadIndex private constructor(private val context: Context) {
                 data?.close(); data = null // Commit cache spans before publishing readiness.
                 val points = mutableListOf<Point>()
                 var required = 0L
-                if (index.isSeekable && index.durationUs > 0 && tracks.isNotEmpty() && index is TrackAwareSeekMap) {
+                if (index.isSeekable && index.durationUs > 0 && tracks.size in 1..32 && index is TrackAwareSeekMap) {
                     val step = maxOf(1_000_000L, (index.durationUs + 19_999) / 20_000)
-                    var time = 0L
-                    while (time < index.durationUs) {
-                        var boundedTime = time
-                        for (track in tracks) {
-                            val pair = index.getSeekPoints(time, track)
-                            required = maxOf(required, pair.first.position, pair.second.position)
-                            if (pair.first.position == pair.second.position) boundedTime = minOf(boundedTime, pair.first.timeUs)
+                    val times = generateSequence(0L) { it + step }.takeWhile { it < index.durationUs }.toList()
+                    val samples = tracks.map { track -> times.map { index.getSeekPoints(it, track) } }
+                    // A point locates a block's START, not its complete payload.
+                    // Require the next distinct block boundary for every A/V track.
+                    val monotonic = samples.all { rows -> rows.all { it.first.position in 0 until record.expectedSize } &&
+                        rows.zipWithNext().all { (a, b) -> a.first.position <= b.first.position } }
+                    if (monotonic) {
+                        val ends = samples.map { rows ->
+                            val offsets = LongArray(rows.size)
+                            var nextStart = record.expectedSize; var nextEnd = record.expectedSize
+                            for (i in rows.indices.reversed()) {
+                                val start = rows[i].first.position
+                                if (start < nextStart) { nextEnd = nextStart; nextStart = start }
+                                offsets[i] = maxOf(nextEnd, rows[i].second.position)
+                            }
+                            offsets
                         }
-                        if (boundedTime >= (points.lastOrNull()?.timeUs ?: 0) && required in 0..record.expectedSize)
-                            points.add(Point(boundedTime, required))
-                        time += step
+                        for (i in times.indices) {
+                            val boundedTime = minOf(times[i], samples.minOf { it[i].first.timeUs })
+                            required = maxOf(required, ends.maxOf { it[i] })
+                            if (boundedTime >= (points.lastOrNull()?.timeUs ?: 0) && required in 0..record.expectedSize)
+                                points.add(Point(boundedTime, required))
+                        }
                     }
                 }
                 val result = Info(index.durationUs, points)
@@ -129,7 +148,7 @@ internal class DownloadIndex private constructor(private val context: Context) {
                 val atomic = AtomicFile(file)
                 val output = atomic.startWrite()
                 try {
-                    val json = JSONObject().put("version", 1).put("identity", record.identity).put("durationUs", result.durationUs)
+                    val json = JSONObject().put("version", 2).put("identity", record.identity).put("durationUs", result.durationUs)
                         .put("points", JSONArray(result.points.map { JSONArray(listOf(it.timeUs, it.requiredBytes)) }))
                     output.write(json.toString().toByteArray()); atomic.finishWrite(output)
                 } catch (failure: Throwable) { atomic.failWrite(output); throw failure }
@@ -155,10 +174,18 @@ internal class DownloadIndex private constructor(private val context: Context) {
         override fun addTransferListener(listener: TransferListener) = http.addTransferListener(listener)
         override fun open(spec: DataSpec): Long {
             uri = spec.uri
-            access = runBlocking(Dispatchers.IO) { DownloadRuntime.get(context).source(record) }
-            return http.open(spec.buildUpon().setUri(access!!.url).build())
+            try {
+                access = runBlocking(Dispatchers.IO) { DownloadRuntime.get(context).source(record) }
+                return http.open(spec.buildUpon().setUri(access!!.url).build())
+            } catch (failure: io.github.kkwans.nasfilebrowser.core.TransportException) {
+                throw DownloadPendingException(failure)
+            } catch (failure: HttpDataSource.HttpDataSourceException) {
+                if (failure is HttpDataSource.InvalidResponseCodeException && failure.responseCode in 400..499) throw failure
+                throw DownloadPendingException(failure)
+            }
         }
-        override fun read(buffer: ByteArray, offset: Int, length: Int) = http.read(buffer, offset, length)
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int = try { http.read(buffer, offset, length) }
+            catch (failure: HttpDataSource.HttpDataSourceException) { throw DownloadPendingException(failure) }
         override fun getUri(): Uri? = uri
         override fun close() {
             try { http.close() }
