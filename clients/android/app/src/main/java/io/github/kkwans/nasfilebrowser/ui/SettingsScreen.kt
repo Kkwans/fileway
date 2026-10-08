@@ -39,9 +39,10 @@ import kotlinx.coroutines.launch
     val surface = if (dark) Color(0xFF202023) else Color(0xFFF5F5F7)
     val ink = if (dark) Color(0xFFF3F3F6) else Color(0xFF202023)
     MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
-        primary = if (dark) Color(0xFFFF80A6) else Color(0xFFC63262),
-        primaryContainer = if (dark) Color(0xFF38212B) else Color(0xFFFFEDF3),
-        onPrimaryContainer = if (dark) Color(0xFFFF80A6) else Color(0xFFC63262),
+        primary = if (dark) Color(0xFF69A8FF) else Color(0xFF1767E8),
+        onPrimary = if (dark) Color(0xFF082B58) else Color.White,
+        primaryContainer = if (dark) Color(0xFF162D4A) else Color(0xFFEAF2FF),
+        onPrimaryContainer = if (dark) Color(0xFFB8D6FF) else Color(0xFF1553B5),
         background = background, onBackground = ink, surface = background, onSurface = ink,
         surfaceContainer = surface, surfaceContainerLow = surface, surfaceContainerHigh = surface,
         onSurfaceVariant = if (dark) Color(0xFFB5B5BE) else Color(0xFF63636D),

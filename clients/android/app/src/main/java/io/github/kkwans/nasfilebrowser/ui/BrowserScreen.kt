@@ -38,7 +38,7 @@ import io.github.kkwans.nasfilebrowser.app.mediaKind
 @Composable internal fun BrowserScreen(model: ClientModel, state: ClientState) {
     val dark = MaterialTheme.colorScheme.background.luminance() < .5f
     val colors = MaterialTheme.colorScheme.copy(
-        primary = if (dark) Color(0xFFFF80A6) else Color(0xFFC63262),
+        primary = if (dark) Color(0xFF69A8FF) else Color(0xFF1767E8),
         background = if (dark) Color(0xFF141416) else Color.White,
         onBackground = if (dark) Color(0xFFF3F3F6) else Color(0xFF202023),
         surface = if (dark) Color(0xFF202023) else Color(0xFFF5F5F7),

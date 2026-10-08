@@ -255,14 +255,14 @@ import kotlin.math.abs
                 if (!canceled && failure == null && (!ready || !imageState.isImageDisplayedInFullQuality)) {
                     val progress = readProgress
                     if (progress != null && !fetched) {
-                        CircularProgressIndicator(progress = { progress }, modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color(0xFFFF80A6))
+                        CircularProgressIndicator(progress = { progress }, modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = Color(0xFF69A8FF))
                         Text("${(progress * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelSmall)
-                    } else CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFFFF80A6))
+                    } else CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color(0xFF69A8FF))
                 }
                 Text(message, Modifier.weight(1f, fill = false).padding(vertical = 12.dp), color = Color.White, style = MaterialTheme.typography.bodySmall)
-                if (failure != null || canceled) TextButton(onClick = { canceled = false; failure = null; attempt++ }) { Text("重试", color = Color(0xFFFF80A6)) }
-                else if (!ready) TextButton(onClick = { canceled = true }) { Text("取消读取", color = Color(0xFFFF80A6)) }
-                else if (quality != ImageQuality.ORIGINAL) TextButton(onClick = { originalRequested = true }) { Text("查看原图", color = Color(0xFFFF80A6)) }
+                if (failure != null || canceled) TextButton(onClick = { canceled = false; failure = null; attempt++ }) { Text("重试", color = Color(0xFF69A8FF)) }
+                else if (!ready) TextButton(onClick = { canceled = true }) { Text("取消读取", color = Color(0xFF69A8FF)) }
+                else if (quality != ImageQuality.ORIGINAL) TextButton(onClick = { originalRequested = true }) { Text("查看原图", color = Color(0xFF69A8FF)) }
                 else Spacer(Modifier.width(8.dp))
             }
         }
