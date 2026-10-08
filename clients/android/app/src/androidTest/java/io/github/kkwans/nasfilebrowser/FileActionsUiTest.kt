@@ -22,7 +22,8 @@ internal class FileActionsUiTest : LibraryUiHarness() {
             for (layout in FileLayout.entries) {
                 main { model.fileLayout(layout) }
                 withTimeout(5000) { model.state.first { it.fileLayout == layout } }
-                val menu = action("文件操作：${path.substringAfterLast('/')}")
+                var menu = action("文件操作：${path.substringAfterLast('/')}")
+                while (!menu.isClickable) menu = menu.parent ?: error("File action has no clickable owner")
                 assertTrue("The explicit menu must be an accessible click action", menu.isClickable)
                 assertTrue("The button must retain a 48dp target", menu.visibleBounds.width() >= (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt() - 2)
                 menu.click(); text("文件详情"); action("设置文件标签")

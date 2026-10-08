@@ -75,7 +75,8 @@ class DownloadImageTest {
             waitFor("download rows") { model.downloads.state.first { state -> owned.all { item -> state.items.any { it.id == item.id } } } }
             assertTrue(device.wait(Until.hasObject(By.text("本机下载")), 5000))
             assertTrue(device.wait(Until.hasObject(By.desc(owned.first().name + " 预览")), 5000))
-            val open = device.wait(Until.findObject(By.desc("打开下载：${owned.first().name}")), 5000) ?: error("Owned PNG open action missing")
+            var open = device.wait(Until.findObject(By.desc("打开下载：${owned.first().name}")), 5000) ?: error("Owned PNG open action missing")
+            while (!open.isClickable) open = open.parent ?: error("Owned PNG open action has no clickable owner")
             assertTrue(open.isClickable); open.click()
             waitFor("open PNG") { model.state.first { it.image?.downloadId == owned.first().id } }
             pixels(Color.rgb(41, 165, 212))
