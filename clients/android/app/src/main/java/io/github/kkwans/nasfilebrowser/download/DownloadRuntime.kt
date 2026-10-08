@@ -109,6 +109,7 @@ class DownloadRuntime private constructor(private val context: Context) {
                 if (bytes == record.expectedSize) {
                     destinations.complete(record)
                     dao.finish(id, record.generation, "completed", "", System.currentTimeMillis())
+                    runCatching { DownloadIndex.get(context).remove(record) }
                     return
                 }
             }
