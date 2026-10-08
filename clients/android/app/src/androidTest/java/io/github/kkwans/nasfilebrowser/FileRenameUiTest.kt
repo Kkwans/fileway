@@ -26,7 +26,7 @@ internal class FileRenameUiTest : LibraryUiHarness() {
         data.tags.put(JSONObject().put("id", "owned-tag").put("name", "测试标签").put("color", "#1767E8").put("paths", JSONArray().put(old)))
         fixture(data) { source ->
             source.favoriteRecords.put(JSONObject().put("id", "web-owned").put("name", "保留自定义收藏名").put("path", old).put("order", 0))
-            fileDetails(old.substringAfterLast('/')); action("重命名文件").click()
+            fileDetails(old.substringAfterLast('/')); action("更多文件操作").click(); action("重命名文件").click()
             fun input() = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000) ?: error("Missing name field")
             input().text = renamed.substringAfterLast('/')
             clickText("保存名称")
@@ -64,6 +64,7 @@ internal class FileRenameUiTest : LibraryUiHarness() {
         fixture(data) {
             assertFalse(model.state.value.permissions.rename)
             fileDetails("仅查看.png")
+            action("更多文件操作").click()
             assertTrue(device.wait(Until.gone(By.desc("重命名文件")), 5000))
             main { model.fileOperations.rename(model.state.value.files.single(), "不能保存.png") }
             withTimeout(5000) { model.fileOperations.state.first { !it.changing && it.error != null } }

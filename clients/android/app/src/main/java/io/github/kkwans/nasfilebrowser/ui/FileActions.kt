@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import io.github.kkwans.nasfilebrowser.data.renameNameError
+import io.github.kkwans.nasfilebrowser.data.FileTransferAction
 import io.github.kkwans.nasfilebrowser.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,19 +62,33 @@ import io.github.kkwans.nasfilebrowser.R
     var labeling by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     var moving by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     var renaming by remember(file.mediaKey, operations.scope) { mutableStateOf(false) }
+    var more by remember(file.mediaKey, operations.scope) { mutableStateOf(false) }
     val enabled = !trash.changing && !client.busy && !operations.changing
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         FavoriteFileAction(model, file, enabled)
         val count = tags.items.count { collectionPath(file.path) in it.paths }
         FileActionIcon(R.drawable.ic_tag, "设置文件标签", enabled && !tags.changing, count > 0) { labeling = true }
-        if (client.permissions.rename && file.path != "/") FileActionIcon(R.drawable.ic_edit, "重命名文件", enabled && !tags.changing && !favorites.changing) { renaming = true }
         if (!file.directory && client.permissions.download) FileActionIcon(R.drawable.ic_download, "下载到本机", enabled && !downloads.busy) {
             model.download(file)
             if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
         if (client.permissions.delete && file.path != "/") FileActionIcon(R.drawable.ic_trash, "移入回收站", enabled && !tags.changing) { moving = true }
+        if (file.path != "/" && (client.permissions.rename || client.permissions.create)) Box {
+            FileActionIcon(R.drawable.ic_more_vert, "更多文件操作", enabled && operations.transfer == null) { more = true }
+            DropdownMenu(more, { more = false }) {
+                if (client.permissions.rename) DropdownMenuItem({ Text("重命名") }, { more = false; renaming = true },
+                    enabled = !tags.changing && !favorites.changing, leadingIcon = { Icon(painterResource(R.drawable.ic_edit), null) },
+                    modifier = Modifier.semantics { contentDescription = "重命名文件" })
+                if (client.permissions.create) DropdownMenuItem({ Text("复制到…") }, {
+                    more = false; model.startFileTransfer(listOf(file), FileTransferAction.COPY, client.previewScope); onMoved()
+                }, leadingIcon = { Icon(painterResource(R.drawable.ic_copy), null) }, modifier = Modifier.semantics { contentDescription = "复制文件" })
+                if (client.permissions.create && client.permissions.rename) DropdownMenuItem({ Text("移动到…") }, {
+                    more = false; model.startFileTransfer(listOf(file), FileTransferAction.MOVE, client.previewScope); onMoved()
+                }, leadingIcon = { Icon(painterResource(R.drawable.ic_move), null) }, modifier = Modifier.semantics { contentDescription = "移动文件" })
+            }
+        }
         }
         favorites.error?.let { Row(verticalAlignment = Alignment.CenterVertically) {
             Text(it, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

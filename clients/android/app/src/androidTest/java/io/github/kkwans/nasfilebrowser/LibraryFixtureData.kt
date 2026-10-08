@@ -24,6 +24,9 @@ internal class LibraryFixtureData {
     var liveDirectoryListing = false
     @Volatile var rejectNextRename = false
     val renameAttempts = mutableListOf<String>()
+    @Volatile var rejectNextTransferStatus = 0
+    val transferAttempts = mutableListOf<JSONObject>()
+    private val transferJobs = linkedMapOf<String, JSONObject>()
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
         files[path] = JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
@@ -32,6 +35,33 @@ internal class LibraryFixtureData {
     fun task(id: String, type: String, status: String, title: String): JSONObject = JSONObject().put("id", id).put("userId", 1).put("ownerName", "one")
         .put("type", type).put("status", status).put("title", title).put("createdAt", System.currentTimeMillis()).put("totalItems", 100).put("processedItems", 35)
         .put("totalBytes", 0).put("processedBytes", 0)
+    private fun transferPath(value: String) = URLDecoder.decode(value.removePrefix("/files").replace("+", "%2B"), "UTF-8")
+    fun finishTransfers(favorites: JSONArray) = synchronized(this) {
+        for ((id, input) in transferJobs.toMap()) {
+            val task = row(tasks, id) ?: continue
+            if (task.getString("status") != "queued") continue
+            val moving = input.getString("action") == "move"
+            val entries = input.getJSONArray("items")
+            for (i in 0 until entries.length()) {
+                val item = entries.getJSONObject(i); val from = item.getString("from"); val to = item.getString("to")
+                fun changed(value: String) = value == from || value.startsWith("$from/")
+                val copied = files.filterKeys(::changed).map { (path, data) -> (to + path.removePrefix(from)) to JSONObject(data.toString()) }
+                if (moving) files.keys.toList().filter(::changed).forEach(files::remove)
+                if (item.optBoolean("overwrite")) files.keys.toList().filter { it == to || it.startsWith("$to/") }.forEach(files::remove)
+                for ((path, data) in copied) { data.put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/')); files[path] = data }
+                if (moving) {
+                    for (f in 0 until favorites.length()) favorites.getJSONObject(f).let { data ->
+                        val path = data.getString("path"); if (changed(path)) data.put("path", to + path.removePrefix(from))
+                    }
+                    for (t in 0 until tags.length()) tags.getJSONObject(t).getJSONArray("paths").let { paths ->
+                        for (p in 0 until paths.length()) { val path = paths.getString(p); if (changed(path)) paths.put(p, to + path.removePrefix(from)) }
+                    }
+                }
+            }
+            task.put("status", "completed").put("processedItems", entries.length()).put("processedBytes", task.optLong("totalBytes"))
+                .put("finishedAt", System.currentTimeMillis())
+        }
+    }
     private fun row(rows: JSONArray, id: String) = (0 until rows.length()).map { rows.getJSONObject(it) }.firstOrNull { it.getString("id") == id }
     private fun query(uri: URI) = uri.rawQuery.orEmpty().split('&').filter { it.contains('=') }.associate {
         URLDecoder.decode(it.substringBefore('='), "UTF-8") to URLDecoder.decode(it.substringAfter('='), "UTF-8")
@@ -68,6 +98,33 @@ internal class LibraryFixtureData {
                 result.put(JSONObject().put("path", name).put("status", if (value == null) 404 else 200).apply { if (value != null) put("item", value) })
             }
             reply(result.toString(), 200); return true
+        }
+        if (path == "/api/resources/transfer" && method == "POST") {
+            transferAttempts.add(JSONObject(input.toString()))
+            if (rejectNextTransferStatus != 0) { val status = rejectNextTransferStatus; rejectNextTransferStatus = 0; reply("{}", status); return true }
+            check(input.getString("action") in setOf("copy", "move"))
+            val requested = input.getJSONArray("items"); val normalized = JSONArray()
+            var totalBytes = 0L
+            for (i in 0 until requested.length()) {
+                val entry = JSONObject(requested.getJSONObject(i).toString())
+                val from = transferPath(entry.getString("from")); var to = transferPath(entry.getString("to"))
+                if (!files.containsKey(from)) { reply("{}", 404); return true }
+                if (from == to) { reply("{}", 400); return true }
+                if (files.containsKey(to)) {
+                    if (entry.optBoolean("rename")) {
+                        val dot = to.lastIndexOf('.').takeIf { it > to.lastIndexOf('/') } ?: to.length
+                        val base = to.substring(0, dot); val extension = to.substring(dot); var version = 1
+                        do { to = "$base(${version++})$extension" } while (files.containsKey(to))
+                    } else if (!entry.optBoolean("overwrite")) { reply("{}", 409); return true }
+                }
+                totalBytes += files.getValue(from).optLong("size")
+                normalized.put(entry.put("from", from).put("to", to))
+            }
+            val id = "transfer-${++sequence}"
+            val task = task(id, "file.${input.getString("action")}", "queued", "${if (input.getString("action") == "copy") "复制" else "移动"} ${requested.length()} 项")
+                .put("totalItems", requested.length()).put("processedItems", 0).put("totalBytes", totalBytes)
+            tasks.put(task); transferJobs[id] = JSONObject(input.toString()).put("items", normalized)
+            mutations.add(method to path); reply(task.toString(), 202); return true
         }
         if (path.startsWith("/api/resources/") && method == "GET" && uri.rawQuery == "metadata=1" && files.containsKey(path.removePrefix("/api/resources"))) {
             reply(files.getValue(path.removePrefix("/api/resources")).toString(), 200); return true

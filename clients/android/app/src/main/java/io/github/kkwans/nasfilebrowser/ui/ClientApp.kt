@@ -37,6 +37,7 @@ import java.util.Locale
     val activity = LocalActivity.current
     BackHandler(state.connected || state.image != null || state.selected != null || state.tab == "downloads") { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
+    if (state.connected) LibraryTheme { FileTransferSheet(model) }
     if (state.startupPending) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {

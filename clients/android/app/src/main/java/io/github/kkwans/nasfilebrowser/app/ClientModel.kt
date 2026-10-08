@@ -81,6 +81,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var networkJob: Job? = null
     private var networkPollJob: Job? = null
     private var networkActivated = false
+    private var transferRefresh: Job? = null
+    private var transferRefreshPending = false
     private var foreground = false
     private var context: SessionContext? = null
     private var lease = ""
@@ -112,11 +114,22 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
-    val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed)
+    val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished)
     val storageTools = StorageToolsController(viewModelScope) { context === it && generation == it.generation }
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
         viewModelScope.launch { search.state.collect { syncLibraryObservers() } }
+        viewModelScope.launch {
+            var watchedScope = ""
+            val terminal = linkedSetOf<String>()
+            tasks.state.collect { value ->
+                if (value.scope != watchedScope) { watchedScope = value.scope; terminal.clear() }
+                val finished = (value.items + listOfNotNull(value.selected)).filter { it.fileCategory && !it.active && it.id !in terminal }
+                terminal.addAll(finished.map { it.id }); while (terminal.size > 1024) terminal.remove(terminal.first())
+                val bound = context
+                if (bound != null && value.scope == bound.owner) finished.lastOrNull()?.let { resourceTransferFinished(bound, it) }
+            }
+        }
         viewModelScope.launch { downloads.state.collect { value ->
             localPlayback?.let { item -> mutable.value = mutable.value.copy(downloadBytesPerSecond = value.speeds[item.id]) }
         } }
@@ -251,11 +264,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         applyDirectory(bound.api.request("GET", "/api/resources$encoded"), path, wire, bound)
     }
     private suspend fun applyDirectory(data: JSONObject, path: String, wire: String, bound: SessionContext) {
-        val items = data.optJSONArray("items") ?: error("服务器返回了不支持的目录格式")
-        val files = (0 until items.length()).map { index ->
-            val item = items.getJSONObject(index)
-            ResourceRef(item.optString("path"), item.optString("wirePath"), item.optString("name"), item.optBoolean("isDir"), item.optString("type"), item.optLong("size"), item.optString("modified"))
-        }.sortedWith(compareByDescending<ResourceRef> { it.directory }.thenBy { it.name.lowercase() })
+        val files = directoryFiles(data)
         if (generation == bound.generation && context == bound) {
             store.saveDirectory(bound.account, path, wire)
             if (generation == bound.generation && context == bound) {
@@ -263,6 +272,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 mutable.value = mutable.value.copy(busy = false, stage = "", path = path, wirePath = wire, files = files, error = null)
             }
         }
+    }
+    private fun directoryFiles(data: JSONObject): List<ResourceRef> {
+        val items = data.optJSONArray("items") ?: error("服务器返回了不支持的目录格式")
+        return (0 until items.length()).map { index ->
+            val item = items.getJSONObject(index)
+            ResourceRef(item.optString("path"), item.optString("wirePath"), item.optString("name"), item.optBoolean("isDir"), item.optString("type"), item.optLong("size"), item.optString("modified"))
+        }.sortedWith(compareByDescending<ResourceRef> { it.directory }.thenBy { it.name.lowercase() })
     }
 
     fun directoryItems(): List<ResourceRef> = mutable.value.let { presentFiles(it.files, it.fileCategory, it.fileOrder).filter { file -> tags.matches(file.path) } }
@@ -302,6 +318,22 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun downloadFiles(files: List<ResourceRef>, onCreated: (ResourceRef) -> Unit = {}) {
         val bound = context ?: return
         downloads.enqueueAll(bound, files.toList(), { context === bound && generation == bound.generation }, onCreated)
+    }
+    fun startFileTransfer(files: List<ResourceRef>, action: FileTransferAction, sourceScope: String) {
+        val current = mutable.value
+        if (!current.connected || current.busy || trash.state.value.changing || current.previewScope != sourceScope) return
+        fileOperations.startTransfer(files, action, DirectoryCrumb("当前目录", current.path, current.wirePath))
+    }
+    fun showFileTask(id: String? = null) {
+        if (mutable.value.image != null) closeImage()
+        if (mutable.value.selected != null) leavePlayer()
+        librarySection(LibrarySection.TASKS)
+        tasks.filter(TaskFilter(category = "file"))
+        id?.let(tasks::select)
+    }
+    fun openTransferDestination() {
+        val target = fileOperations.state.value.lastDestination ?: return
+        if (target.path == mutable.value.path) retry() else openRemotePath(target.path)
     }
     private fun downloadRef(item: DownloadRecord) = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
     fun openDownload(item: DownloadRecord) {
@@ -645,6 +677,39 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
+        fileOperations.setVisible(foreground && mutable.value.connected)
+        refreshTransferDirectoryIfVisible()
+    }
+    private fun resourceTransferFinished(bound: SessionContext, task: ServerTask, sources: List<ResourceRef> = emptyList()) {
+        if (context !== bound || generation != bound.generation || !task.fileCategory) return
+        favorites.refresh(replaceRead = true); tags.refresh(replaceRead = true)
+        if (task.type == "file.move" && task.status == "completed") mutable.value.image?.let { image ->
+            val imageWire = image.wirePath.ifEmpty { SearchResult.encodePath(image.path) }
+            if (sources.any { val wire = it.wirePath.ifEmpty { SearchResult.encodePath(it.path) }; wire == imageWire || it.directory && imageWire.startsWith(wire.trimEnd('/') + "/") }) closeImage()
+        }
+        transferRefreshPending = true
+        refreshTransferDirectoryIfVisible()
+    }
+    private fun refreshTransferDirectoryIfVisible() {
+        val bound = context ?: return
+        val current = mutable.value
+        if (!transferRefreshPending || transferRefresh?.isActive == true || !foreground || !current.connected || current.busy ||
+            current.selected != null || current.image != null || current.tab != "files") return
+        transferRefreshPending = false
+        transferRefresh = viewModelScope.launch {
+            try {
+                val files = directoryFiles(bound.api.request("GET", "/api/resources${current.wirePath.ifEmpty { SearchResult.encodePath(current.path) }}"))
+                val after = mutable.value
+                if (context === bound && generation == bound.generation && after.path == current.path && after.wirePath == current.wirePath &&
+                    !after.busy && after.selected == null && after.image == null) mutable.value = after.copy(files = files)
+                else if (context === bound) transferRefreshPending = true
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (context === bound) mutable.value = mutable.value.copy(notice = "文件任务状态已更新，目录刷新失败，请刷新查看实际结果")
+            } finally {
+                if (context === bound) { transferRefresh = null; if (transferRefreshPending) refreshTransferDirectoryIfVisible() }
+            }
+        }
     }
     private fun resourceTrashed(bound: SessionContext, file: ResourceRef) {
         if (context !== bound) return
@@ -811,6 +876,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun closeSession() {
+        transferRefresh?.cancel(); transferRefresh = null; transferRefreshPending = false
         pendingDirectory = null
         mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false
         previewImageLoader.memoryCache?.clear()
