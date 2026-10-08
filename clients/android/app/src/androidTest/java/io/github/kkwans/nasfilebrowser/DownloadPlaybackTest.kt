@@ -1,6 +1,7 @@
 package io.github.kkwans.nasfilebrowser
 
 import android.net.Uri
+import android.content.Intent
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -37,7 +38,11 @@ class DownloadPlaybackTest {
         val target = DownloadTarget(context)
         var saved: DownloadRecord? = null
         lateinit var model: ClientModel
-        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        lateinit var launchIntent: Intent
+        activity.scenario.onActivity {
+            model = ViewModelProvider(it)[ClientModel::class.java]
+            launchIntent = Intent(it.intent)
+        }
         suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
         suspend fun waitFor(stage: String, predicate: () -> Boolean) {
             try { withTimeout(20_000) { while (!predicate()) delay(100) } }
@@ -94,9 +99,18 @@ class DownloadPlaybackTest {
             DownloadNotice.notification(context, complete).contentIntent.send()
             withTimeout(5000) { model.state.first { it.tab == "downloads" && it.selected == null && it.image == null } }
             assertTrue(device.wait(Until.hasObject(By.text("本机下载")), 5000))
+            activity.scenario.onActivity {
+                assertSame("Notification must reuse the original page/model", model, ViewModelProvider(it)[ClientModel::class.java])
+                assertFalse("Notification navigation must be consumed", it.intent.hasExtra("open_downloads"))
+            }
             OwnedUiTraceRule.trace("notification-navigation-confirmed")
         } finally {
             withContext(NonCancellable) {
+                // ActivityScenario matches lifecycle callbacks by launch Intent
+                // action/categories. onNewIntent legitimately replaces that Intent;
+                // restore only the harness identity after all notification assertions
+                // so close() observes the real DESTROYED callback instead of ignoring it.
+                activity.scenario.onActivity { it.intent = launchIntent }
                 main { model.leavePlayer(); model.disconnect() }
                 saved?.let { item ->
                     DownloadScheduler.pause(context, item.id); DownloadRuntime.get(context).awaitStopped(item.id)
