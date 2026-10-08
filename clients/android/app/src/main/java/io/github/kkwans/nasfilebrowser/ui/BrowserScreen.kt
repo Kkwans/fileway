@@ -2,6 +2,8 @@ package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -25,6 +27,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.ClientModel
@@ -52,6 +58,16 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
     LaunchedEffect(tags.scope) { if (tags.scope.isNotEmpty()) model.tags.refresh() }
     val displayed = remember(state.files, state.fileCategory, state.fileOrder, tags.items, tags.filterId, tags.globalFilter) { model.directoryItems() }
     var details by remember(state.wirePath) { mutableStateOf<ResourceRef?>(null) }
+    var selecting by remember(state.previewScope, state.wirePath) { mutableStateOf(false) }
+    var selected by remember(state.previewScope, state.wirePath) { mutableStateOf(emptySet<String>()) }
+    fun key(file: ResourceRef) = file.wirePath.ifEmpty { file.path }
+    val shownKeys = displayed.map(::key).toSet()
+    LaunchedEffect(shownKeys) { selected = selected.intersect(shownKeys) }
+    val chosen = displayed.filter { key(it) in selected }
+    val downloads by model.downloads.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    BackHandler(selecting) { selecting = false; selected = emptySet() }
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "files") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
@@ -68,8 +84,26 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
                 if (state.path != "/") DirectoryBreadcrumbs(state.path, state.wirePath, state.busy, { model.back() }, model::jumpDirectory)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     FileCategoryMenu(state.fileCategory, !state.busy, model::fileCategory)
+                    if (!selecting) TextButton({ selecting = true; selected = emptySet() }, enabled = !state.busy && displayed.isNotEmpty()) { Text("多选") }
                     Spacer(Modifier.weight(1f))
                     FileOrderMenu(state.fileOrder, !state.busy, model::fileOrder)
+                }
+                if (selecting) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("已选 ${chosen.size} 项", Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.bodyMedium)
+                        TextButton({ selected = if (selected == shownKeys) emptySet() else shownKeys }, enabled = !downloads.busy && !state.busy) { Text(if (selected == shownKeys) "全不选" else "全选") }
+                        TextButton({ selected = shownKeys - selected }, enabled = !downloads.busy && !state.busy) { Text("反选") }
+                        FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !downloads.busy && chosen.isNotEmpty() && chosen.none { it.directory } && state.permissions.download) {
+                            model.downloadFiles(chosen) { file -> selected = selected - key(file) }
+                            if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                                notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        FileActionIcon(R.drawable.ic_arrow_back, "退出多选", true) { selecting = false; selected = emptySet() }
+                    }
+                    if (chosen.any { it.directory }) Text("文件夹暂不支持批量下载，请只选择文件", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                    if (downloads.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    (downloads.error ?: downloads.notice)?.let { Text(it, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,
+                        color = if (downloads.error != null) colors.error else colors.onSurfaceVariant) }
                 }
                 state.error?.let { message ->
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -94,7 +128,10 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
                     }
                 } else FileCollection(displayed, layout, Modifier.weight(1f), layout.collectionDescription(),
                     resetKey = listOf(state.previewScope, state.wirePath, state.fileCategory, state.fileOrder), keyOf = { it.wirePath.ifEmpty { it.path } }) { file ->
-                    FileEntry(model, file, layout, !state.busy, { model.open(file) }, { details = file })
+                    FileEntry(model, file, layout, !state.busy && (!selecting || !downloads.busy), {
+                        if (selecting) selected = if (key(file) in selected) selected - key(file) else selected + key(file)
+                        else model.open(file)
+                    }, { details = file }, selected = if (selecting) key(file) in selected else null)
                 }
             }
         }
@@ -105,12 +142,12 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
 /** Shared file card for directory and verified search results. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun FileEntry(model: ClientModel, file: ResourceRef, layout: FileLayout, enabled: Boolean,
-    open: () -> Unit, details: () -> Unit, location: String? = null, metadata: @Composable (() -> Unit)? = null) {
+    open: () -> Unit, details: () -> Unit, location: String? = null, metadata: @Composable (() -> Unit)? = null, selected: Boolean? = null) {
     val colors = MaterialTheme.colorScheme
     val tags by model.tags.state.collectAsStateWithLifecycle()
     val associated = if (file.downloadId.isNotEmpty()) emptyList() else tags.items.filter { collectionPath(file.path) in it.paths }
-    val action = Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open,
-        onLongClick = details, onLongClickLabel = "查看完整名称与路径")
+    val action = if (selected != null) Modifier.toggleable(selected, enabled = enabled, role = Role.Checkbox) { open() }
+        else Modifier.combinedClickable(enabled = enabled, role = Role.Button, onClick = open, onLongClick = details, onLongClickLabel = "查看完整名称与路径")
     @Composable fun more() {
         IconButton(onClick = details, enabled = enabled, modifier = Modifier.size(48.dp).semantics { contentDescription = "文件操作：${file.name}" }) {
             Icon(painterResource(R.drawable.ic_more_vert), null, Modifier.size(24.dp), tint = colors.onBackground)
@@ -178,7 +215,7 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
         }
     }
     Surface(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).then(action),
-        shape = RoundedCornerShape(10.dp), color = colors.background) {
+        shape = RoundedCornerShape(10.dp), color = colors.background, border = if (selected == true) BorderStroke(2.dp, colors.primary) else null) {
         Column {
         when (layout) {
             FileLayout.COVER -> Column(Modifier.fillMaxWidth()) {
@@ -200,7 +237,7 @@ import io.github.kkwans.nasfilebrowser.data.collectionPath
             }
             FileLayout.LIST -> Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                artwork(Modifier.size(44.dp)); caption(Modifier.weight(1f)); more()
+                artwork(Modifier.size(44.dp)); caption(Modifier.weight(1f)); if (selected == null) more()
             }
         }
         labels()

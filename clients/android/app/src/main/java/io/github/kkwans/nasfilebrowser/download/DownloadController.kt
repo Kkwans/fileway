@@ -67,9 +67,29 @@ class DownloadController(private val context: Context, private val scope: Corout
         withContext(Dispatchers.IO) { target.reauthorizeTree(record.treeUri, uri) }
         "原目录授权已恢复；文件和默认目录保持不变，可重新打开或继续下载"
     }
-    fun enqueue(binding: SessionContext, file: ResourceRef, current: () -> Boolean) = perform {
-        require(!file.directory && file.downloadId.isEmpty()) { "请选择服务器上的文件" }
+    fun enqueue(binding: SessionContext, file: ResourceRef, current: () -> Boolean) = enqueueAll(binding, listOf(file), current)
+    fun enqueueAll(binding: SessionContext, files: List<ResourceRef>, current: () -> Boolean, onCreated: (ResourceRef) -> Unit = {}) = perform {
+        val snapshot = files.distinctBy { it.wirePath.ifEmpty { it.path } }
+        require(snapshot.isNotEmpty() && snapshot.all { !it.directory && it.downloadId.isEmpty() }) { "请选择服务器上的文件，暂不支持文件夹批量下载" }
+        check(current()) { "下载来源已切换" }
         check(binding.api.permissions().download) { "当前账号没有下载权限" }
+        var created = 0
+        for (file in snapshot) {
+            try {
+                addDownload(binding, file, current) {
+                    created++
+                    if (current()) onCreated(file)
+                    mutable.value = mutable.value.copy(notice = "已建立 $created / ${snapshot.size} 项下载任务")
+                }
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                throw IllegalStateException("已建立 $created / ${snapshot.size} 项任务；${file.name}：${failure.message ?: "添加失败"}。已有任务可在下载页查看或继续。", failure)
+            }
+        }
+        "已添加 $created 项下载，可在本机下载中查看"
+    }
+    private suspend fun addDownload(binding: SessionContext, file: ResourceRef, current: () -> Boolean, created: () -> Unit) {
+        check(current()) { "下载来源已切换" }
         val wire = file.wirePath.ifEmpty { SearchResult.encodePath(file.path) }
         val info = binding.api.request("GET", "/api/resources$wire?metadata=1")
         check(current() && !info.getBoolean("isDir")) { "下载来源已切换或文件已变化" }
@@ -86,7 +106,7 @@ class DownloadController(private val context: Context, private val scope: Corout
         }
         try { DownloadScheduler.start(context, record) }
         catch (failure: Exception) { dao.command(record.id, "failed", now); throw failure }
-        "下载已提交，可在本机下载中查看"
+        finally { created() }
     }
     fun resume(record: DownloadRecord) = perform {
         val current = dao.get(record.id) ?: error("下载记录不存在")

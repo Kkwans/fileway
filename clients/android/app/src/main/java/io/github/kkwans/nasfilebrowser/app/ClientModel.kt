@@ -297,6 +297,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val bound = context ?: return
         downloads.enqueue(bound, file) { context === bound && generation == bound.generation }
     }
+    fun downloadFiles(files: List<ResourceRef>, onCreated: (ResourceRef) -> Unit = {}) {
+        val bound = context ?: return
+        downloads.enqueueAll(bound, files.toList(), { context === bound && generation == bound.generation }, onCreated)
+    }
     private fun downloadRef(item: DownloadRecord) = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
     fun openDownload(item: DownloadRecord) {
         val file = downloadRef(item)
