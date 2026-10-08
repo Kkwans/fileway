@@ -20,7 +20,8 @@ internal class FileActionsUiTest : LibraryUiHarness() {
         val data = LibraryFixtureData(); val path = "/中文 #? %.png"
         data.file(path)
         data.tags.put(JSONObject().put("id", "tag-owned").put("name", "本次测试").put("color", "#3F72D8").put("paths", JSONArray()))
-        fixture(data) {
+        fixture(data) { source ->
+            source.favoriteGroups.put(JSONObject().put("id", "owned-group").put("name", "常用").put("order", 0).put("color", "#3F72D8"))
             for (layout in FileLayout.entries) {
                 main { model.fileLayout(layout) }
                 withTimeout(5000) { model.state.first { it.fileLayout == layout } }
@@ -34,7 +35,7 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                     menu.click()
                 } else {
                     assertTrue("Preview layouts must not have per-file buttons", device.wait(Until.gone(By.desc(label)), 5000))
-                    text(path.substringAfterLast('/')).longClick()
+                    fileDetails(path.substringAfterLast('/'))
                 }
                 text("文件详情")
                 val toolbar = listOf("加入收藏", "设置文件标签", "下载到本机", "移入回收站").map { action(it).visibleBounds }
@@ -53,7 +54,12 @@ internal class FileActionsUiTest : LibraryUiHarness() {
                     }
                 }
             }
-            text(path.substringAfterLast('/')).longClick(); text("文件详情")
+            fileDetails(path.substringAfterLast('/'))
+            action("加入收藏").click(); text("常用").click()
+            capture("file-favorite-picker")
+            text("保存收藏").click()
+            withTimeout(5000) { model.favorites.state.first { !it.changing && it.items.singleOrNull()?.groupId == "owned-group" } }
+            action("取消收藏")
             action("设置文件标签").click(); text("本次测试").click()
             capture("file-tag-picker-colors")
             text("保存标记").click()
