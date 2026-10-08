@@ -28,6 +28,14 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.UUID
+import io.github.kkwans.nasfilebrowser.data.ClientDatabase
+import io.github.kkwans.nasfilebrowser.data.CredentialVault
+import io.github.kkwans.nasfilebrowser.data.ProfileStore
+import io.github.kkwans.nasfilebrowser.download.DownloadRecord
+import io.github.kkwans.nasfilebrowser.download.DownloadTarget
+import io.github.kkwans.nasfilebrowser.download.DownloadDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSpec
 
 /** Explicit real-source diagnostic. No Room, credential file or history writer.
  * The token arrives only over an ADB-forwarded local socket and remains in memory.
@@ -78,6 +86,60 @@ class RealNasMediaTest {
             inspect(host.viewport)
         }
         return count
+    }
+    @ExternalNetworkAcceptance
+    @Test fun downloadedPrefixOfRealMovieProducesFirstFrame(): Unit = runBlocking {
+        require(Build.DEVICE == "houji" && InstrumentationRegistry.getArguments().getString("nfbRealMedia") == "true")
+        val config = configuration()
+        val context = instrumentation.targetContext
+        val database = ClientDatabase.get(context)
+        val store = ProfileStore(database, CredentialVault(context))
+        val profile = store.save(ServerProfile(name = "Owned real download probe", address = config.getString("baseUrl")))
+        val token = config.getString("token"); config.remove("token")
+        val session = NasSession.restore(profile, token, NasSession.parseIdentity(token).id)
+        val target = DownloadTarget(context)
+        var owned: DownloadRecord? = null
+        var player: NativePlayer? = null
+        try {
+            val path = config.getString("path"); val wire = config.getString("wirePath")
+            val meta = session.request("GET", "/api/resources$wire?metadata=1")
+            val size = meta.getLong("size"); check(size == config.getLong("size"))
+            val account = store.saveLogin(profile, session.identity.id, session.identity.username, session.token())
+            val id = UUID.randomUUID().toString(); val prefix = minOf(16L * 1024 * 1024, size / 4)
+            val record = DownloadRecord(id, database.downloads().lastJobId() + 1, account.key, profile.id, profile.sourceRevision,
+                path, wire, "fileway-owned-real-prefix-$id.mkv", "video", size, meta.optString("modified"), "$size/${meta.optString("modified")}",
+                "Owned real prefix", "", status = "paused", downloaded = prefix, createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis())
+            val uri = target.allocate(record); owned = record.copy(localUri = uri.toString())
+            val lease = session.lease(path, wire)
+            withContext(Dispatchers.IO) {
+                val input = DefaultHttpDataSource.Factory().createDataSource()
+                try {
+                    input.open(DataSpec.Builder().setUri(lease).setLength(prefix).build())
+                    context.contentResolver.openOutputStream(uri, "w")!!.use { output ->
+                        val buffer = ByteArray(128 * 1024); var left = prefix
+                        while (left > 0) { val n = input.read(buffer, 0, minOf(left, buffer.size.toLong()).toInt()); check(n > 0); output.write(buffer, 0, n); left -= n }
+                    }
+                } finally { input.close() }
+            }
+            database.downloads().insert(requireNotNull(owned))
+            val started = SystemClock.elapsedRealtime()
+            activity.scenario.onActivity { host ->
+                val view = PlayerViewport(host); host.viewport.addView(view, FrameLayout.LayoutParams(-1, -1))
+                player = NativePlayer(host).also { it.attach(view); it.open("fileway-download://$id/probe.mkv", dataSourceFactory = DownloadDataSource.Factory(context)) }
+            }
+            val native = requireNotNull(player)
+            try { withTimeout(20_000) { native.state.first { it.firstFrameRendered && it.playing && it.positionMs > 300 } } }
+            finally {
+                val state = native.state.value
+                instrumentation.addResults(Bundle().apply { putString("filewayPartialDownload", JSONObject()
+                    .put("prefixBytes", prefix).put("totalBytes", size).put("elapsedMs", SystemClock.elapsedRealtime() - started)
+                    .put("firstFrame", state.firstFrameRendered).put("positionMs", state.positionMs).put("durationMs", state.durationMs).put("phase", state.phase).toString()) })
+            }
+        } finally { withContext(NonCancellable) {
+            main { player?.release() }
+            owned?.let { target.delete(it); database.downloads().removeRecord(it.id) }
+            session.close(); store.remove(profile)
+        } }
     }
     @ExternalNetworkAcceptance
     @Test fun directNasMovieRendersEveryEmbeddedPgsTrack(): Unit = runBlocking {

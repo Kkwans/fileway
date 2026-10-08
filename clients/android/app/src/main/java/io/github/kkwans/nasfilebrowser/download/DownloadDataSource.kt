@@ -23,20 +23,31 @@ class DownloadDataSource(private val context: Context, private val database: Cli
     private var position = 0L
     private var remaining = 0L
     private var opened = false
+    private var firstRead = false
+    private fun trace(stage: String) {
+        if (io.github.kkwans.nasfilebrowser.BuildConfig.DEBUG) android.util.Log.d("FilewayDownloadRead",
+            "${android.os.SystemClock.elapsedRealtime()} reader=${System.identityHashCode(this)} $stage")
+    }
     override fun open(dataSpec: DataSpec): Long {
+        trace("open position=${dataSpec.position} length=${dataSpec.length}")
         transferInitializing(dataSpec)
         val id = dataSpec.uri.host ?: throw IOException("下载标识无效")
         val item = runBlocking(Dispatchers.IO) { database.downloads().get(id) } ?: throw IOException("下载记录不存在")
+        trace("record prefix=${item.downloaded} size=${item.expectedSize} status=${item.status}")
         check(item.localUri.isNotEmpty()) { "文件仍在准备，请稍后打开" }
         if (dataSpec.position > item.expectedSize) throw DataSourceException( androidx.media3.common.PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE)
         spec = dataSpec; record = item; position = dataSpec.position
         remaining = if (dataSpec.length == C.LENGTH_UNSET.toLong()) item.expectedSize - position else minOf(dataSpec.length, item.expectedSize - position)
         try {
+            trace("local-open-start")
             local = context.contentResolver.openFileDescriptor(Uri.parse(item.localUri), "r")
+            trace("local-open-ready")
             file = local?.let { android.os.ParcelFileDescriptor.AutoCloseInputStream(it) }
             file?.channel?.position(position)
         } catch (_: IOException) { runCatching { file?.close() }; file = null; runCatching { local?.close() }; local = null }
         opened = true; transferStarted(dataSpec)
+        firstRead = true
+        trace("opened remaining=$remaining local=${file != null}")
         return remaining
     }
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -50,15 +61,19 @@ class DownloadDataSource(private val context: Context, private val database: Cli
             if (latest != null) { item = latest; record = latest; prefix = if (latest.complete) latest.expectedSize else DownloadRuntime.get(context).prefix(latest) }
         }
         val input = file
+        if (firstRead) { firstRead = false; trace("first-read position=$position prefix=$prefix local=${input != null}") }
         if (input != null && position < prefix && network == null) {
             val count = input.read(buffer, offset, minOf(allowed.toLong(), prefix - position).toInt())
             if (count > 0) { position += count; remaining -= count; bytesTransferred(count); return count }
         }
         if (item.complete) throw IOException("本机文件未完整读取，请检查文件是否被移动或修改")
         if (network == null) {
+            trace("remote-source-start position=$position remaining=$remaining")
             access = runBlocking(Dispatchers.IO) { DownloadRuntime.get(context).source(item) }
+            trace("remote-source-ready")
             network = DefaultHttpDataSource.Factory().setConnectTimeoutMs(15_000).setReadTimeoutMs(30_000).createDataSource().also { source ->
                 source.open(DataSpec.Builder().setUri(access!!.url).setPosition(position).setLength(remaining).build())
+                trace("remote-open-ready")
             }
         }
         val count = network!!.read(buffer, offset, allowed)
