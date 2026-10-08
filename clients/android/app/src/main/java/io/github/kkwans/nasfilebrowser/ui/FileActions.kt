@@ -85,11 +85,12 @@ import androidx.compose.ui.platform.LocalContext
         } catch (failure: Exception) { if (failure is kotlinx.coroutines.CancellationException) throw failure; error = failure.message ?: "标签读取失败，请重试" }
         finally { loading = false }
     }
-    AlertDialog(onDismissRequest = dismiss, title = { Text("文件标签") }, text = {
+    AlertDialog(onDismissRequest = { if (!state.changing) dismiss() }, title = { Text("文件标签") }, text = {
         Column {
             Text(file.name, style = MaterialTheme.typography.bodyLarge)
             if (loading || state.changing) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp))
             error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton({ attempt++ }) { Text("重试") } }
+            if (error == null) state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             LazyColumn(Modifier.heightIn(max = 360.dp)) {
                 if (state.items.isEmpty() && !loading) item { Text("还没有标签，可先新建一个。", Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 items(state.items, key = { it.id }) { tag -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -101,7 +102,7 @@ import androidx.compose.ui.platform.LocalContext
             }
             TextButton({ creating = true }, enabled = !loading && !state.changing) { Text("新建标签") }
         }
-    }, confirmButton = { TextButton({ model.tags.assign(file, baseline.orEmpty(), selected); dismiss() }, enabled = baseline != null && !loading && error == null && !state.changing) { Text("保存标记") } },
-        dismissButton = { TextButton(dismiss) { Text("取消") } })
+    }, confirmButton = { TextButton({ model.tags.assign(file, baseline.orEmpty(), selected, onSaved = dismiss) }, enabled = baseline != null && !loading && error == null && !state.changing) { Text(if (state.changing) "正在保存" else "保存标记") } },
+        dismissButton = { TextButton(dismiss, enabled = !state.changing) { Text("取消") } })
     if (creating) TagEditor(model, null, { creating = false })
 }

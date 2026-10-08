@@ -56,7 +56,7 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
         return taggedPathMatches(path, tag.paths, value.globalFilter)
     }
     fun colorAvailable(color: String, except: String? = null) = mutable.value.items.none { it.id != except && it.color.trim().equals(color.trim(), true) }
-    private fun change(notice: String, action: suspend (SessionContext) -> Unit) {
+    private fun change(notice: String, onSaved: () -> Unit = {}, action: suspend (SessionContext) -> Unit) {
         val context = bound ?: return
         if (!current(context) || mutable.value.changing) return
         readJob?.cancel(); pathJob?.cancel(); pathEpoch++; readEpoch++
@@ -64,7 +64,7 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
         writeJob = scope.launch {
             try {
                 action(context); val rows = read(context)
-                if (current(context)) { apply(rows); mutable.value = mutable.value.copy(notice = notice) }
+                if (current(context)) { apply(rows); mutable.value = mutable.value.copy(notice = notice); onSaved() }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 // A multi-label save can partly succeed. Re-read the authority
@@ -92,7 +92,7 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
     fun removePath(tag: ServerTag, path: String) = change("已取消此路径的标签") {
         it.api.action("DELETE", "/api/tags/${android.net.Uri.encode(tag.id)}/paths", JSONObject().put("path", path))
     }
-    fun assign(file: ResourceRef, baseline: Set<String>, desired: Set<String>) = change("文件标签已更新") { context ->
+    fun assign(file: ResourceRef, baseline: Set<String>, desired: Set<String>, onSaved: () -> Unit = {}) = change("文件标签已更新", onSaved) { context ->
         require(!file.path.contains('\uFFFD') || (file.wirePath.isNotEmpty() && file.wirePath == SearchResult.encodePath(file.path))) {
             "这个文件名的原始字节无法通过当前标签接口表达，请使用其他文件"
         }

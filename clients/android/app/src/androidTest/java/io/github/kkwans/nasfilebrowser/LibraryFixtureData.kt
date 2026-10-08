@@ -16,6 +16,7 @@ internal class LibraryFixtureData {
     val snapshots = mutableMapOf<String, Pair<String, String>>()
     val reports = linkedMapOf<String, JSONObject>()
     var conflictOnce = false
+    @Volatile var rejectNextTagWrite = false
     private var sequence = 0
     fun file(path: String, directory: Boolean = false) {
         files[path] = JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
@@ -60,6 +61,11 @@ internal class LibraryFixtureData {
             reply(files.getValue(path.removePrefix("/api/resources")).toString(), 200); return true
         }
         if (path.startsWith("/api/tags")) {
+            if (method != "GET" && rejectNextTagWrite) {
+                rejectNextTagWrite = false
+                reply("{\"error\":\"本次标记保存失败，请重试\"}", 503)
+                return true
+            }
             if (method != "GET") mutations.add(method to path)
             if (path == "/api/tags") {
                 if (method == "GET") reply(tags.toString(), 200)

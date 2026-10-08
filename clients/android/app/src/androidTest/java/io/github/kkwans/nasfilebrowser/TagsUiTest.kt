@@ -19,7 +19,14 @@ internal class TagsUiTest : LibraryUiHarness() {
         data.tags.put(JSONObject().put("id", "tag-photo").put("name", "照片").put("color", "#E5484D").put("paths", JSONArray()))
         fixture(data) {
             fileDetails(path.substringAfterLast('/'))
-            action("设置文件标签").click(); text("电影").click(); text("照片").click(); text("保存标记").click()
+            action("设置文件标签").click(); text("电影").click(); text("照片").click()
+            data.rejectNextTagWrite = true
+            text("保存标记").click()
+            val failed = withTimeout(5000) { model.tags.state.first { !it.changing && it.error != null } }
+            text("文件标签"); text(requireNotNull(failed.error))
+            assertTrue("Failed save must not mutate server tags", data.mutations.isEmpty())
+            // Retry without selecting the tags again: failed saves retain user intent.
+            text("保存标记").click()
             withTimeout(5000) { model.tags.state.first { !it.changing && it.items.count { tag -> path in tag.paths } == 2 } }
             assertTrue(data.mutations.contains("POST" to "/api/tags/tag-movie/paths"))
             assertTrue(data.mutations.contains("POST" to "/api/tags/tag-photo/paths"))
