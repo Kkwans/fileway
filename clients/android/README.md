@@ -4,7 +4,7 @@ Native Android client for Fileway's Linux/Windows servers. Windows desktop is
 planned as a later delivery in this same repository.
 
 Android 10+ / arm64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
-and an embedded Go/tsnet transport. The published 0.5 preview uses this native
+and an embedded Go/tsnet transport. The published 0.6 preview uses this native
 playback chain; hardware HDR, audible continuity and long-play acceptance remain open.
 
 ## Status
@@ -16,29 +16,33 @@ plans and device-specific test evidence are maintained outside this repository.
 
 ## Install the UI preview
 
-[Android 0.5.0 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.5.0-1b709c4/fileway-android-0.5.0-preview.apk)
+[Android 0.6.0 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.6.0-0c3ed02/fileway-android-0.6.0-preview.apk)
 
-Includes Media3/FFmpeg/libass playback, subtitle time offset and text appearance,
-local/NAS external subtitles, audio-track confirmation, decoder selection, image/video
-queues, image zoom and paging, player gestures and locks, loading progress and transfer
-speed, file filters and ordering, and the 栖卷 name and blue layered storage icon.
-Server favorites/groups, tags, trash, task center and storage tools reuse Web APIs.
-Local downloads save actual files to Download/fileway or a selected SAF directory;
-videos can read missing ranges while downloading and play offline after completion.
-VersionCode 7 keeps the original package and certificate for covering upgrades.
-Source `1b709c4d2a1b1a5e2ffaf0a41653eb6611db39d1`.
+0.6 fixes large multi-track PGS subtitle caching, persists renewed login tokens,
+and adds an explicit encrypted keep-login option. It also adds SAMI multilingual
+subtitle support, local downloaded-image previews, original download-directory
+reauthorization, discoverable file actions in all five layouts, resilient library
+editors, and updated bright-blue connection/player layouts.
 
-This is a signed debug preview. Build/lint/unit/package checks and selected Xiaomi
-media/UI tests passed, including an automatic covering install with the same key.
-Those results do not certify every media format, actual HDR output, audible switching
-continuity, long-play performance or full API35/API37 regression. Room5→6 migration,
-cancellation generation and offline reads passed owned API35 tests. Xiaomi14 passed
-download-page controls, missing-range playback/seek, resumed file content verification
-and continued offline playback/seek after closing the source service.
-An earlier download-control run failed to start; later unchanged product code passed.
-Tag long-press intermittency, broader image/SAF/file-manager coverage and real NAS/Web
-mutations remain open. See the scoped [preview acceptance and recovery](docs/preview-0.5.md)
-and [release assets with native corresponding sources](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.5.0-1b709c4).
+The Media3/FFmpeg/libass chain, media queues, server favorites/tags/trash, task and
+storage tools, actual downloads and missing-range playback remain from 0.5.
+VersionCode 8 preserves the original package, signing certificate and Room6 data.
+Source `0c3ed02bdc6b622d6c6c343d3f11e94a958d12f2`.
+
+This is a signed debug preview. Build/lint/unit/package checks passed. Scoped
+Xiaomi14 checks cover an original NAS movie's eight PGS tracks, 17 isolated
+login/storage cases (including native HTTP renewal and reopening), native playback,
+and downloaded-prefix/offline playback. These checks do not certify every format,
+actual HDR, audible continuity, long-play performance or full API35/API37 acceptance.
+Full CI still has failures, and the connection-form automation's first expand action
+remains unresolved despite independent ADB touch working. Keep those limits separate
+from verified feature results. See [0.6 scope and recovery](docs/preview-0.6.md) and
+[release assets with corresponding native sources](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.6.0-0c3ed02).
+
+Cover-install; do not uninstall or clear personal data. Legacy accounts with expired
+JWTs and no saved password need one successful login with keep-login enabled.
+The native binary payload is unchanged from 0.5. Personal-device installation of
+the numbered 0.6 package is tracked separately from the pre-release test-package checks.
 
 Preview releases follow product significance: substantial feature groups advance the
 minor version (0.4, 0.5); important fixes advance the patch version (0.4.1, 0.4.2).
