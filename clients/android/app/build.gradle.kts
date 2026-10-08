@@ -10,6 +10,9 @@ plugins {
 // libVLC is retained only by the reference instrumentation harness.
 val vlcProbeVersion = providers.gradleProperty("filewayVlcProbeVersion").orNull
 require(vlcProbeVersion == null || vlcProbeVersion == "3.7.7") { "Only the pinned libVLC 3.7.7 comparison is supported" }
+val audioCaptureOption = providers.gradleProperty("filewayAudioCaptureProbe").orElse("false").get()
+require(audioCaptureOption in listOf("true", "false")) { "filewayAudioCaptureProbe must be true or false" }
+val audioCaptureProbe = audioCaptureOption == "true"
 android {
     namespace = "io.github.kkwans.nasfilebrowser"
     compileSdk = 37
@@ -33,6 +36,11 @@ android {
     }
     buildFeatures { compose = true; buildConfig = true }
     sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    if (audioCaptureProbe) {
+        sourceSets.getByName("debug").manifest.srcFile("src/audioCaptureProbe/AndroidManifest.xml")
+        sourceSets.getByName("debug").kotlin.srcDir("src/audioCaptureProbe/java")
+        sourceSets.getByName("androidTest").kotlin.srcDir("src/audioCaptureProbeTest/java")
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -45,6 +53,7 @@ android {
             buildConfigField("boolean", "NATIVE_VERBOSE", nativeVerbose)
             if (nativeVerbose == "true") versionNameSuffix = "-native-diagnostic"
             if (vlcProbeVersion != null) versionNameSuffix = (versionNameSuffix ?: "") + "-vlc-3.7.7-comparison"
+            if (audioCaptureProbe) versionNameSuffix = (versionNameSuffix ?: "") + "-audio-diagnostic"
         }
         release {
             isMinifyEnabled = true
