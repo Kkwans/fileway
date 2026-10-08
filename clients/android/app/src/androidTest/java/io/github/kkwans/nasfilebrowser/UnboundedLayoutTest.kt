@@ -89,7 +89,11 @@ class UnboundedLayoutTest {
                 val fourth = device.wait(Until.findObject(By.clazz("android.widget.TextView").text("第四.png")), 5000) ?: error("Fourth item missing")
                 assertEquals("Short cards should continue in the shorter column", short.visibleBounds.left, third.visibleBounds.left)
                 assertEquals("Waterfall must not wait for a tall neighboring filename", short.visibleBounds.left, fourth.visibleBounds.left)
-                assertTrue(fourth.visibleBounds.top < title.visibleBounds.bottom)
+                val fourthPreview = device.findObject(By.desc("第四.png 预览")) ?: error("Fourth preview missing")
+                // The next card starts with its image. Its caption can extend
+                // below the long neighbour even when masonry placement is correct.
+                assertTrue("Fourth card must start before the tall neighbour ends: preview=${fourthPreview.visibleBounds}, title=${title.visibleBounds}",
+                    fourthPreview.visibleBounds.top < title.visibleBounds.bottom)
             }
             device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
             device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/unbounded-full-$variant.png")
