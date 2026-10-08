@@ -214,23 +214,88 @@ class NativeAudioOutputTest {
                         stage = "subtitle-$marker"
                         reposition()
                         val id = if (marker == "off") -1 else native.state.value.subtitles.single { it.id >= 0 && it.title.contains(marker) }.id
+                        val before = native.state.value
                         lastAction = System.nanoTime(); val requested = SystemClock.elapsedRealtime()
                         main { native.subtitle(id) }
                         delay(1200)
                         val value = tone(220, lastAction)
                         observations.put(record(stage, value, SystemClock.elapsedRealtime() - requested))
                         assertTrue("Subtitle change interrupted actual audio output: $value", value.maximumSilentMs <= 40)
+                        assertEquals(id, native.state.value.selectedSubtitle)
+                        assertNull(native.state.value.pendingSubtitle)
+                        assertNull(native.state.value.operationError)
+                        assertEquals(before.mediaGeneration, native.state.value.mediaGeneration)
+                        assertTrue(native.state.value.playing && native.state.value.positionMs >= before.positionMs - 250)
                     }
                     for (rate in listOf(1.5f, .75f, 1f)) {
                         stage = "rate-$rate"
                         reposition()
+                        val before = native.state.value
                         lastAction = System.nanoTime(); val requested = SystemClock.elapsedRealtime()
                         main { native.rate(rate) }
                         delay(1200)
                         val value = tone(220, lastAction)
                         observations.put(record(stage, value, SystemClock.elapsedRealtime() - requested))
                         assertTrue("Rate change interrupted actual audio output: $value", value.maximumSilentMs <= 40)
+                        assertEquals(rate, native.state.value.rate, .001f)
+                        assertEquals(before.mediaGeneration, native.state.value.mediaGeneration)
+                        assertTrue(native.state.value.playing && native.state.value.positionMs >= before.positionMs - 250)
                     }
+                    fun audioId(marker: String) = native.state.value.audio.single { it.id >= 0 && it.title.contains(marker) }.id
+                    fun subtitleId(marker: String) = native.state.value.subtitles.single { it.id >= 0 && it.title.contains(marker) }.id
+                    val generation = native.state.value.mediaGeneration
+                    for ((index, choice) in listOf("AAC" to 440, "Opus" to 880, "TrueHD" to 220).withIndex()) {
+                        stage = "combined-last-request-$index"
+                        val wantedAudio = audioId(choice.first)
+                        val wantedSubtitle = if (index == 2) -1 else subtitleId(if (index == 0) "NFB PGS1" else "NFB ASS Attachment")
+                        val wantedRate = listOf(1.25f, .75f, 1f)[index]
+                        lastAction = System.nanoTime(); val requested = SystemClock.elapsedRealtime()
+                        main {
+                            native.audio(audioId("FLAC")); native.subtitle(subtitleId("NFB Text")); native.rate(1.5f)
+                            native.audio(audioId("TrueHD")); native.subtitle(-1); native.rate(.5f)
+                            native.audio(wantedAudio); native.subtitle(wantedSubtitle); native.rate(wantedRate); native.seek(4000)
+                        }
+                        withTimeout(3000) { native.state.first {
+                            it.playing && !it.waitingForBuffer && it.positionMs >= 3800 &&
+                                it.selectedAudio == wantedAudio && it.selectedSubtitle == wantedSubtitle &&
+                                it.pendingAudio == null && it.pendingSubtitle == null
+                        } }
+                        val value = tone(choice.second, lastAction, 3000)
+                        val elapsed = SystemClock.elapsedRealtime() - requested
+                        assertTrue("Combined command output must recover within 3s", elapsed <= 3000)
+                        assertEquals(wantedRate, native.state.value.rate, .001f)
+                        assertEquals(generation, native.state.value.mediaGeneration)
+                        assertNull(native.state.value.operationError)
+                        observations.put(record(stage, value, elapsed))
+                    }
+                    stage = "paused-combined-commands"
+                    main { native.pause() }
+                    withTimeout(3000) { native.state.first { !it.playing } }
+                    delay(250) // Let the pre-pause output drain before observing paused commands.
+                    lastAction = System.nanoTime()
+                    val pausedAudio = audioId("AAC"); val pausedSubtitle = subtitleId("NFB Text")
+                    main { native.audio(pausedAudio); native.subtitle(pausedSubtitle); native.rate(2f); native.seek(6000) }
+                    withTimeout(3000) { native.state.first {
+                        it.selectedAudio == pausedAudio && it.selectedSubtitle == pausedSubtitle &&
+                            it.pendingAudio == null && it.pendingSubtitle == null && it.positionMs >= 5800
+                    } }
+                    val pausedPosition = native.state.value.positionMs
+                    delay(1000)
+                    val pausedOutput = meter.snapshot(lastAction)
+                    assertTrue("Paused audio observation must contain valid capture frames", pausedOutput.frames >= 9600 && pausedOutput.maximumReadGapMs <= 250)
+                    assertTrue("Paused commands must not emit sound", meter.timeline(lastAction).all { it.rms < .001 })
+                    assertFalse(native.state.value.playing)
+                    assertTrue("Paused position must stay fixed", abs(native.state.value.positionMs - pausedPosition) <= 100)
+                    assertEquals(2f, native.state.value.rate, .001f)
+                    assertEquals(generation, native.state.value.mediaGeneration)
+                    observations.put(record(stage, pausedOutput, ((System.nanoTime() - lastAction) / 1_000_000)))
+                    stage = "explicit-resume-after-combined-commands"
+                    lastAction = System.nanoTime(); val resumedAt = SystemClock.elapsedRealtime()
+                    main { native.toggle() }
+                    val resumedOutput = tone(440, lastAction, 3000)
+                    assertTrue(native.state.value.playing)
+                    assertEquals(generation, native.state.value.mediaGeneration)
+                    observations.put(record(stage, resumedOutput, SystemClock.elapsedRealtime() - resumedAt))
                     assertEquals(0, source.unexpected.get())
                 } catch (failure: Throwable) {
                     // Preserve output/player evidence before stop() clears the engine state and audio policy.
