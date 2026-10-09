@@ -250,7 +250,9 @@ func (f favoritesBackend) SaveGroup(group *favorites.FavoriteGroup) error {
 }
 
 func (f favoritesBackend) UpdateGroup(group *favorites.FavoriteGroup) error {
-	return f.db.Update(newFavoriteGroupRecord(group))
+	return mutateMetadataRecord[FavoriteGroup](f.db, group.ID, func(record *FavoriteGroup) {
+		*record = *newFavoriteGroupRecord(group)
+	})
 }
 
 func (f favoritesBackend) DeleteGroup(id string) error {

@@ -9,6 +9,53 @@ import (
 	"github.com/asdine/storm/v3"
 )
 
+func TestFavoriteGroupZeroOrderAndClearedColorSurviveReopen(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "group-order.db")
+	func() {
+		db, err := storm.Open(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		backend := favoritesBackend{db: db}
+		storage := favorites.NewStorage(backend)
+		for index, id := range []string{"a", "b", "c"} {
+			if err := backend.SaveGroup(&favorites.FavoriteGroup{ID: id, UserID: 7, Name: id, Order: index, Color: "#3388ff"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := storage.ReorderGroups(7, []string{"c", "a", "b"}); err != nil {
+			t.Fatal(err)
+		}
+		empty := ""
+		if _, err := storage.UpdateGroupFields(7, "c", nil, &empty); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	db, err := storm.Open(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	groups, err := favorites.NewStorage(favoritesBackend{db: db}).GetAllGroups(7)
+	if err != nil || len(groups) != 3 {
+		t.Fatalf("reopened groups=%v err=%v", groups, err)
+	}
+	byID := make(map[string]*favorites.FavoriteGroup)
+	for _, group := range groups {
+		byID[group.ID] = group
+	}
+	for index, expected := range []string{"c", "a", "b"} {
+		group := byID[expected]
+		if group == nil || group.Order != index || group.Name != expected {
+			t.Fatalf("group %s=%+v want order=%d", expected, group, index)
+		}
+	}
+	if byID["c"].Color != "" || byID["a"].Color != "#3388ff" {
+		t.Fatalf("cleared color not preserved or unrelated group changed: %+v", groups)
+	}
+}
+
 func TestFavoritesBackendClaimsLegacyRecordOnMutation(t *testing.T) {
 	db, err := storm.Open(filepath.Join(t.TempDir(), "favorites.db"))
 	if err != nil {
