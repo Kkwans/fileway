@@ -39,10 +39,13 @@ import androidx.media3.common.MediaLibraryInfo
 import android.media.AudioManager
 import kotlin.math.roundToInt
 import java.io.Closeable
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
@@ -390,6 +393,100 @@ class NativePlaybackTest {
         }
     }
 
+    private suspend fun fixtureReply(source: Fixture, method: String, endpoint: String, body: String? = null): Pair<Int, String> =
+        withContext(Dispatchers.IO) {
+            val connection = URL(source.url + endpoint).openConnection() as HttpURLConnection
+            connection.connectTimeout = 3000; connection.readTimeout = 3000; connection.instanceFollowRedirects = false
+            connection.requestMethod = method; connection.setRequestProperty("X-Auth", "owned-fixture")
+            try {
+                body?.toByteArray(Charsets.UTF_8)?.let { bytes ->
+                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    connection.doOutput = true; connection.setFixedLengthStreamingMode(bytes.size)
+                    connection.outputStream.use { it.write(bytes) }
+                }
+                val status = connection.responseCode
+                val stream = if (status >= 400) connection.errorStream else connection.inputStream
+                status to (stream?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty())
+            } finally { connection.disconnect() }
+        }
+
+    @Test fun mediaFixtureRecentRecordsCanonicalOwnedPathsAndReturnsOrderedReadBack(): Unit = runBlocking {
+        val name = "片段 +%?#.mkv"; val path = "/资料/$name"; val wire = SearchResult.encodePath(path)
+        Fixture(byteArrayOf(1, 2, 3), videos = listOf("资料/$name", "literal%2F.mkv"), directories = listOf("资料")).use { source ->
+            val metadata = fixtureReply(source, "GET", "/api/resources$wire?metadata=1")
+            assertEquals(200, metadata.first)
+            assertEquals(wire, JSONObject(metadata.second).getString("wirePath"))
+            suspend fun record(body: JSONObject): RecentAccessEntry {
+                val reply = fixtureReply(source, "POST", "/api/recent", body.toString())
+                assertEquals(reply.second, 200, reply.first)
+                return parseRecentAccessEntry(JSONObject(reply.second))
+            }
+            val first = record(JSONObject().put("path", path).put("wirePath", wire))
+            assertEquals(path, first.path); assertEquals(wire, first.wirePath); assertEquals(name, first.name)
+            assertFalse(first.isDir); assertTrue(first.openable)
+            val root = record(JSONObject().put("wirePath", "/"))
+            assertTrue(root.isDir); assertEquals("/", root.path); assertEquals("我的文件", root.name)
+            val directory = record(JSONObject().put("path", "/资料"))
+            assertTrue(directory.isDir); assertEquals("资料", directory.name)
+            val all = fixtureReply(source, "GET", "/api/recent?limit=$RECENT_ACCESS_LIMIT")
+            assertEquals(200, all.first)
+            assertEquals(listOf(directory.path, root.path, first.path), parseRecentAccess(JSONArray(all.second)).map { it.path })
+            val alias = Regex("%[0-9A-F]{2}").replace(wire) { it.value.lowercase() }
+            val again = record(JSONObject().put("wirePath", alias))
+            assertEquals(first.id, again.id); assertEquals(wire, again.wirePath); assertTrue(again.accessedAt > first.accessedAt)
+            val limited = fixtureReply(source, "GET", "/api/recent?limit=1")
+            assertEquals(200, limited.first)
+            assertEquals(listOf(first.path), parseRecentAccess(JSONArray(limited.second)).map { it.path })
+            val literal = record(JSONObject().put("path", "/literal%2F.mkv"))
+            assertEquals("/literal%252F.mkv", literal.wirePath)
+            assertEquals(literal.id, record(JSONObject().put("wirePath", literal.wirePath)).id)
+            val latest = fixtureReply(source, "GET", "/api/recent")
+            assertEquals(200, latest.first)
+            assertEquals(4, parseRecentAccess(JSONArray(latest.second)).size)
+            assertEquals(0, source.unexpected.get())
+        }
+        Fixture(byteArrayOf(1), videos = listOf(name)).use { source ->
+            val listing = fixtureReply(source, "GET", "/api/resources/")
+            assertEquals(200, listing.first)
+            val item = JSONObject(listing.second).getJSONArray("items").getJSONObject(0)
+            val target = recentAccessRecordTarget(ResourceRef(item.getString("path"), item.getString("wirePath"), name, false, "video", 1))
+            assertEquals(SearchResult.encodePath("/$name"), target.wirePath)
+            assertEquals(0, source.unexpected.get())
+        }
+    }
+
+    @Test fun mediaFixtureRecentRejectsInvalidRequestsAndKeepsUnknownEndpointGuards(): Unit = runBlocking {
+        Fixture(byteArrayOf(1, 2, 3)).use { source ->
+            val invalid = listOf(
+                Triple("PUT", "/api/recent", 405), Triple("DELETE", "/api/recent", 405),
+                Triple("GET", "/api/recent?limit=0", 400), Triple("GET", "/api/recent?limit=no", 400),
+                Triple("GET", "/api/recent?cursor=next", 400), Triple("POST", "/api/recent?limit=1", 400),
+            )
+            invalid.forEach { (method, endpoint, status) -> assertEquals(status, fixtureReply(source, method, endpoint).first) }
+            val rejectedBodies = listOf(
+                JSONObject().put("wirePath", "/missing.mkv").toString() to 404,
+                JSONObject().put("path", "/missing.mkv").toString() to 404,
+                JSONObject().put("path", "/other.mkv").put("wirePath", "/fixture.mkv").toString() to 400,
+                JSONObject().put("wirePath", "/%2Ffixture.mkv").toString() to 400,
+                JSONObject().put("wirePath", "/../fixture.mkv").toString() to 400,
+                JSONObject().put("wirePath", "/fixture.mkv?other=1").toString() to 400,
+                JSONObject().put("wirePath", 123).toString() to 400,
+                JSONObject().put("path", JSONObject.NULL).toString() to 400,
+                "{}" to 400,
+                JSONObject().put("wirePath", "").toString() to 400,
+                "{" to 400,
+            )
+            rejectedBodies.forEach { (body, status) -> assertEquals(status, fixtureReply(source, "POST", "/api/recent", body).first) }
+            val rejected = invalid.size + rejectedBodies.size
+            assertEquals("Invalid recent traffic must remain visible to existing media guards", rejected, source.unexpected.get())
+            assertEquals(0, JSONArray(fixtureReply(source, "GET", "/api/recent?limit=100").second).length())
+            listOf("/api/media/hls?path=/fixture.mkv", "/api/media/transcode?path=/fixture.mkv", "/api/recent/export").forEach { endpoint ->
+                assertEquals(404, fixtureReply(source, "GET", endpoint).first)
+            }
+            assertEquals(rejected + 3, source.unexpected.get())
+        }
+    }
+
     internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap(),
         private val videos: List<String> = listOf("fixture.mkv"), private val download: Boolean = false,
         private val directories: List<String> = emptyList()) : Closeable {
@@ -408,6 +505,57 @@ class NativePlaybackTest {
         @Volatile var position = 3.0
         @Volatile var identity = "fixture-v1"
         @Volatile private var updated = 1L
+        private val recentResources = buildList {
+            add(ResourceRef("/", "/", "我的文件", true, "", 0))
+            directories.forEach { name -> add(ResourceRef("/$name", SearchResult.encodePath("/$name"), name.substringAfterLast('/'), true, "", 0)) }
+            (videos + subtitles.keys).forEach { name -> add(ResourceRef("/$name", SearchResult.encodePath("/$name"), name.substringAfterLast('/'), false, "", 0)) }
+        }.associateBy { recentAccessWireIdentity(recentAccessRecordTarget(it).wirePath) }
+        private val recentEntries = linkedMapOf<String, RecentAccessEntry>()
+        private var recentSequence = 0L
+        private var recentTime = 0L
+        private fun recentRow(entry: RecentAccessEntry): JSONObject = JSONObject().put("id", entry.id).put("path", entry.path)
+            .put("wirePath", entry.wirePath).put("name", entry.name).put("isDir", entry.isDir)
+            .put("accessedAt", entry.accessedAt).put("pathVerified", true).also { parseRecentAccessEntry(it) }
+        /** Recognized requests still require fixture-owned byte identity; rejections keep the media traffic guard red. */
+        private fun recentReply(method: String, endpoint: String, body: String): Pair<Int, String> {
+            try {
+                val uri = java.net.URI(endpoint)
+                require(uri.rawPath == "/api/recent" && uri.rawFragment == null)
+                if (method == "GET") {
+                    require(body.isEmpty())
+                    val limit = if (uri.rawQuery.isNullOrEmpty()) RECENT_ACCESS_LIMIT else {
+                        val raw = requireNotNull(Regex("limit=([0-9]+)").matchEntire(uri.rawQuery)).groupValues[1]
+                        requireNotNull(raw.toLongOrNull()).also { require(it > 0) }.coerceAtMost(RECENT_ACCESS_LIMIT.toLong()).toInt()
+                    }
+                    val rows = synchronized(recentEntries) {
+                        recentEntries.values.sortedWith(compareByDescending<RecentAccessEntry> { it.accessedAt }.thenByDescending { it.id })
+                            .take(limit).map(::recentRow)
+                    }
+                    return 200 to JSONArray(rows).toString()
+                }
+                if (method != "POST") return 405 to "{}"
+                require(uri.rawQuery == null)
+                val data = JSONObject(body)
+                require(data.keys().asSequence().all { it in setOf("path", "wirePath") })
+                fun field(name: String): String = if (!data.has(name)) "" else (data.get(name) as? String ?: error("Invalid recent field"))
+                val wire = field("wirePath"); val suppliedPath = field("path")
+                require(wire.isNotEmpty() || suppliedPath.isNotEmpty())
+                val fromWire = if (wire.isEmpty()) null else recentResources[recentAccessWireIdentity(wire)]
+                val path = suppliedPath.ifEmpty { fromWire?.path ?: return 404 to "{}" }
+                val target = recentAccessRecordTarget(ResourceRef(path, wire, "Owned recent request", false, "", 0))
+                val key = recentAccessWireIdentity(target.wirePath)
+                val resource = recentResources[key] ?: return 404 to "{}"
+                require(target.path == resource.path)
+                return synchronized(recentEntries) {
+                    recentTime = maxOf(System.currentTimeMillis(), recentTime + 1)
+                    val entry = RecentAccessEntry(recentEntries[key]?.id ?: "fixture-recent-${++recentSequence}",
+                        resource.path, resource.wirePath, resource.name, resource.directory, recentTime)
+                    val row = recentRow(entry)
+                    recentEntries[key] = entry
+                    200 to row.toString()
+                }
+            } catch (_: Exception) { return 400 to "{}" }
+        }
         private val acceptor = Thread({
             while (!server.isClosed) {
                 val socket = try { server.accept() } catch (_: Exception) { break }
@@ -418,18 +566,30 @@ class NativePlaybackTest {
         val url = "http://127.0.0.1:${server.localPort}"
         private fun serve(socket: Socket) {
             socket.soTimeout = 15_000
-            val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
-            val request = (reader.readLine() ?: return).split(' ')
+            val input = socket.getInputStream().buffered()
+            fun line(): String? {
+                val bytes = ByteArrayOutputStream()
+                while (true) {
+                    val value = input.read()
+                    if (value < 0) return if (bytes.size() == 0) null else error("Incomplete fixture HTTP header")
+                    if (value == 10) return bytes.toString("UTF-8").removeSuffix("\r")
+                    check(bytes.size() < 8192); bytes.write(value)
+                }
+            }
+            val request = (line() ?: return).split(' ')
             val endpoint = request[1]
             val headers = mutableMapOf<String, String>()
             while (true) {
-                val line = reader.readLine() ?: return
-                if (line.isEmpty()) break
-                headers[line.substringBefore(':').lowercase()] = line.substringAfter(':').trim()
+                val header = line() ?: return
+                if (header.isEmpty()) break
+                headers[header.substringBefore(':').lowercase()] = header.substringAfter(':').trim()
             }
-            val body = CharArray(headers["content-length"]?.toIntOrNull() ?: 0)
+            // Content-Length counts bytes. A character reader deadlocks on literal UTF-8 JSON paths.
+            val length = headers["content-length"]?.toIntOrNull() ?: 0
+            check(length in 0..65_536)
+            val body = ByteArray(length)
             var count = 0
-            while (count < body.size) { val size = reader.read(body, count, body.size - count); if (size < 0) return; count += size }
+            while (count < body.size) { val size = input.read(body, count, body.size - count); if (size < 0) return; count += size }
             fun send(bytes: ByteArray, type: String = "application/json", status: Int = 200, extra: String = "") {
                 socket.getOutputStream().apply {
                     write("HTTP/1.1 $status OK\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n$extra\r\n".toByteArray(Charsets.US_ASCII))
@@ -446,6 +606,11 @@ class NativePlaybackTest {
                     send(token.toByteArray(), "text/plain")
                 }
                 endpoint == "/api/tags" -> send("[]".toByteArray())
+                endpoint.substringBefore('?') == "/api/recent" -> {
+                    val (status, json) = recentReply(request[0], endpoint, body.toString(Charsets.UTF_8))
+                    if (status != 200) unexpected.incrementAndGet()
+                    send(json.toByteArray(Charsets.UTF_8), status = status)
+                }
                 directories.isNotEmpty() && endpoint.startsWith("/api/resources/") -> {
                     val uri = java.net.URI(endpoint)
                     val path = uri.path.removePrefix("/api/resources").trimEnd('/').ifEmpty { "/" }
@@ -465,7 +630,7 @@ class NativePlaybackTest {
                 }
                 endpoint == "/api/resources/" -> {
                     val items = JSONArray()
-                    videos.forEach { name -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name")
+                    videos.forEach { name -> items.put(JSONObject().put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
                         .put("name", if (name == "fixture.mkv") "Native playback fixture.mkv" else name).put("type", "video").put("size", media.size)) }
                     subtitles.forEach { (name, bytes) -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name").put("name", name).put("size", bytes.size)) }
                     send(JSONObject().put("items", items).toString().toByteArray())
