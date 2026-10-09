@@ -3,12 +3,12 @@ package fbhttp
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"github.com/Kkwans/nas-file-browser/backend/users"
-	"github.com/spf13/afero"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/Kkwans/nas-file-browser/backend/users"
+	"github.com/spf13/afero"
 )
 
 func TestBatchWireAcknowledgesEveryInputIncludingMissingResources(t *testing.T) {
@@ -65,7 +65,7 @@ func TestBatchWireLimitMismatchAndNoContentRead(t *testing.T) {
 		}
 	}
 	if counted.opens != 0 {
-		t.Fatal(fmt.Sprintf("metadata read %d file bodies", counted.opens))
+		t.Fatalf("metadata read %d file bodies", counted.opens)
 	}
 }
 

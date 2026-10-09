@@ -16,7 +16,11 @@ func TestFavoriteGroupZeroOrderAndClearedColorSurviveReopen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer db.Close()
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
 		backend := favoritesBackend{db: db}
 		storage := favorites.NewStorage(backend)
 		for index, id := range []string{"a", "b", "c"} {
@@ -36,7 +40,11 @@ func TestFavoriteGroupZeroOrderAndClearedColorSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	groups, err := favorites.NewStorage(favoritesBackend{db: db}).GetAllGroups(7)
 	if err != nil || len(groups) != 3 {
 		t.Fatalf("reopened groups=%v err=%v", groups, err)

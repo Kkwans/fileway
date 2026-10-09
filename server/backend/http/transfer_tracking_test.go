@@ -16,6 +16,20 @@ import (
 	"github.com/spf13/afero"
 )
 
+// Control replies and normal Range bodies must reach EOF without transport
+// errors. Deliberately canceled streams below use separate cleanup semantics.
+func drainTransferTestResponse(t *testing.T, response *http.Response) {
+	t.Helper()
+	_, readErr := io.Copy(io.Discard, response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
 func TestCancelUploadStopsBodyAndKeepsTusPart(t *testing.T) {
 	for _, tus := range []bool{false, true} {
 		t.Run(fmt.Sprintf("tus=%v", tus), func(t *testing.T) {
@@ -39,8 +53,10 @@ func TestCancelUploadStopsBodyAndKeepsTusPart(t *testing.T) {
 			}))
 			defer server.Close()
 			reader, writer := io.Pipe()
-			defer reader.Close()
-			defer writer.Close()
+			// Teardown intentionally interrupts the blocked upload pipe; the
+			// stream termination and retained TUS bytes are asserted below.
+			defer func() { _ = reader.Close() }()
+			defer func() { _ = writer.Close() }()
 			request, _ := http.NewRequest(method, server.URL+target+"?transfer="+id, reader)
 			request.ContentLength = 8
 			request.Header.Set("X-Auth", signedTrashHTTPToken(t, 1))
@@ -56,8 +72,10 @@ func TestCancelUploadStopsBodyAndKeepsTusPart(t *testing.T) {
 				defer close(done)
 				response, err := client.Do(request)
 				if err == nil {
-					io.Copy(io.Discard, response.Body)
-					response.Body.Close()
+					// Cancellation may truncate this upload response. The test
+					// checks done, actual bytes and the server's terminal state.
+					_, _ = io.Copy(io.Discard, response.Body)
+					_ = response.Body.Close()
 				}
 			}()
 			if _, err := writer.Write([]byte("abcd")); err != nil {
@@ -85,8 +103,7 @@ func TestCancelUploadStopsBodyAndKeepsTusPart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			io.Copy(io.Discard, response.Body)
-			response.Body.Close()
+			drainTransferTestResponse(t, response)
 			if response.StatusCode != http.StatusAccepted {
 				t.Fatal("cancel was not accepted", response.StatusCode)
 			}
@@ -101,7 +118,9 @@ func TestCancelUploadStopsBodyAndKeepsTusPart(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			writer.Close()
+			// Release the request producer after server-side cancellation;
+			// the pipe may already have been closed by the HTTP transport.
+			_ = writer.Close()
 			select {
 			case <-done:
 			case <-time.After(2 * time.Second):
@@ -162,9 +181,12 @@ func TestRawTransferPartialResponsesDoNotCompleteWholeFile(t *testing.T) {
 				t.Fatal(err)
 			}
 			body, err := io.ReadAll(response.Body)
-			response.Body.Close()
+			closeErr := response.Body.Close()
 			if err != nil {
 				t.Fatal(err)
+			}
+			if closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			<-done
 			item, err := h.storage.Transfers.Get(owner.ID, "partial-owned", false)
@@ -203,8 +225,7 @@ func TestRawTransferConfirmsFullResponseAndContiguousResume(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.Copy(io.Discard, response.Body)
-		response.Body.Close()
+		drainTransferTestResponse(t, response)
 		<-finished
 		return response
 	}
@@ -257,7 +278,9 @@ func TestCancelRawTransferStopsRealHTTPStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	// This body is deliberately cut short; Close is cleanup, while the
+	// received byte count and canceled terminal state are the assertions.
+	defer func() { _ = response.Body.Close() }()
 	prefix := make([]byte, 1024)
 	if _, err := io.ReadFull(response.Body, prefix); err != nil {
 		t.Fatal(err)
@@ -272,11 +295,11 @@ func TestCancelRawTransferStopsRealHTTPStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.Copy(io.Discard, ack.Body)
-	ack.Body.Close()
+	drainTransferTestResponse(t, ack)
 	if ack.StatusCode != http.StatusAccepted {
 		t.Fatal("cancel status", ack.StatusCode)
 	}
+	// A read error is expected when cancellation breaks the live stream.
 	remaining, _ := io.Copy(io.Discard, response.Body)
 	if remaining+int64(len(prefix)) >= int64(len(payload)) {
 		t.Fatal("cancel only changed history; entire HTTP stream continued")

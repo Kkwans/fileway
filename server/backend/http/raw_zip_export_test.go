@@ -51,9 +51,12 @@ func TestRawZIPWireSelectionKeepsCommaLiteralPercentAndSingleFile(t *testing.T) 
 				t.Fatal(err)
 			}
 			content, err := io.ReadAll(file)
-			_ = file.Close()
+			closeErr := file.Close()
 			if err != nil {
 				t.Fatal(err)
+			}
+			if closeErr != nil {
+				t.Fatal(closeErr)
 			}
 			seen[entry.Name] = string(content)
 		}
@@ -116,7 +119,11 @@ func TestZIPSourceFailureCannotEmitValidEndRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	failure := &zipStreamFailure{}
 	reader := &zipSourceReader{File: file, expected: 20, failure: failure}
 	if _, err := io.ReadAll(reader); err != io.ErrUnexpectedEOF {

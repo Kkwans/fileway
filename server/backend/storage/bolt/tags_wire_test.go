@@ -2,11 +2,12 @@ package bolt
 
 import (
 	"fmt"
-	"github.com/Kkwans/nas-file-browser/backend/tags"
-	"github.com/asdine/storm/v3"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/Kkwans/nas-file-browser/backend/tags"
+	"github.com/asdine/storm/v3"
 )
 
 func TestTagReferencesKeepPrivateBytesAndProvenanceAfterReopen(t *testing.T) {
@@ -26,7 +27,11 @@ func TestTagReferencesKeepPrivateBytesAndProvenanceAfterReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	loaded, err := (tagsBackend{db}).GetByID(7, "owned")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +48,11 @@ func TestConcurrentTagReferencesKeepEveryOriginalByteIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	store := tags.NewStorage(tagsBackend{db})
 	tag, err := store.Create(7, "Owned tag", "#123456")
 	if err != nil {
