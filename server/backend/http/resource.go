@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/spf13/afero"
@@ -327,9 +328,15 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 func resourcePatchHandler(fileCache FileCache) handleFunc {
 	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 		src := r.URL.Path
-		dst := r.URL.Query().Get("destination")
+		query := r.URL.Query()
+		if query.Has("destinationWirePath") && query.Get("destinationWirePath") == "" {
+			return http.StatusBadRequest, fmt.Errorf("目标原始路径不能为空")
+		}
+		dst, err := resourceOperationPath(query.Get("destination"), query.Get("destinationWirePath"), false)
+		if err != nil {
+			return http.StatusBadRequest, fmt.Errorf("目标路径无效: %w", err)
+		}
 		action := r.URL.Query().Get("action")
-		dst = normalizeResourcePath(dst)
 		src = normalizeResourcePath(src)
 		if !d.Check(src) || !d.Check(dst) {
 			return http.StatusForbidden, fmt.Errorf("没有权限执行此操作")
@@ -338,7 +345,7 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 			return http.StatusForbidden, fmt.Errorf("没有权限执行此操作")
 		}
 
-		err := checkParent(src, dst)
+		err = checkParent(src, dst)
 		if err != nil {
 			return http.StatusBadRequest, err
 		}
@@ -368,9 +375,10 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 			return patchAction(r.Context(), action, src, dst, d, fileCache)
 		}, action, src, dst, d.user)
 		if err == nil && action == "rename" {
-			w.Header().Set("X-Resource-Destination", url.PathEscape(dst))
+			w.Header().Set("X-Resource-Destination", url.PathEscape(files.DisplayPath(dst)))
 		}
 		if err == nil {
+			w.Header().Set("X-Resource-Destination-WirePath", files.EncodeWirePath(dst))
 			recordHistory(d, "file."+action, dst, src, history.StatusSuccess)
 		}
 
@@ -383,6 +391,78 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 // instead of turning them into a different path through a second decode.
 func normalizeResourcePath(value string) string {
 	return path.Clean("/" + value)
+}
+
+// Operation wire identities are decoded once. Reject dot traversal before the
+// shared decoder cleans it; backslash filenames retain the existing OS policy
+// enforced by data.Check (legal on Linux, rejected on Windows).
+func decodeOperationWirePath(wire string) (string, error) {
+	for _, segment := range strings.Split(wire, "/") {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil || decoded == "." || decoded == ".." {
+			return "", fmt.Errorf("原始路径编码无效或包含遍历")
+		}
+	}
+	return decodeResourceWirePath(wire)
+}
+
+func literalOperationPath(value string) (string, error) {
+	if value == "" || strings.ContainsRune(value, '\x00') {
+		return "", fmt.Errorf("路径不能为空或包含空字节")
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("路径不能包含遍历")
+		}
+	}
+	return normalizeResourcePath(value), nil
+}
+
+func resourceOperationPath(display, wire string, allowFilesRoute bool) (string, error) {
+	if wire == "" {
+		if allowFilesRoute {
+			return normalizeTransferPath(display)
+		}
+		return literalOperationPath(display)
+	}
+	raw, err := decodeOperationWirePath(wire)
+	if err != nil {
+		return "", err
+	}
+	if display != "" {
+		literal, literalErr := literalOperationPath(display)
+		if literalErr == nil && literal == files.DisplayPath(raw) {
+			return raw, nil
+		}
+		if allowFilesRoute && (display == "/files" || strings.HasPrefix(display, "/files/")) {
+			decoded, routeErr := normalizeTransferPath(display)
+			if routeErr == nil && decoded == raw {
+				return raw, nil
+			}
+		}
+		return "", fmt.Errorf("显示路径与原始路径不一致")
+	}
+	return raw, nil
+}
+
+const taskWirePathEncoding = "wire-v1"
+
+// Persisted paths are never /files UI routes. A legacy U+FFFD may be damage
+// caused by encoding/json replacing arbitrary bytes; do not guess a sibling.
+func restoreTaskPath(display, wire, encoding string) (string, error) {
+	if encoding == taskWirePathEncoding {
+		if wire == "" {
+			return "", fmt.Errorf("任务缺少原始路径，请重新创建")
+		}
+		return resourceOperationPath(display, wire, false)
+	}
+	if encoding != "" || wire != "" {
+		return "", fmt.Errorf("不支持的任务路径编码，请重新创建")
+	}
+	if !utf8.ValidString(display) || strings.ContainsRune(display, '\ufffd') {
+		return "", fmt.Errorf("旧任务路径身份无法确认，请重新创建任务")
+	}
+	return literalOperationPath(display)
 }
 
 func sameExistingFile(left, right os.FileInfo) bool {

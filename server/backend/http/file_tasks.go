@@ -1,6 +1,7 @@
 package fbhttp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,10 +10,13 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	fberrors "github.com/Kkwans/nas-file-browser/backend/errors"
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/fileutils"
 	"github.com/Kkwans/nas-file-browser/backend/history"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
@@ -20,19 +24,40 @@ import (
 )
 
 type fileTransferItem struct {
-	From      string `json:"from"`
-	To        string `json:"to"`
-	Name      string `json:"name,omitempty"`
-	Size      int64  `json:"size,omitempty"`
-	Modified  string `json:"modified,omitempty"`
-	IsDir     bool   `json:"isDir,omitempty"`
-	Overwrite bool   `json:"overwrite,omitempty"`
-	Rename    bool   `json:"rename,omitempty"`
+	From         string `json:"from"`
+	To           string `json:"to"`
+	FromWirePath string `json:"fromWirePath,omitempty"`
+	ToWirePath   string `json:"toWirePath,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Size         int64  `json:"size,omitempty"`
+	Modified     string `json:"modified,omitempty"`
+	IsDir        bool   `json:"isDir,omitempty"`
+	Overwrite    bool   `json:"overwrite,omitempty"`
+	Rename       bool   `json:"rename,omitempty"`
 }
 
 type fileTransferRequest struct {
 	Action string             `json:"action"`
 	Items  []fileTransferItem `json:"items"`
+}
+
+func (item *fileTransferItem) UnmarshalJSON(encoded []byte) error {
+	type payload fileTransferItem
+	var saved payload
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return err
+	}
+	for field := range fields {
+		if (strings.EqualFold(field, "fromWirePath") && saved.FromWirePath == "") || (strings.EqualFold(field, "toWirePath") && saved.ToWirePath == "") {
+			return fmt.Errorf("原始路径不能为空")
+		}
+	}
+	*item = fileTransferItem(saved)
+	return nil
 }
 
 type fileTransferTaskArgs struct {
@@ -61,6 +86,173 @@ type fileTransferCheckpoint struct {
 	Completed map[string]bool `json:"completed,omitempty"`
 }
 
+// Task JSON contains display paths for readers and ASCII wire identities for
+// replay. Transform before encoding/json can replace non-UTF8 filesystem bytes.
+func (args fileTransferTaskArgs) MarshalJSON() ([]byte, error) {
+	type payload fileTransferTaskArgs
+	copy := payload(args)
+	copy.Items = append([]fileTransferItem(nil), args.Items...)
+	for index, item := range copy.Items {
+		copy.Items[index].From, copy.Items[index].To = files.DisplayPath(item.From), files.DisplayPath(item.To)
+		copy.Items[index].FromWirePath, copy.Items[index].ToWirePath = files.EncodeWirePath(item.From), files.EncodeWirePath(item.To)
+	}
+	copy.Completed = canonicalTransferCheckpoints(args.Completed)
+	return json.Marshal(struct {
+		payload
+		PathEncoding string `json:"pathEncoding"`
+	}{copy, taskWirePathEncoding})
+}
+
+func (args *fileTransferTaskArgs) UnmarshalJSON(encoded []byte) error {
+	type payload fileTransferTaskArgs
+	var saved struct {
+		payload
+		PathEncoding string `json:"pathEncoding"`
+	}
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		return err
+	}
+	if saved.PathEncoding != "" && saved.PathEncoding != taskWirePathEncoding {
+		return fmt.Errorf("不支持的任务路径编码，请重新创建")
+	}
+	for index, item := range saved.Items {
+		from, err := restoreTaskPath(item.From, item.FromWirePath, saved.PathEncoding)
+		if err != nil {
+			return err
+		}
+		to, err := restoreTaskPath(item.To, item.ToWirePath, saved.PathEncoding)
+		if err != nil {
+			return err
+		}
+		saved.Items[index].From, saved.Items[index].To = from, to
+	}
+	saved.Completed = canonicalTransferCheckpoints(saved.Completed)
+	*args = fileTransferTaskArgs(saved.payload)
+	return nil
+}
+
+func (item fileTransferResultItem) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		From         string `json:"from"`
+		To           string `json:"to"`
+		FromWirePath string `json:"fromWirePath"`
+		ToWirePath   string `json:"toWirePath"`
+		PathEncoding string `json:"pathEncoding"`
+	}{files.DisplayPath(item.From), files.DisplayPath(item.To), files.EncodeWirePath(item.From), files.EncodeWirePath(item.To), taskWirePathEncoding})
+}
+
+func (item *fileTransferResultItem) UnmarshalJSON(encoded []byte) error {
+	var saved struct{ From, To, FromWirePath, ToWirePath, PathEncoding string }
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		return err
+	}
+	from, err := restoreTaskPath(saved.From, saved.FromWirePath, saved.PathEncoding)
+	if err != nil {
+		return err
+	}
+	to, err := restoreTaskPath(saved.To, saved.ToWirePath, saved.PathEncoding)
+	if err != nil {
+		return err
+	}
+	item.From, item.To = from, to
+	return nil
+}
+
+func (item fileTransferFailure) MarshalJSON() ([]byte, error) {
+	type payload fileTransferFailure
+	return json.Marshal(struct {
+		payload
+		From         string `json:"from"`
+		To           string `json:"to"`
+		FromWirePath string `json:"fromWirePath"`
+		ToWirePath   string `json:"toWirePath"`
+		PathEncoding string `json:"pathEncoding"`
+	}{payload(item), files.DisplayPath(item.From), files.DisplayPath(item.To), files.EncodeWirePath(item.From), files.EncodeWirePath(item.To), taskWirePathEncoding})
+}
+
+func (item *fileTransferFailure) UnmarshalJSON(encoded []byte) error {
+	var identity fileTransferResultItem
+	if err := json.Unmarshal(encoded, &identity); err != nil {
+		return err
+	}
+	var saved struct{ Error string }
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		return err
+	}
+	item.From, item.To, item.Error = identity.From, identity.To, saved.Error
+	return nil
+}
+
+func (checkpoint fileTransferCheckpoint) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Completed    map[string]bool `json:"completed,omitempty"`
+		PathEncoding string          `json:"pathEncoding"`
+	}{canonicalTransferCheckpoints(checkpoint.Completed), taskWirePathEncoding})
+}
+
+func (checkpoint *fileTransferCheckpoint) UnmarshalJSON(encoded []byte) error {
+	var saved struct {
+		Completed    map[string]bool
+		PathEncoding string
+	}
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		return err
+	}
+	if saved.PathEncoding != "" && saved.PathEncoding != taskWirePathEncoding {
+		return fmt.Errorf("不支持的检查点路径编码")
+	}
+	checkpoint.Completed = canonicalTransferCheckpoints(saved.Completed)
+	return nil
+}
+
+func canonicalTransferCheckpoint(key string) (canonical, from, to string, valid bool) {
+	wire := strings.HasPrefix(key, "wire:")
+	if wire {
+		key = strings.TrimPrefix(key, "wire:")
+	}
+	parts := strings.Split(key, "\x00")
+	if len(parts) != 5 {
+		return
+	}
+	size, sizeErr := strconv.ParseInt(parts[2], 10, 64)
+	modified, modifiedErr := strconv.ParseInt(parts[3], 10, 64)
+	if sizeErr != nil || modifiedErr != nil || size < 0 || (parts[4] != "true" && parts[4] != "false") {
+		return
+	}
+	var err error
+	if wire {
+		from, err = decodeOperationWirePath(parts[0])
+		if err != nil {
+			return "", "", "", false
+		}
+		to, err = decodeOperationWirePath(parts[1])
+	} else {
+		if !utf8.ValidString(key) || strings.ContainsRune(key, '\ufffd') {
+			return
+		}
+		from, err = literalOperationPath(parts[0])
+		if err != nil {
+			return "", "", "", false
+		}
+		to, err = literalOperationPath(parts[1])
+	}
+	if err != nil {
+		return "", "", "", false
+	}
+	canonical = fmt.Sprintf("wire:%s\x00%s\x00%d\x00%d\x00%s", files.EncodeWirePath(from), files.EncodeWirePath(to), size, modified, parts[4])
+	return canonical, from, to, true
+}
+
+func canonicalTransferCheckpoints(saved map[string]bool) map[string]bool {
+	result := make(map[string]bool, len(saved))
+	for key, complete := range saved {
+		if canonical, _, _, ok := canonicalTransferCheckpoint(key); ok && complete {
+			result[canonical] = true
+		}
+	}
+	return result
+}
+
 var fileTransferGate = make(chan struct{}, 1)
 
 var fileTransferTaskHandler = func(runtime *tasks.Runtime) handleFunc {
@@ -84,11 +276,11 @@ var fileTransferTaskHandler = func(runtime *tasks.Runtime) handleFunc {
 
 		args := fileTransferTaskArgs{Items: make([]fileTransferItem, 0, len(request.Items)), Completed: make(map[string]bool)}
 		for index, item := range request.Items {
-			from, err := normalizeTransferPath(item.From)
+			from, err := resourceOperationPath(item.From, item.FromWirePath, true)
 			if err != nil {
 				return http.StatusBadRequest, err
 			}
-			to, err := normalizeTransferPath(item.To)
+			to, err := resourceOperationPath(item.To, item.ToWirePath, true)
 			if err != nil {
 				return http.StatusBadRequest, err
 			}
@@ -142,23 +334,22 @@ var fileTransferTaskHandler = func(runtime *tasks.Runtime) handleFunc {
 }
 
 func normalizeTransferPath(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", fmt.Errorf("路径不能为空")
-	}
 	if value == "/files" || strings.HasPrefix(value, "/files/") {
 		value = strings.TrimPrefix(value, "/files")
+		if value == "" {
+			value = "/"
+		}
 		parts := strings.Split(value, "/")
 		for index, part := range parts {
 			decoded, err := url.PathUnescape(part)
-			if err != nil {
-				return "", fmt.Errorf("路径编码无效: %w", err)
+			if err != nil || strings.ContainsAny(decoded, "/\x00") {
+				return "", fmt.Errorf("路径编码无效")
 			}
 			parts[index] = decoded
 		}
-		value = strings.Join(parts, "/")
+		return literalOperationPath(strings.Join(parts, "/"))
 	}
-	return normalizeResourcePath(value), nil
+	return literalOperationPath(value)
 }
 
 func lstatResource(afs afero.Fs, name string) (os.FileInfo, error) {
@@ -206,7 +397,7 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 					continue
 				}
 				for key := range checkpoint.Completed {
-					if strings.HasPrefix(key, item.From+"\x00"+item.To+"\x00") {
+					if _, from, to, valid := canonicalTransferCheckpoint(key); valid && from == item.From && to == item.To {
 						delete(checkpoint.Completed, key)
 					}
 				}
@@ -324,7 +515,7 @@ func fileTransferIdentity(afs afero.Fs, item fileTransferItem) (string, os.FileI
 	if info.Mode()&os.ModeSymlink != 0 {
 		return "", nil, fmt.Errorf("不支持复制符号链接: %s", item.From)
 	}
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%t", item.From, item.To, info.Size(), info.ModTime().UnixNano(), info.IsDir()), info, nil
+	return fmt.Sprintf("wire:%s\x00%s\x00%d\x00%d\x00%t", files.EncodeWirePath(item.From), files.EncodeWirePath(item.To), info.Size(), info.ModTime().UnixNano(), info.IsDir()), info, nil
 }
 
 func destinationMatchesItem(afs afero.Fs, item fileTransferItem) bool {
@@ -350,11 +541,20 @@ func completedCheckpoint(afs afero.Fs, completed map[string]bool, item fileTrans
 	}
 	if _, err := lstatResource(afs, item.From); err == nil {
 		key, _, keyErr := fileTransferIdentity(afs, item)
-		return keyErr == nil && completed[key]
+		if keyErr != nil {
+			return false
+		}
+		for saved, complete := range completed {
+			canonical, _, _, valid := canonicalTransferCheckpoint(saved)
+			if valid && complete && canonical == key {
+				return true
+			}
+		}
+		return false
 	}
-	prefix := item.From + "\x00" + item.To + "\x00"
 	for key, saved := range completed {
-		if saved && strings.HasPrefix(key, prefix) {
+		_, from, to, valid := canonicalTransferCheckpoint(key)
+		if saved && valid && from == item.From && to == item.To {
 			return true
 		}
 	}
@@ -381,17 +581,28 @@ func resumeFileTransferArgs(original *tasks.Task) (json.RawMessage, error) {
 	if args.Completed == nil {
 		args.Completed = make(map[string]bool)
 	}
-	var checkpoint fileTransferCheckpoint
-	if len(original.Result) > 0 && json.Unmarshal(original.Result, &checkpoint) == nil && len(checkpoint.Completed) > 0 {
-		for key, completed := range checkpoint.Completed {
-			if completed {
-				args.Completed[key] = true
-			}
+	if len(original.Result) > 0 {
+		var envelope struct{ Completed json.RawMessage }
+		if err := json.Unmarshal(original.Result, &envelope); err != nil {
+			return nil, fmt.Errorf("任务结果损坏: %w", err)
 		}
-	}
-	var result fileTransferResult
-	if len(original.Result) > 0 && json.Unmarshal(original.Result, &result) == nil {
-		args.CompletedPaths = append(args.CompletedPaths, result.Completed...)
+		if completed := bytes.TrimSpace(envelope.Completed); len(completed) > 0 && completed[0] == '{' {
+			var checkpoint fileTransferCheckpoint
+			if err := json.Unmarshal(original.Result, &checkpoint); err != nil {
+				return nil, err
+			}
+			for key, complete := range checkpoint.Completed {
+				if complete {
+					args.Completed[key] = true
+				}
+			}
+		} else {
+			var result fileTransferResult
+			if err := json.Unmarshal(original.Result, &result); err != nil {
+				return nil, fmt.Errorf("任务结果路径无法确认，请重新创建: %w", err)
+			}
+			args.CompletedPaths = append(args.CompletedPaths, result.Completed...)
+		}
 	}
 	encoded, err := json.Marshal(args)
 	if err != nil {

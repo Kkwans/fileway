@@ -33,7 +33,7 @@ func TestClientCapabilitiesAuthenticatedMemberSeesOnlyNonSecretPolicy(t *testing
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil {
 			t.Fatalf("capabilities status=%d body=%s", response.Code, response.Body.String())
 		}
-		if len(result) != 4 || result["authMethod"] != "json" || result["enableExec"] != enabled || result["minimumPasswordLength"] != float64(12) || result["conditionalTextSave"] != true {
+		if len(result) != 5 || result["authMethod"] != "json" || result["enableExec"] != enabled || result["minimumPasswordLength"] != float64(12) || result["conditionalTextSave"] != true || result["resourceWireOperations"] != true {
 			t.Fatalf("unexpected capability shape: %#v", result)
 		}
 		for _, secret := range []string{"private-shell-path", "private-command", "/private-users", "password", "key", "scope", "rules"} {

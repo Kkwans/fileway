@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/Kkwans/nas-file-browser/backend/archivefs"
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/history"
 	"github.com/Kkwans/nas-file-browser/backend/hls"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
@@ -23,15 +24,65 @@ type trashClearTaskArgs struct {
 }
 
 type pendingDeletionArgs struct {
-	Kind  string   `json:"kind"`
-	Paths []string `json:"paths,omitempty"`
-	IDs   []string `json:"ids,omitempty"`
-	Admin bool     `json:"admin,omitempty"`
+	Kind      string   `json:"kind"`
+	Paths     []string `json:"paths,omitempty"`
+	WirePaths []string `json:"wirePaths,omitempty"`
+	IDs       []string `json:"ids,omitempty"`
+	Admin     bool     `json:"admin,omitempty"`
 }
 
 type deletionResult struct {
-	Target string `json:"target"`
-	Error  string `json:"error,omitempty"`
+	Target         string `json:"target"`
+	TargetWirePath string `json:"targetWirePath,omitempty"`
+	PathEncoding   string `json:"pathEncoding,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+func (args pendingDeletionArgs) MarshalJSON() ([]byte, error) {
+	type payload pendingDeletionArgs
+	copy := payload(args)
+	copy.Paths = make([]string, len(args.Paths))
+	copy.WirePaths = make([]string, len(args.Paths))
+	for index, raw := range args.Paths {
+		copy.Paths[index], copy.WirePaths[index] = files.DisplayPath(raw), files.EncodeWirePath(raw)
+	}
+	return json.Marshal(struct {
+		payload
+		PathEncoding string `json:"pathEncoding"`
+	}{copy, taskWirePathEncoding})
+}
+
+func (args *pendingDeletionArgs) UnmarshalJSON(encoded []byte) error {
+	type payload pendingDeletionArgs
+	var saved struct {
+		payload
+		PathEncoding string `json:"pathEncoding"`
+	}
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		return err
+	}
+	if saved.PathEncoding != "" && saved.PathEncoding != taskWirePathEncoding {
+		return fmt.Errorf("不支持的任务路径编码，请重新创建")
+	}
+	if saved.PathEncoding == taskWirePathEncoding && len(saved.Paths) != len(saved.WirePaths) {
+		return fmt.Errorf("任务原始路径数量不一致，请重新创建")
+	}
+	if saved.PathEncoding == "" && len(saved.WirePaths) != 0 {
+		return fmt.Errorf("未声明任务路径编码，请重新创建")
+	}
+	for index, display := range saved.Paths {
+		wire := ""
+		if saved.PathEncoding == taskWirePathEncoding {
+			wire = saved.WirePaths[index]
+		}
+		raw, err := restoreTaskPath(display, wire, saved.PathEncoding)
+		if err != nil {
+			return err
+		}
+		saved.Paths[index] = raw
+	}
+	*args = pendingDeletionArgs(saved.payload)
+	return nil
 }
 
 const pendingDeletionUndoWindow = 3 * time.Second
@@ -446,7 +497,7 @@ func permanentDeletionRunner(d *data, task *tasks.Task, args pendingDeletionArgs
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			result := deletionResult{Target: resourcePath}
+			result := deletionResult{Target: files.DisplayPath(resourcePath), TargetWirePath: files.EncodeWirePath(resourcePath), PathEncoding: taskWirePathEncoding}
 			if err := permanentDeleteResource(ctx, &ownerData, d.fileCache, resourcePath); err != nil {
 				result.Error = err.Error()
 				if firstErr == nil {

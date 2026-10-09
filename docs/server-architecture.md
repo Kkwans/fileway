@@ -112,3 +112,32 @@ shared resource are translated to each workspace's own relative path. Moving
 out removes existing references without creating new references in another
 workspace. Unknown owners or unverifiable historical bytes are not inferred.
 Public display DTOs are separate from byte-preserving persistence records.
+
+
+### Durable file operations
+
+Authenticated `client-capabilities.resourceWireOperations` advertises three
+additional identity-preserving mutation boundaries: transfer items accept
+`fromWirePath`/`toWirePath`, pending resource deletions accept ordered `wirePaths`,
+and resource PATCH accepts `destinationWirePath`. Ordinary UTF-8 callers retain
+their compatible literal fields; transfer also accepts its legacy `/files` route
+form. A simultaneously supplied literal and wire identity must agree. Opaque
+clients must verify the capability before submitting, and never retry a failed
+write against a display-name sibling.
+
+Successful PATCH responses include `X-Resource-Destination-WirePath` for the
+actual target, including automatic conflict suffixes. The older rename header
+remains a display/UTF-8 compatibility field. A queued transfer response only
+acknowledges task creation; it does not confirm that a requested target exists.
+
+Private task arguments, results and checkpoints use `pathEncoding: "wire-v1"`
+and encode original path bytes before JSON serialization. Replay restores wire
+identity exactly once. Strict legacy UTF-8 task paths remain compatible; a lost
+legacy identity containing replacement characters requires recreating the task.
+New explicitly identified UTF-8 filenames containing U+FFFD remain supported.
+Task replay arguments and results remain private to the backend API model.
+
+A binary predating this codec cannot safely replay newly persisted opaque tasks.
+After these writes, recovery requires a compatible forward fix. An older binary
+may be considered only after proving no task, result or checkpoint depends on
+the new codec; reverting the executable never authorizes discarding runtime data.
