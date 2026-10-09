@@ -12,15 +12,24 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
+internal class AdminReadGate {
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val returned = CompletableDeferred<Unit>()
+}
+
 internal class AdminUsersAuthority {
     val users = linkedMapOf(1L to user(1, "operator", true), 2L to user(2, "member", false))
     var authMethod = "json"
+    var defaultScope = "/default"
     var allowed = true
     var writes = 0
     var lastBody: JSONObject? = null
     var lastMethod = ""
     var commitThenFail = false
     var hold: CompletableDeferred<Unit>? = null
+    val readHolds = mutableMapOf<String, AdminReadGate>()
+    val reads = mutableMapOf<String, Int>()
     val entered = CompletableDeferred<Unit>(); val finished = CompletableDeferred<Unit>()
     suspend fun context(owner: String): SessionContext {
         val payload = Base64.encodeToString("{\"user\":{\"id\":1,\"username\":\"operator\"}}".toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
@@ -31,11 +40,15 @@ internal class AdminUsersAuthority {
             "token" -> token
             "request" -> {
                 val method = command.getString("method"); val endpoint = command.getString("endpoint")
+                val readGate = if (method == "GET") {
+                    reads[endpoint] = (reads[endpoint] ?: 0) + 1
+                    readHolds.remove(endpoint)
+                } else null
                 var status = 200
                 val body = if (method == "GET") {
                     when {
                         endpoint == "/api/client-capabilities" -> JSONObject().put("authMethod", authMethod).put("enableExec", true).put("minimumPasswordLength", 6).toString()
-                        endpoint == "/api/settings" -> JSONObject().put("createUserDir", true).put("defaults", user(0, "", false).apply { put("scope", "/default") }).toString()
+                        endpoint == "/api/settings" -> JSONObject().put("createUserDir", true).put("defaults", user(0, "", false).apply { put("scope", defaultScope) }).toString()
                         endpoint == "/api/users" -> if (allowed) JSONArray(users.values.toList()).toString() else { status = 403; "forbidden" }
                         endpoint.startsWith("/api/users/") -> users[endpoint.substringAfterLast('/').toLong()]?.toString() ?: run { status = 404; "missing" }
                         else -> error("Unexpected admin read")
@@ -61,7 +74,10 @@ internal class AdminUsersAuthority {
                         if (status == 201) "201 Created\n" else "200 OK\n"
                     }
                 }
-                JSONObject().put("status", status).put("body", body)
+                if (readGate != null) withContext(NonCancellable) {
+                    readGate.entered.complete(Unit); readGate.release.await()
+                }
+                JSONObject().put("status", status).put("body", body).also { readGate?.returned?.complete(Unit) }
             }
             else -> error("Unexpected admin operation")
         } }
@@ -81,6 +97,71 @@ class AdminUsersControllerTest {
     private suspend fun ready(controller: AdminUsersController) = withTimeout(5000) { controller.state.first { !it.loading && (it.authorized || it.error != null) } }
     private suspend fun editor(controller: AdminUsersController) = withTimeout(5000) { controller.state.first { !it.loading && it.draft != null } }
     private suspend fun settled(controller: AdminUsersController) = withTimeout(5000) { controller.state.first { !it.saving && (it.notice != null || it.error != null) } }
+
+    @Test fun lateDetailAndDefaultReadsCannotReopenClosedOrHiddenEditor(): Unit = runBlocking {
+        for (defaults in listOf(false, true)) for (hide in listOf(false, true)) {
+            val authority = AdminUsersAuthority(); val context = authority.context("late-$defaults-$hide")
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            val controller = AdminUsersController(scope, { it === context })
+            val gate = AdminReadGate()
+            try {
+                main { controller.bind(context); controller.setVisible(true) }; ready(controller)
+                authority.readHolds[if (defaults) "/api/settings" else "/api/users/2"] = gate
+                main { if (defaults) controller.create() else controller.select(2) }
+                withTimeout(5000) { gate.entered.await() }
+                assertTrue(controller.state.value.loading)
+                main { if (hide) controller.setVisible(false) else controller.closeEditor() }
+                assertFalse("Closing a read must reset loading (defaults=$defaults hide=$hide)", controller.state.value.loading)
+                assertNull(controller.state.value.draft)
+                gate.release.complete(Unit); withTimeout(5000) { gate.returned.await() }; main { }
+                assertNull("A NonCancellable late read must not restore an editor", controller.state.value.draft)
+                assertFalse(controller.state.value.loading)
+                assertNull(controller.state.value.error)
+                authority.defaultScope = "/fresh-default"
+                authority.users[2]!!.put("username", "fresh-member")
+                main { if (hide) controller.setVisible(true) else controller.refresh() }; ready(controller)
+                assertEquals("Reentry must fetch a fresh list", 2, authority.reads["/api/users"])
+                assertNull(controller.state.value.draft)
+                main { if (defaults) controller.create() else controller.select(2) }; editor(controller)
+                assertEquals(defaults, controller.state.value.draft!!.creating)
+                if (defaults) assertEquals("/fresh-default", controller.state.value.draft!!.scope)
+                else assertEquals("fresh-member", controller.state.value.draft!!.username)
+            } finally { gate.release.complete(Unit); scope.cancel() }
+        }
+    }
+
+    @Test fun hidingDoesNotDiscardSubmittedWriteOrUnknownDraft(): Unit = runBlocking {
+        val authority = AdminUsersAuthority(); val context = authority.context("hidden-write")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val controller = AdminUsersController(scope, { it === context })
+        authority.hold = CompletableDeferred()
+        try {
+            main { controller.bind(context); controller.setVisible(true) }; ready(controller)
+            main { controller.select(2) }; editor(controller)
+            main { controller.edit { it.copy(username = "saved-while-hidden", password = "owned-new-password") }; controller.requestSave()
+                controller.currentPassword("owned-operator-password"); controller.confirm() }
+            withTimeout(5000) { authority.entered.await() }
+            main { controller.setVisible(false); controller.closeEditor() }
+            assertTrue(controller.state.value.saving)
+            assertEquals("owned-new-password", controller.state.value.draft!!.password)
+            authority.hold!!.complete(Unit); settled(controller)
+            assertEquals("saved-while-hidden", authority.users[2]!!.getString("username"))
+            assertNull(controller.state.value.draft)
+            assertFalse(controller.state.value.unknown)
+            assertEquals(1, authority.writes)
+            authority.hold = null; authority.commitThenFail = true
+            main { controller.setVisible(true) }; ready(controller)
+            main { controller.select(2) }; editor(controller)
+            main { controller.edit { it.copy(password = "owned-unknown-password") }; controller.requestSave()
+                controller.currentPassword("owned-operator-password"); controller.confirm() }; settled(controller)
+            assertTrue(controller.state.value.unknown)
+            main { controller.setVisible(false); controller.closeEditor(); controller.setVisible(true) }; ready(controller)
+            assertTrue(controller.state.value.unknown)
+            assertEquals("owned-unknown-password", controller.state.value.draft!!.password)
+            main { controller.confirm() }
+            assertEquals(2, authority.writes)
+        } finally { authority.hold?.complete(Unit); scope.cancel() }
+    }
 
     @Test fun legacyMissingRegexpIsNeverInventedAsAnEmptyMatchAllExpression() {
         val missing = JSONObject().put("allow", true).put("regex", true).put("path", "/old").put("futureRule", "kept")
@@ -164,6 +245,37 @@ class AdminUsersControllerTest {
             main { controller.requestDelete(); controller.currentPassword("owned-operator-password"); controller.confirm() }; settled(controller)
             assertEquals(1, deletes); assertNull(controller.state.value.draft); assertFalse(controller.state.value.authorized)
         } finally { scope.cancel() }
+    }
+
+    @Test fun acceptedOwnWriteCannotDeliverLateFollowUpReadToAnotherAccount(): Unit = runBlocking {
+        val old = AdminUsersAuthority(); val oldContext = old.context("accepted-old")
+        val next = AdminUsersAuthority(); next.users[1]!!.put("username", "next-operator")
+        val nextContext = next.context("accepted-next")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        var current = oldContext; var callbacks = 0
+        val controller = AdminUsersController(scope, { it === current }, { _, _, _ -> callbacks++ })
+        val gate = AdminReadGate()
+        try {
+            main { controller.bind(oldContext); controller.setVisible(true) }; ready(controller)
+            main { controller.select(1) }; editor(controller)
+            old.readHolds["/api/users/1"] = gate
+            main { controller.edit { it.copy(username = "old-accepted", password = "owned-new-password") }
+                controller.requestSave(); controller.currentPassword("owned-operator-password"); controller.confirm() }
+            withTimeout(5000) { gate.entered.await() }
+            assertEquals("The mutation is already committed before the held follow-up GET", 1, old.writes)
+            assertEquals("PUT", old.lastMethod)
+            assertEquals("old-accepted", old.users[1]!!.getString("username"))
+            main { current = nextContext; controller.bind(nextContext); controller.setVisible(true) }; ready(controller)
+            gate.release.complete(Unit); withTimeout(5000) { gate.returned.await() }; main { }
+            assertEquals("Discard the obsolete read result before invoking any callback", 0, callbacks)
+            assertEquals(nextContext.owner, controller.state.value.scope)
+            assertEquals("next-operator", controller.state.value.users.first { it.id == 1L }.username)
+            assertNull(controller.state.value.draft)
+            assertFalse(controller.state.value.saving)
+            assertFalse(controller.state.value.unknown)
+            assertEquals("The accepted write must never be replayed", 1, old.writes)
+            assertEquals(0, next.writes)
+        } finally { gate.release.complete(Unit); scope.cancel() }
     }
 
     @Test fun deniedAdminReadCannotCreateOrModifyAndLateWriteCannotReachNextAccount(): Unit = runBlocking {

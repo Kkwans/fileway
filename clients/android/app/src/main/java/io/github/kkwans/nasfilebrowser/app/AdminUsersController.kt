@@ -23,14 +23,25 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
     private var read: Job? = null
     private var write: Job? = null
     private var revision = 0L
+    private var readIntent = 0L
     private var visible = false
     fun bind(context: SessionContext?) {
         if (bound === context) return
-        read?.cancel(); write?.cancel(); revision++
+        invalidateRead(); write?.cancel(); revision++
         bound = context; visible = false; mutable.value = AdminUsersState(scope = context?.owner.orEmpty())
     }
     private fun current(context: SessionContext, epoch: Long) = bound === context && isCurrent(context) && revision == epoch
-    fun setVisible(value: Boolean) { if (visible == value) return; visible = value; if (value) refresh() }
+    private fun currentRead(context: SessionContext, epoch: Long, intent: Long) = current(context, epoch) && readIntent == intent
+    private fun invalidateRead() { readIntent++; read?.cancel(); read = null }
+    fun setVisible(value: Boolean) {
+        if (visible == value) return
+        visible = value
+        if (value) { refresh(); return }
+        invalidateRead()
+        val before = mutable.value
+        mutable.value = if (before.saving || before.unknown) before.copy(loading = false)
+            else before.copy(loading = false, draft = null, confirmation = null, currentPassword = "", error = null)
+    }
     fun query(value: String) { mutable.value = mutable.value.copy(query = value) }
     private suspend fun users(context: SessionContext): List<ManagedUser> {
         val rows = context.api.array("/api/users")
@@ -41,6 +52,7 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
     fun refresh() {
         val context = bound ?: return
         if (!isCurrent(context) || mutable.value.loading || mutable.value.saving) return
+        invalidateRead(); val intent = readIntent
         val epoch = ++revision; mutable.value = mutable.value.copy(loading = true, error = mutable.value.error.takeIf { mutable.value.unknown }, notice = null)
         read = scope.launch {
             try {
@@ -48,11 +60,11 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
                     val list = async { users(context) }; val policy = async { context.api.clientCapabilities() }
                     list.await() to policy.await()
                 }
-                if (current(context, epoch)) mutable.value = mutable.value.copy(users = rows, capabilities = capabilities,
+                if (currentRead(context, epoch, intent)) mutable.value = mutable.value.copy(users = rows, capabilities = capabilities,
                     loading = false, authorized = true, notice = if (mutable.value.unknown) "用户列表已更新；未知写结果仍须核实，未自动重发" else null)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (current(context, epoch)) mutable.value = mutable.value.copy(loading = false,
+                if (currentRead(context, epoch, intent)) mutable.value = mutable.value.copy(loading = false,
                     authorized = if (error is ServiceException && error.status in setOf(401, 403)) false else mutable.value.authorized,
                     error = if (error is ServiceException && error.status == 403) "当前账号没有用户管理权限" else "用户列表读取失败，请重试")
             }
@@ -61,31 +73,31 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
     fun select(id: Long) {
         val context = bound ?: return
         if (!isCurrent(context) || !mutable.value.authorized || mutable.value.saving || mutable.value.unknown) return
-        read?.cancel(); val epoch = ++revision
+        invalidateRead(); val intent = readIntent; val epoch = ++revision
         mutable.value = mutable.value.copy(loading = true, error = null, notice = null, currentPassword = "", confirmation = null)
         read = scope.launch {
             try {
                 val user = ManagedUser.from(context.api.request("GET", "/api/users/$id"))
                 check(user.id == id) { "服务器返回了其他用户" }
-                if (current(context, epoch)) mutable.value = mutable.value.copy(draft = user.draft(), loading = false)
+                if (currentRead(context, epoch, intent)) mutable.value = mutable.value.copy(draft = user.draft(), loading = false)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (current(context, epoch)) mutable.value = mutable.value.copy(loading = false, error = "用户详情读取失败，请重试")
+                if (currentRead(context, epoch, intent)) mutable.value = mutable.value.copy(loading = false, error = "用户详情读取失败，请重试")
             }
         }
     }
     fun create() {
         val context = bound ?: return
         if (!isCurrent(context) || !mutable.value.authorized || mutable.value.saving || mutable.value.unknown) return
-        read?.cancel(); val epoch = ++revision
+        invalidateRead(); val intent = readIntent; val epoch = ++revision
         mutable.value = mutable.value.copy(loading = true, error = null, notice = null, currentPassword = "", confirmation = null)
         read = scope.launch {
             try {
                 val draft = ManagedUser.newDraft(context.api.request("GET", "/api/settings"))
-                if (current(context, epoch)) mutable.value = mutable.value.copy(draft = draft, loading = false)
+                if (currentRead(context, epoch, intent)) mutable.value = mutable.value.copy(draft = draft, loading = false)
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (current(context, epoch)) mutable.value = mutable.value.copy(loading = false, error = "默认用户设置读取失败，请重试")
+                if (currentRead(context, epoch, intent)) mutable.value = mutable.value.copy(loading = false, error = "默认用户设置读取失败，请重试")
             }
         }
     }
@@ -96,7 +108,10 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
     }
     fun closeEditor() {
         val before = mutable.value
-        if (!before.saving && !before.unknown) mutable.value = before.copy(draft = null, confirmation = null, currentPassword = "", error = null)
+        if (!before.saving && !before.unknown) {
+            invalidateRead()
+            mutable.value = before.copy(loading = false, draft = null, confirmation = null, currentPassword = "", error = null)
+        }
     }
     fun clearSecrets() {
         val before = mutable.value
@@ -147,6 +162,7 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
                 if (action != "delete" && !draft.creating && draft.id == context.account.userId) {
                     val fresh = ManagedUser.from(context.api.request("GET", "/api/users/${draft.id}"))
                     check(fresh.id == draft.id)
+                    if (!current(context, epoch)) return@launch
                     onOwnAccountChanged(context, fresh, draft.password.takeIf { it.isNotEmpty() })
                     if (!current(context, epoch)) return@launch
                     mutable.value = mutable.value.copy(saving = false, confirmation = null, currentPassword = "", draft = null,
