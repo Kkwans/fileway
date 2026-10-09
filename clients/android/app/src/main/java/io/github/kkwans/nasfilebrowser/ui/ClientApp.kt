@@ -71,6 +71,9 @@ import java.util.Locale
     }
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
+    if (state.tab == "account" && state.connected) { LibraryTheme {
+        AccountSettingsScreen(model.accountSettings, { model.tab("settings") }, model::disconnect)
+    }; return }
     if (state.tab == "updates") { LibraryTheme { AppUpdatesScreen(model) }; return }
     val taskGroup = TaskCenterSection.forRoute(state.tab)
     if (taskGroup != null) {

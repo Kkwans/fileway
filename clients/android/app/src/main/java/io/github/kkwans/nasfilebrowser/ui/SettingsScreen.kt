@@ -108,6 +108,11 @@ import kotlinx.coroutines.launch
                     }
                 }
                 item {
+                    SettingsGroup("账户") {
+                        SettingsAction("账户设置", "共享偏好与修改密码", R.drawable.ic_person) { model.tab("account") }
+                    }
+                }
+                item {
                     SettingsGroup("外观") {
                         SettingsAction("主题", when {
                             appearance.loading -> "正在读取"

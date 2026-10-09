@@ -128,6 +128,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val operationHistory = OperationHistoryController(viewModelScope) { context === it && generation == it.generation }
     val recentAccess = RecentAccessController(viewModelScope) { context === it && generation == it.generation }
     val fileChecksum = FileChecksumController(viewModelScope) { context === it && generation == it.generation }
+    val accountSettings = AccountSettingsController(viewModelScope, { context === it && generation == it.generation },
+        onPasswordChanged = { bound, password ->
+            if (context === bound && generation == bound.generation && store.password(bound.profile, bound.account) != null && context === bound)
+                store.rememberPassword(bound.profile, bound.account, password)
+        }, onProfileChanged = { bound, profile ->
+            if (context === bound && generation == bound.generation) mutable.value = mutable.value.copy(accountName = profile.username)
+        })
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
     val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished,
         { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } }, ::resourcesBatchRenamed)
@@ -249,6 +256,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 operationHistory.bind(bound)
                 recentAccess.bind(bound)
                 fileChecksum.bind(bound)
+                accountSettings.bind(bound)
                 trash.bind(bound)
                 fileOperations.bind(bound)
                 storageTools.bind(bound)
@@ -763,6 +771,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         recentAccess.setVisible(visible && mutable.value.tab == "recent" && mutable.value.recentSection == RecentSection.ACCESS)
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
+        accountSettings.setVisible(visible && mutable.value.tab == "account")
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
         uploads.visible(foreground && mutable.value.tab == "uploads")
         fileOperations.setVisible(foreground && mutable.value.connected)
@@ -1002,6 +1011,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operationHistory.bind(null)
         recentAccess.bind(null)
         fileChecksum.bind(null)
+        accountSettings.bind(null)
         trash.bind(null)
         fileOperations.bind(null)
         downloads.cancelFolderDownloads(quiet = true)
