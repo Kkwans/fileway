@@ -23,7 +23,7 @@ data class DirectoryCreateDraft(val parent: DirectoryCrumb, val name: String = "
 data class FileTransferDraft(val files: List<ResourceRef>, val action: FileTransferAction, val directory: DirectoryCrumb,
     val directories: List<ResourceRef> = emptyList(), val loading: Boolean = false, val error: String? = null,
     val reviewed: Boolean = false, val conflicts: Set<String> = emptySet(), val choices: Map<String, FileConflictChoice> = emptyMap(),
-    val unknownSubmission: Boolean = false, val visible: Boolean = true)
+    val unknownSubmission: Boolean = false, val visible: Boolean = true, val wireOperations: Boolean = false)
 private data class PendingFileTransfer(val task: ServerTask, val sources: List<ResourceRef>)
 
 /** Existing resource mutations stay bound to their original server/account. */
@@ -73,10 +73,10 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
             loading = true, error = null, reviewed = false, conflicts = emptySet(), choices = emptyMap()))
         directoryRead = scope.launch {
             try {
-                val wire = requireNotNull(directory.wirePath) { "目标目录无法安全访问" }
-                taskResourcePath(directory.path, wire)
+                val wire = taskResourceTarget(directory.path, requireNotNull(directory.wirePath) { "目标目录无法安全访问" }, allowOpaque = true).wirePath
                 val data = context.api.request("GET", "/api/resources$wire?metadata=1")
-                check(data.optBoolean("isDir") && taskResourcePath(data.getString("path"), data.optString("wirePath")) == directory.path) { "目标目录已变化，请选择其他目录" }
+                check(data.optBoolean("isDir") && taskResourceAcknowledged(directory.path, wire, data.getString("path"), data.optString("wirePath"),
+                    data.opt("pathVerified") != false)) { "目标目录原始路径无法确认，请刷新或升级服务器" }
                 val rows = context.api.request("GET", "/api/resources$wire").getJSONArray("items")
                 val folders = (0 until rows.length()).map { rows.getJSONObject(it) }.filter { it.optBoolean("isDir") }.map {
                     ResourceRef(it.getString("path"), it.optString("wirePath").ifEmpty { SearchResult.encodePath(it.getString("path")) },
@@ -89,10 +89,10 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
             }
         }
     }
-    fun chooseConflict(path: String, value: FileConflictChoice) {
+    fun chooseConflict(sourceKey: String, value: FileConflictChoice) {
         val draft = mutable.value.transfer ?: return
-        if (mutable.value.changing || path !in draft.conflicts) return
-        mutable.value = mutable.value.copy(transfer = draft.copy(choices = draft.choices + (path to value)))
+        if (mutable.value.changing || sourceKey !in draft.conflicts) return
+        mutable.value = mutable.value.copy(transfer = draft.copy(choices = draft.choices + (sourceKey to value)))
     }
     fun acknowledgeUnknownSubmission() {
         val draft = mutable.value.transfer ?: return
@@ -109,49 +109,78 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
             try {
                 val permissions = context.api.permissions()
                 check(permissions.create && (draft.action == FileTransferAction.COPY || permissions.rename)) { "当前账号没有${draft.action.label}权限" }
-                val entries = fileTransferEntries(draft.files, draft.directory, draft.action)
+                val entries = fileTransferEntries(draft.files, draft.directory, draft.action, allowOpaque = true)
+                val wireOperations = if (entries.any { !it.legacyCompatible }) {
+                    if (draft.reviewed) check(draft.wireOperations) { "服务器原始路径操作能力未确认，请重新检查" }
+                    else {
+                        val supported = try { context.api.clientCapabilities().resourceWireOperations }
+                        catch (error: ServiceException) {
+                            if (error.status != 404) throw error
+                            throw IllegalStateException("此服务器未提供原始路径操作能力，请升级服务器；未提交操作", error)
+                        }
+                        check(supported) { "此服务器不支持原始路径复制／移动，请升级服务器；未提交操作" }
+                    }
+                    true
+                } else draft.wireOperations
+                currentCoroutineContext().ensureActive()
+                check(current(context)) { "连接已切换" }
                 if (!draft.reviewed) {
-                    val paths = (entries.map { it.file.path } + entries.map { it.targetPath }).distinct()
+                    val paths = (entries.map { it.file.path to it.sourceWire } + entries.map { it.targetPath to it.targetWire }).distinctBy { it.second }
                     val metadata = linkedMapOf<String, JSONObject>()
                     for (chunk in paths.chunked(500)) {
                         check(current(context)) { "连接已切换" }
-                        val rows = context.api.resourceBatch(chunk)
+                        val rows = context.api.resourceBatch(chunk.map { it.first }, chunk.map { it.second })
                         check(rows.length() == chunk.size) { "资源检查结果不完整，请重试" }
-                        for (i in chunk.indices) { val row = rows.getJSONObject(i); check(row.getString("path") == chunk[i]); metadata[chunk[i]] = row }
+                        for (i in chunk.indices) {
+                            val row = rows.getJSONObject(i); val (path, wire) = chunk[i]
+                            check(taskResourceAcknowledged(path, wire, row.getString("path"), row.optString("wirePath"), row.opt("pathVerified") != false)) {
+                                "资源检查原始路径不匹配，请刷新或升级服务器"
+                            }
+                            metadata[wire] = row
+                        }
                     }
                     for (entry in entries) {
-                        val row = metadata.getValue(entry.file.path)
+                        val row = metadata.getValue(entry.sourceWire)
                         check(row.getInt("status") == 200) { "${entry.file.name} 已不可用，请刷新后重新选择" }
                         val item = row.getJSONObject("item")
                         check(item.getBoolean("isDir") == entry.file.directory && (entry.file.directory || item.getLong("size") == entry.file.size) &&
                             (entry.file.modified.isEmpty() || item.optString("modified") == entry.file.modified)) { "${entry.file.name} 已变化，请刷新后重新选择" }
-                        check(taskResourcePath(item.getString("path"), item.optString("wirePath")) == entry.file.path) { "文件来源已变化，请刷新" }
+                        check(taskResourceAcknowledged(entry.file.path, entry.sourceWire, item.getString("path"), item.optString("wirePath"),
+                            item.opt("pathVerified") != false)) { "文件原始路径已变化，请刷新或升级服务器" }
                     }
                     val conflicts = entries.filter { entry ->
-                        val row = metadata.getValue(entry.targetPath)
+                        val row = metadata.getValue(entry.targetWire)
                         check(row.getInt("status") in setOf(200, 404)) { "目标路径无法访问，请选择其他目录" }
+                        if (row.getInt("status") == 200) {
+                            val item = row.getJSONObject("item")
+                            check(taskResourceAcknowledged(entry.targetPath, entry.targetWire, item.getString("path"), item.optString("wirePath"),
+                                item.opt("pathVerified") != false)) { "同名目标原始路径不匹配，请刷新或升级服务器" }
+                        }
                         row.getInt("status") == 200
-                    }.map { it.file.path }.toSet()
+                    }.map { it.file.mediaKey }.toSet()
                     if (!current(context)) return@launch
                     mutable.value = mutable.value.copy(changing = false, transfer = draft.copy(reviewed = true, conflicts = conflicts,
-                        choices = conflicts.associateWith { FileConflictChoice.KEEP_BOTH }))
+                        choices = conflicts.associateWith { FileConflictChoice.KEEP_BOTH }, wireOperations = wireOperations))
                     return@launch
                 }
-                val selected = entries.filter { draft.choices[it.file.path] != FileConflictChoice.SKIP }
+                val selected = entries.filter { draft.choices[it.file.mediaKey] != FileConflictChoice.SKIP }
                 require(selected.isNotEmpty()) { "所有项目都已跳过，请调整选择" }
-                check(selected.none { draft.choices[it.file.path] == FileConflictChoice.REPLACE } || permissions.modify) { "替换现有内容需要修改权限" }
-                check(selected.none { draft.choices[it.file.path] == FileConflictChoice.REPLACE } || replaceConfirmed) { "请先确认替换同名目标内容" }
-                check(selected.none { entry -> draft.choices[entry.file.path] == FileConflictChoice.REPLACE && entries.any {
-                    it.file.path == entry.targetPath || it.file.path.startsWith(entry.targetPath.trimEnd('/') + "/")
+                check(selected.none { draft.choices[it.file.mediaKey] == FileConflictChoice.REPLACE } || permissions.modify) { "替换现有内容需要修改权限" }
+                check(selected.none { draft.choices[it.file.mediaKey] == FileConflictChoice.REPLACE } || replaceConfirmed) { "请先确认替换同名目标内容" }
+                check(selected.none { entry -> draft.choices[entry.file.mediaKey] == FileConflictChoice.REPLACE && entries.any {
+                    resourceWireContains(entry.targetWire, it.sourceWire)
                 } }) { "目标包含本次源项目，不能替换，请保留两份或跳过" }
-                check(selected.none { it.file.path == it.targetPath && draft.choices[it.file.path] != FileConflictChoice.KEEP_BOTH }) { "源和目标相同，只能保留两份或跳过" }
+                check(selected.none { it.sourceWire == it.targetWire && draft.choices[it.file.mediaKey] != FileConflictChoice.KEEP_BOTH }) { "源和目标相同，只能保留两份或跳过" }
                 val body = JSONObject().put("action", draft.action.wire).put("items", JSONArray(selected.map { entry ->
-                    JSONObject().put("from", "/files" + entry.file.wirePath.ifEmpty { SearchResult.encodePath(entry.file.path) })
-                        .put("to", "/files" + entry.targetWire).put("name", entry.file.name).put("size", entry.file.size)
+                    JSONObject().apply {
+                        if (wireOperations) put("fromWirePath", entry.sourceWire).put("toWirePath", entry.targetWire)
+                        if (entry.legacyCompatible) put("from", "/files" + entry.sourceWire).put("to", "/files" + entry.targetWire)
+                    }.put("name", entry.file.name).put("size", entry.file.size)
                         .put("modified", entry.file.modified).put("isDir", entry.file.directory)
-                        .put("overwrite", draft.choices[entry.file.path] == FileConflictChoice.REPLACE)
-                        .put("rename", draft.choices[entry.file.path] == FileConflictChoice.KEEP_BOTH)
+                        .put("overwrite", draft.choices[entry.file.mediaKey] == FileConflictChoice.REPLACE)
+                        .put("rename", draft.choices[entry.file.mediaKey] == FileConflictChoice.KEEP_BOTH)
                 }))
+                currentCoroutineContext().ensureActive()
                 check(current(context)) { "连接已切换" }; sending = true
                 val task = ServerTask.from(context.api.action("POST", "/api/resources/transfer", body))
                 check(task.userId == context.account.userId && task.type == "file.${draft.action.wire}") { "服务器返回的任务来源不匹配" }

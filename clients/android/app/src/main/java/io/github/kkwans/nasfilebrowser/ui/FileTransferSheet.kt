@@ -30,12 +30,12 @@ import io.github.kkwans.nasfilebrowser.data.*
     val maximum = LocalConfiguration.current.screenHeightDp.dp * .92f
     val busy = state.changing || draft.loading
     val planned = remember(draft.files, draft.directory, draft.action) {
-        runCatching { fileTransferEntries(draft.files, draft.directory, draft.action) }
+        runCatching { fileTransferEntries(draft.files, draft.directory, draft.action, allowOpaque = true) }
     }
     val entryError = planned.exceptionOrNull()?.message
     var sources by remember(state.scope, draft.files) { mutableStateOf(false) }
     var replaceConfirmed by remember(draft.directory, draft.choices) { mutableStateOf(false) }
-    val selected = draft.files.count { draft.choices[it.path] != FileConflictChoice.SKIP }
+    val selected = (planned.getOrNull()?.map { it.file } ?: draft.files).count { draft.choices[it.mediaKey] != FileConflictChoice.SKIP }
     val replaces = draft.choices.values.any { it == FileConflictChoice.REPLACE }
     ModalBottomSheet(onDismissRequest = model.fileOperations::closeTransfer, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().heightIn(max = maximum).padding(horizontal = 16.dp).padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -60,15 +60,17 @@ import io.github.kkwans.nasfilebrowser.data.*
                 }
                 else if (draft.reviewed) {
                     if (draft.conflicts.isEmpty()) item { Text("目标名称没有冲突，可以确认提交。", Modifier.padding(vertical = 12.dp), style = MaterialTheme.typography.bodyMedium) }
-                    items(draft.files.filter { it.path in draft.conflicts }, key = { it.mediaKey }) { file ->
+                    items(draft.files.filter { it.mediaKey in draft.conflicts }, key = { it.mediaKey }) { file ->
                         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(file.name, style = MaterialTheme.typography.bodyMedium)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 FileConflictChoice.entries.forEach { choice ->
-                                    val target = planned.getOrNull()?.firstOrNull { it.file.path == file.path }?.targetPath
-                                    val protected = target != null && draft.files.any { it.path == target || it.path.startsWith(target.trimEnd('/') + "/") }
+                                    val target = planned.getOrNull()?.firstOrNull { it.file.mediaKey == file.mediaKey }?.targetWire
+                                    val protected = target != null && draft.files.any { source ->
+                                        runCatching { resourceWireContains(target, taskResourceTarget(source.path, source.wirePath, allowOpaque = true).wirePath) }.getOrDefault(true)
+                                    }
                                     val enabled = !busy && (choice != FileConflictChoice.REPLACE || client.permissions.modify && !protected)
-                                    FilterChip(draft.choices[file.path] == choice, { model.fileOperations.chooseConflict(file.path, choice) },
+                                    FilterChip(draft.choices[file.mediaKey] == choice, { model.fileOperations.chooseConflict(file.mediaKey, choice) },
                                         label = { Text(choice.label) }, enabled = enabled,
                                         modifier = Modifier.semantics { contentDescription = "${file.name}：${choice.label}" })
                                 }
@@ -78,7 +80,10 @@ import io.github.kkwans.nasfilebrowser.data.*
                 } else {
                     if (draft.directories.isEmpty() && !draft.loading && draft.error == null) item { Text("没有子文件夹，可选择当前目录。", Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     items(draft.directories, key = { it.mediaKey }) { folder ->
-                        val excluded = draft.files.any { it.directory && (folder.path == it.path || folder.path.startsWith(it.path.trimEnd('/') + "/")) }
+                        val excluded = draft.files.any { source -> source.directory && runCatching {
+                            resourceWireContains(taskResourceTarget(source.path, source.wirePath, allowOpaque = true).wirePath,
+                                taskResourceTarget(folder.path, folder.wirePath, allowOpaque = true).wirePath)
+                        }.getOrDefault(true) }
                         ListItem(headlineContent = { Text(folder.name) }, leadingContent = { Icon(painterResource(R.drawable.ic_folder), null) },
                             supportingContent = if (excluded) ({ Text("源目录内，不能作为目标") }) else null,
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = !busy && !excluded) {
