@@ -60,6 +60,7 @@ import io.github.kkwans.nasfilebrowser.data.DirectoryCrumb
     LaunchedEffect(tags.scope) { if (tags.scope.isNotEmpty()) model.tags.refresh() }
     val displayed = remember(state.files, state.fileCategory, state.fileOrder, tags.items, tags.filterId, tags.globalFilter) { model.directoryItems() }
     var details by remember(state.previewScope, state.wirePath) { mutableStateOf<ResourceRef?>(null) }
+    var createMenu by remember(state.previewScope, state.wirePath) { mutableStateOf(false) }
     var selecting by remember(state.previewScope, state.wirePath) { mutableStateOf(false) }
     var selected by remember(state.previewScope, state.wirePath) { mutableStateOf(emptySet<String>()) }
     fun key(file: ResourceRef) = file.wirePath.ifEmpty { file.path }
@@ -108,8 +109,15 @@ import io.github.kkwans.nasfilebrowser.data.DirectoryCrumb
                             })
                         }
                     }
-                    if (state.permissions.create) IconButton({ model.startDirectoryCreation(state.previewScope) }, enabled = !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null && operations.batchRename == null) {
-                        Icon(painterResource(R.drawable.ic_create_folder), "新建文件夹", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
+                    if (state.permissions.create) Box {
+                        IconButton({ createMenu = true }, enabled = !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null && operations.batchRename == null) {
+                            Icon(painterResource(R.drawable.ic_create_folder), "新建文件或文件夹", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
+                        }
+                        DropdownMenu(createMenu, { createMenu = false }) {
+                            DropdownMenuItem({ Text("新建文件") }, { createMenu = false; model.startFileCreation(state.previewScope) })
+                            DropdownMenuItem({ Text("新建文件夹") }, { createMenu = false; model.startDirectoryCreation(state.previewScope) },
+                                modifier = Modifier.semantics { contentDescription = "新建文件夹" })
+                        }
                     }
                     IconButton(onClick = { model.retry(); model.tags.refresh() }, enabled = !state.busy) {
                         Icon(painterResource(R.drawable.ic_refresh), "刷新", Modifier.size(22.dp), tint = colors.onSurfaceVariant)

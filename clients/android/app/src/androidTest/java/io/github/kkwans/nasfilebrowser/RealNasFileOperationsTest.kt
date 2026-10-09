@@ -134,6 +134,7 @@ internal class RealNasFileOperationsTest : LibraryUiHarness() {
             main { model.fileLayout(FileLayout.LIST) }
             withTimeout(5000) { model.state.first { it.fileLayout == FileLayout.LIST } }
             assertTrue(device.wait(Until.hasObject(By.desc(FileLayout.LIST.collectionDescription())), 5000))
+            action("新建文件或文件夹").click()
             action("新建文件夹").click()
             val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000) ?: error("Missing directory input")
             field.text = "相册"; clickText("创建")

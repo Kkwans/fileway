@@ -31,6 +31,7 @@ internal class DirectoryCreationUiTest : LibraryUiHarness() {
     }
     private fun input() = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000) ?: error("Missing directory input")
     private suspend fun start() {
+        action("新建文件或文件夹").click()
         action("新建文件夹").click()
         withTimeout(5000) { model.fileOperations.state.first { it.creation != null } }
         input()

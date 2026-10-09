@@ -130,6 +130,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val fileChecksum = FileChecksumController(viewModelScope) { context === it && generation == it.generation }
     val documents = DocumentPreviewController(application, viewModelScope,
         { context === it && generation == it.generation }, { bound, file -> if (context === bound) recentAccess.record(file) })
+    val documentEdits = DocumentEditController(application, viewModelScope, { context === it && generation == it.generation },
+        onSaved = { bound, _ -> if (context === bound) { documents.retry(); transferRefreshPending = true; refreshTransferDirectoryIfVisible() } },
+        onCreated = { bound, _ -> if (context === bound) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
     val accountSettings = AccountSettingsController(viewModelScope, { context === it && generation == it.generation },
         onPasswordChanged = { bound, password ->
             if (context === bound && generation == bound.generation && store.password(bound.profile, bound.account) != null && context === bound)
@@ -259,6 +262,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 recentAccess.bind(bound)
                 fileChecksum.bind(bound)
                 documents.bind(bound)
+                documentEdits.bind(bound)
                 accountSettings.bind(bound)
                 trash.bind(bound)
                 fileOperations.bind(bound)
@@ -336,6 +340,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun fileCategory(value: FileCategory) { mutable.value = mutable.value.copy(fileCategory = value) }
     fun fileOrder(value: FileOrder) { mutable.value = mutable.value.copy(fileOrder = value) }
     fun open(file: ResourceRef) = openFrom(file, directoryItems(), MediaQueueSource.DIRECTORY)
+    fun startFileCreation(sourceScope: String) {
+        val bound = context ?: return
+        if (sourceScope != bound.api.id || mutable.value.busy || !mutable.value.permissions.create) return
+        val operations = fileOperations.state.value
+        if (operations.changing || operations.creation != null || operations.transfer != null || operations.batchRename != null) return
+        documentEdits.startCreate(DirectoryCrumb("当前目录", mutable.value.path, mutable.value.wirePath), sourceScope)
+    }
+    fun verifyDocumentDirectory(parent: DirectoryCrumb) { tab("files"); browse(parent.path, parent.wirePath ?: SearchResult.encodePath(parent.path)) }
     fun openRemotePath(path: String) = openRemotePathWithWire(path, "")
     private fun openRemotePathWithWire(path: String, requestedWire: String) {
         val bound = context ?: return
@@ -1021,6 +1033,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         recentAccess.bind(null)
         fileChecksum.bind(null)
         documents.bind(null)
+        documentEdits.bind(null)
         accountSettings.bind(null)
         trash.bind(null)
         fileOperations.bind(null)

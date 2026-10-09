@@ -39,6 +39,7 @@ import java.util.Locale
     val recent by model.recent.collectAsStateWithLifecycle()
     val search by model.search.state.collectAsStateWithLifecycle()
     val document by model.documents.state.collectAsStateWithLifecycle()
+    val documentEdit by model.documentEdits.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     // Local queue filters/scroll survive connecting or changing the server.
     val localTaskState = rememberSaveableStateHolder()
@@ -59,7 +60,9 @@ import java.util.Locale
     }
     BackHandler(state.connected || state.image != null || state.selected != null || state.tab != "files") { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
-    if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model); UploadSelectionDialog(model) }
+    if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model); UploadSelectionDialog(model)
+        CreateFileDialog(model.documentEdits, model::verifyDocumentDirectory)
+    }
     if (state.startupPending) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -72,7 +75,14 @@ import java.util.Locale
     }
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
-    if (document.file != null) { LibraryTheme { DocumentPreviewScreen(model.documents, {}, model::download, state.permissions.download, onEdit = null) }; return }
+    if (documentEdit.file != null) { LibraryTheme { DocumentEditorScreen(model.documentEdits, {}) }; return }
+    if (document.file != null) { LibraryTheme {
+        DocumentPreviewScreen(model.documents, {}, model::download,
+            state.permissions.download,
+            onEdit = if (state.permissions.modify) {
+                file, text -> model.documentEdits.open(file, text, state.previewScope)
+            } else null)
+    }; return }
     if (state.tab == "account" && state.connected) { LibraryTheme {
         AccountSettingsScreen(model.accountSettings, { model.tab("settings") }, model::disconnect)
     }; return }
