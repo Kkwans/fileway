@@ -4,52 +4,104 @@ Native Android client for Fileway's Linux/Windows servers. Windows desktop is
 planned as a later delivery in this same repository.
 
 Android 10+ / arm64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
-and an embedded Go/tsnet transport. The published 0.6.1 preview uses this native
-playback chain; hardware HDR, audible continuity and long-play acceptance remain open.
+and an embedded Go/tsnet transport. The 0.7 line uses this native playback chain;
+actual HDR output, audible continuity and long-play acceptance remain open.
 
 ## Status
 
-Implementation in progress. Actual hardware decoding and HDR output acceptance remain open.
+Implementation and acceptance are in progress. Scoped engineering/device results
+are separate from full API35/API37 CI, physical HDR, speaker/Bluetooth continuity,
+long-film performance and complete UI acceptance. This preview does not certify
+all formats, server/provider behavior or recovery scenarios.
 
-Physical HDR, decoder and long-play acceptance remain incomplete. Development
-plans and device-specific test evidence are maintained outside this repository.
+## Install the 0.7.1 preview
 
-## Install the UI preview
+[Android 0.7.1 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.1-b0f0c4b/fileway-android-0.7.1-preview.apk)
 
-[Android 0.6.1 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.6.1-c3fe361/fileway-android-0.6.1-preview.apk)
+Published artifact: `0.7.1-preview`, **signed release**, versionCode **11**, Room **8**.
+Package `io.github.kkwans.nasfilebrowser` and the original signing identity are
+preserved. Source: `b0f0c4bce5d3e3a157f049808f5dc76f55fe47e2`.
+See [0.7.1 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.1-b0f0c4b).
 
-0.6.1 fixes partial MKV startup, saves startup metadata for offline playback of
-incomplete MKV/MP4/WebM downloads, waits for missing bytes without overriding a
-manual pause, and shows the downloaded fraction and conservative indexed playable
-range on the timeline. It also fixes the playhead's vertical alignment, adds file
-multiselect and batch downloads, centers compact previews, limits visible tags to
-the unbounded grid, and improves file details and library selection sheets.
+The release build and lint passed, with 87 JVM tests in the configured debug
+host-test variant. The signed APK passed both ABI and 16 KiB ELF/ZIP checks.
+Xiaomi14 was cover-upgraded to code 11; launch, retained download records, and
+actual local MKV picture/subtitle output were verified. Full CI and the remaining
+media/functional acceptance are still in progress.
 
-The native Media3/FFmpeg/libass chain and server library/task/storage features remain
-from 0.6. VersionCode 9 preserves the original package, signing certificate and
-Room6 data. Source `c3fe361df9f6d70376837809e36a2b59b6f70cfb`.
+### Features available in the 0.7 line
 
-This is a signed debug preview. Build/lint/unit/package checks passed. Scoped
-Xiaomi14 checks include an original NAS movie's partial-prefix startup and offline
-startup without network reads, incomplete MKV and front/tail-indexed MP4, process
-restart and seek, missing-byte recovery/manual pause, batch-download bytes and
-related file/timeline UI. These do not certify every format, actual HDR, audible
-continuity, long-film performance, full API35/API37 CI or complete UI acceptance.
-See [0.6.1 scope and recovery](docs/preview-0.6.1.md) and
-[release assets with corresponding native sources](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.6.1-c3fe361).
+- A task center with separate downloads, uploads, server background tasks and
+  operation history; Recent separates playback/resume history from server-access records.
+- File browsing/search, multiselect, file/folder downloads, favorites/groups, tags,
+  trash and server storage tools.
+- Native text/PDF reading; text search/copy, conditional editing that preserves
+  encoding/newlines, and exclusive file creation.
+- Foreground native audio playback with same-type queues, seek, audio-track and
+  playback-speed controls, alongside native video and image viewing.
+- Archive browsing/search, selected extraction/reporting and read-only member
+  image/audio/video/document previews; rule-based batch rename, on-demand file
+  checksums/comparison and ZIP download packaging.
+- Account preferences/passwords, administrator user/permission/rule management,
+  server configuration and authorized single-command output.
+- App updates check both stable and preview channels without server credentials,
+  label the channel, retain compatible upgrade choices and verify package/version,
+  certificate and ABI before opening the system installer. See [update contract](docs/app-updates.md).
 
-Cover-install; do not uninstall or clear data. The release APK was cover-installed
-and its version and launch verified on Xiaomi14. Old partial videos need one online
-open to prepare startup metadata; new supported video downloads prepare it before
-the body. Existing tasks keep their original connection channel. Expired legacy
-accounts without a saved password need one login with keep-login enabled.
+These are implemented feature groups, with scoped verification. Server capabilities
+and versions determine availability; unsupported newer operations request an upgrade.
+The full App-internal download/install/cover-upgrade flow remains a separate gate.
 
-Preview releases follow product significance: substantial feature groups advance the
-minor version (0.4, 0.5); important fixes advance the patch version (0.4.1, 0.4.2).
-Each delivered APK increases versionCode, preserves signing identity and names the
-successfully pushed source SHA. Small routine changes need not publish a preview.
-Release notes separate verified behavior from pending acceptance; preview publication
-never implies the overall media/UI Goal is complete.
+### Core fixes in 0.7.1
+
+- Decode external PGS/SUP display sets on demand and replay ended audio/video on
+  one play action while retaining the current media, tracks and preferred speed.
+- Reserve the whole upload batch's targets, serialize competing submissions and
+  respect cancellation; preserve original-path identity through favorites and
+  related Web resource reads, including group order/color updates.
+- Retain acknowledged HTTP writes across renewal failure; isolate shared-server
+  metadata changes by scope and recheck TUS overwrite permissions after creation.
+- Cancel real source/upstream streams, keep partial Range reads distinct from
+  whole-file completion, and normalize Windows HLS export paths before validation.
+
+Shared-server fixes require server `2026.10.10-v1` or later on Linux or Windows.
+
+### Upgrade, verification and recovery
+
+Cover-install; do not uninstall or clear data. The same-package/same-certificate,
+higher-versionCode path preserves existing Room8 state, profiles, saved credentials,
+downloads/uploads, preferences and embedded-node identity. Earlier compatible
+schemas use the existing migrations; there is no destructive migration fallback.
+Use a same-certificate, higher-versionCode repair for recovery rather than a
+lower-version APK against a newer database. See [local state](docs/local-state.md).
+
+Additional repair-set evidence comes from signed debug/test-APK waves: build/lint,
+87 JVM tests, five PGS device tests, and a 12-method phone set. Complete offline
+MKV cold start and actual picture output were also exercised. These results do
+not certify full CI, HDR/audio/long-play or complete UI acceptance.
+
+Older partial videos need one online opening to prepare missing startup metadata
+before offline cold start. New supported MKV/MP4/WebM downloads prepare it before
+the body; only saved, decodable portions are available offline. Existing tasks
+retain their original connection channel; changing the browsing connection does
+not automatically reroute them. Expired legacy accounts without a saved password
+need one login with keep-login enabled. See [download locations and recovery](docs/download-storage.md),
+[uploads](docs/uploads.md) and [historical 0.6.1 scope](docs/preview-0.6.1.md).
+
+Preview releases follow product significance: substantial feature groups advance
+the minor version and important fixes advance the patch version. Delivered APKs
+increase versionCode, preserve signing identity and identify the pushed source.
+Preview publication never implies complete media/UI acceptance.
+
+## Native dependency sources
+
+Media3/FFmpeg/libass dependency inputs and recipes are unchanged from 0.6.1. Reuse the published
+[Media3/FFmpeg source bundle](https://github.com/Kkwans/fileway/releases/download/android-preview-0.6.1-c3fe361/fileway-media3-ffmpeg-sources.tar.gz)
+and [libass source bundle](https://github.com/Kkwans/fileway/releases/download/android-preview-0.6.1-c3fe361/fileway-libass-0.5.1-sources.tar.gz),
+which remain assets of that release. Reproduction uses the [native build recipe](docs/ffmpeg-audio-probe.md)
+and [pinned input lock](native/media3-ffmpeg.lock.json), with the
+[upstream Media3 decoder module](https://github.com/androidx/media/tree/1.11.1/libraries/decoder_ffmpeg)
+and [official FFmpeg releases](https://ffmpeg.org/download.html).
 
 ## Build
 
