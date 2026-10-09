@@ -124,7 +124,11 @@ func (e *Engine) execute(c Command) (any, error) {
 		}
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	timeout := 30 * time.Second
+	if c.Op == "request" {
+		timeout = transport.RequestTimeout(c.Method, c.Endpoint)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if c.RequestID != "" {
 		e.mu.Lock()

@@ -152,7 +152,7 @@ func (s *Session) do(ctx context.Context, method, endpoint string, body []byte, 
 	if token := s.currentToken(); token != "" {
 		req.Header.Set("X-Auth", token)
 	}
-	res, err := s.client.Do(req)
+	res, err := s.requestClient(method, endpoint).Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
