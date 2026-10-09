@@ -87,8 +87,8 @@ import java.util.Locale
     if (documentEdit.file != null) { LibraryTheme { DocumentEditorScreen(model.documentEdits, {}) }; return }
     if (document.file != null) { LibraryTheme {
         DocumentPreviewScreen(model.documents, model::closeTemporaryContent, model::download,
-            state.permissions.download && !model.isTemporaryContent(document.file!!),
-            onEdit = if (state.permissions.modify && !model.isTemporaryContent(document.file!!)) {
+            document.file!!.downloadId.isEmpty() && state.permissions.download && !model.isTemporaryContent(document.file!!),
+            onEdit = if (document.file!!.downloadId.isEmpty() && state.permissions.modify && !model.isTemporaryContent(document.file!!)) {
                 file, text -> model.documentEdits.open(file, text, state.previewScope)
             } else null)
     }; return }

@@ -27,6 +27,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.*
 import io.github.kkwans.nasfilebrowser.download.*
+import io.github.kkwans.nasfilebrowser.data.DocumentPreviewKind
+import io.github.kkwans.nasfilebrowser.data.documentPreviewKind
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -180,7 +182,8 @@ private fun downloadDirectoryLabel(tree: String): String = if (tree.isEmpty()) "
 }.getOrDefault("已授权的自定义目录")
 
 private fun openDownloaded(context: Context, model: ClientModel, item: DownloadRecord, kind: MediaKind?) {
-    if (kind != null) { model.openDownload(item); return }
+    val file = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
+    if (kind != null || documentPreviewKind(file) != DocumentPreviewKind.OTHER) { model.openDownload(item); return }
     try {
         val uri = Uri.parse(item.localUri)
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(item.name.substringAfterLast('.', "").lowercase(Locale.ROOT)) ?: "application/octet-stream"

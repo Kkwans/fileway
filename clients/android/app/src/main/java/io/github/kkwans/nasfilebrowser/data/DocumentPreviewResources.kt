@@ -6,14 +6,17 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.os.CancellationSignal
 import kotlinx.coroutines.*
 import okhttp3.*
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.FileNotFoundException
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resumeWithException
 
 internal class DocumentWorkingFile(val file: File, private val dispose: (File) -> Unit) : AutoCloseable {
@@ -44,10 +47,15 @@ internal object DocumentWorkingFiles {
 internal interface DocumentPreviewReader {
     suspend fun text(lease: PreviewLease, expected: Long): ByteArray
     suspend fun pdf(context: Context, lease: PreviewLease, expected: Long): DocumentWorkingFile
+    suspend fun text(context: Context, uri: Uri, expected: Long): ByteArray = NativeDocumentReader.text(context, uri, expected)
+    suspend fun pdf(context: Context, uri: Uri, expected: Long): DocumentWorkingFile = NativeDocumentReader.pdf(context, uri, expected)
 }
+
+internal class LocalDocumentReadException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /** Reuses the existing OkHttp localhost-capability pattern used by TemporaryImages. */
 internal object NativeDocumentReader : DocumentPreviewReader {
+    private val localReads = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = OkHttpClient.Builder().cache(null).followRedirects(false).followSslRedirects(false)
         .retryOnConnectionFailure(false).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
     private suspend fun <T> read(lease: PreviewLease, expected: Long, limit: Long, working: DocumentWorkingFile?, finish: (ByteArray?) -> T): T {
@@ -107,6 +115,84 @@ internal object NativeDocumentReader : DocumentPreviewReader {
             withContext(Dispatchers.IO) { working = DocumentWorkingFiles.create(context, expected) }
             val owned = requireNotNull(working)
             return read(lease, expected, DOCUMENT_PDF_LIMIT, owned) { owned }
+        } catch (error: Throwable) { working?.close(); throw error }
+    }
+    /** Only a borrowed read descriptor touches the download. PDF ownership is
+     * always a separate, bounded working copy; closing it cannot delete a URI. */
+    private suspend fun <T> readLocal(context: Context, uri: Uri, expected: Long, limit: Long,
+        working: DocumentWorkingFile?, finish: (ByteArray?) -> T): T {
+        require(uri.scheme == "content" && !uri.authority.isNullOrEmpty()) { "本机文件来源无效，请从下载列表重新打开" }
+        require(expected in 0..limit) { "本机文档超过内置查看上限，原文件未改变" }
+        return suspendCancellableCoroutine { continuation ->
+            val signal = CancellationSignal()
+            val descriptor = AtomicReference<ParcelFileDescriptor?>()
+            continuation.invokeOnCancellation {
+                runCatching { signal.cancel() }
+                runCatching { descriptor.getAndSet(null)?.close() }
+                working?.close()
+            }
+            localReads.launch {
+                var opened: ParcelFileDescriptor? = null
+                var delivered = false
+                try {
+                    if (!continuation.isActive) return@launch
+                    val inputDescriptor = context.contentResolver.openFileDescriptor(uri, "r", signal)
+                        ?: throw FileNotFoundException("Local document descriptor unavailable")
+                    opened = inputDescriptor
+                    descriptor.set(inputDescriptor)
+                    if (!continuation.isActive) return@launch
+                    val size = inputDescriptor.statSize
+                    if (size >= 0 && size != expected) throw LocalDocumentReadException("本机文件长度已变化，原文件和下载记录保留")
+                    val memory = if (working == null) ByteArrayOutputStream() else null
+                    val output = working?.file?.outputStream() ?: memory!!
+                    var total = 0L
+                    ParcelFileDescriptor.AutoCloseInputStream(inputDescriptor).use { input -> output.use { sink ->
+                        val buffer = ByteArray(32 * 1024)
+                        while (continuation.isActive) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            if (total > limit || total > expected) throw LocalDocumentReadException("本机文件长度已变化或超过查看上限，原文件未改变")
+                            if (working == null) sink.write(buffer, 0, count)
+                            else DocumentWorkingFiles.write(working, sink, buffer, count)
+                        }
+                    } }
+                    if (!continuation.isActive) return@launch
+                    if (total != expected) throw LocalDocumentReadException("本机文档读取不完整或长度已变化，请检查原文件后重试")
+                    val result = finish(memory?.toByteArray())
+                    delivered = true
+                    continuation.resume(result) { _, _, _ -> working?.close() }
+                } catch (error: Exception) {
+                    if (continuation.isActive) continuation.resumeWithException(when (error) {
+                        is LocalDocumentReadException -> error
+                        is SecurityException -> LocalDocumentReadException("原下载目录读取授权已失效，请返回下载列表重新授权后重试", error)
+                        is FileNotFoundException -> LocalDocumentReadException("本机文件已删除、移动或不可用，下载记录已保留", error)
+                        else -> LocalDocumentReadException("本机文档读取失败，请检查原文件或目录授权后重试", error)
+                    })
+                } catch (error: OutOfMemoryError) {
+                    if (continuation.isActive) continuation.resumeWithException(LocalDocumentReadException("本机内存不足，请关闭其他文档后重试；原件保留", error))
+                } finally {
+                    descriptor.getAndSet(null)?.let { runCatching { it.close() } }
+                    runCatching { opened?.close() }
+                    if (!delivered) working?.close()
+                }
+            }
+        }
+    }
+    override suspend fun text(context: Context, uri: Uri, expected: Long): ByteArray =
+        readLocal(context, uri, expected, DOCUMENT_TEXT_LIMIT, null) { it!! }
+    override suspend fun pdf(context: Context, uri: Uri, expected: Long): DocumentWorkingFile {
+        var working: DocumentWorkingFile? = null
+        try {
+            withContext(Dispatchers.IO) {
+                working = try { DocumentWorkingFiles.create(context, expected) }
+                    catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        throw LocalDocumentReadException("无法准备 PDF 临时查看空间，请检查可用存储或关闭其他文档；本机原件保留", error)
+                    }
+            }
+            val owned = requireNotNull(working)
+            return readLocal(context, uri, expected, DOCUMENT_PDF_LIMIT, owned) { owned }
         } catch (error: Throwable) { working?.close(); throw error }
     }
 }

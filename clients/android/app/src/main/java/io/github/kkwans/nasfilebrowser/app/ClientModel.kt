@@ -637,7 +637,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun openLocal(file: ResourceRef, queue: MediaQueue?, autoplay: Boolean) {
-        search.close(); operation?.cancel()
+        search.close(); operation?.cancel(); documents.close()
         val request = ++mediaRequest
         pendingOpenFromPlayer = mutable.value.selected != null
         pendingMediaOpen = request
@@ -669,7 +669,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                         player.open(uri, item.positionMs, foreground && autoplay, playbackPreferences.videoDecodePolicy.value, DownloadDataSource.Factory(getApplication()))
                         saveTimer = viewModelScope.launch { while (true) { delay(10_000); if (player.state.value.playing) saveProgress() } }
                     }
-                    null -> error("此文件请从下载页面使用系统应用打开")
+                    null -> {
+                        check(item.complete) { "文档下载完成后即可内置查看" }
+                        check(documentPreviewKind(downloadRef(item)) != DocumentPreviewKind.OTHER) { "此文件请从下载页面使用系统应用打开" }
+                        mutable.value = mutable.value.copy(selected = null, image = null, mediaQueue = null, busy = false, stage = "", progressStatus = null)
+                        documents.openLocal(item)
+                    }
                 }
                 pendingMediaOpen = null; pendingOpenFromPlayer = false
             } catch (failure: Exception) {
@@ -875,6 +880,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun showConnection() { tab("files") }
     fun openUpdates() { if (mutable.value.tab != "updates") updateReturnTab = mutable.value.tab; tab("updates") }
     fun openDownloads() {
+        documents.close(); closeTemporaryContent()
         if (mutable.value.selected != null || pendingMediaOpen != null) leavePlayer()
         if (mutable.value.image != null) closeImage()
         tab("downloads")
@@ -1142,7 +1148,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operationHistory.bind(null)
         recentAccess.bind(null)
         fileChecksum.bind(null)
-        documents.bind(null)
+        documents.close(); documents.bind(null)
         archives.bind(null)
         archiveEntry.bind(null)
         serverSettings.bind(null)
