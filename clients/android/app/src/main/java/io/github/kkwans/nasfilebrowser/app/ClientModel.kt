@@ -130,6 +130,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val fileChecksum = FileChecksumController(viewModelScope) { context === it && generation == it.generation }
     val documents = DocumentPreviewController(application, viewModelScope,
         { context === it && generation == it.generation }, { bound, file -> if (context === bound) recentAccess.record(file) })
+    val archives = ArchiveController(viewModelScope, isCurrent = { context === it && generation == it.generation },
+        onOpened = { bound, file -> if (context === bound) recentAccess.record(file) },
+        onTaskAccepted = { bound, _ -> if (context === bound) tasks.refresh() })
     val documentEdits = DocumentEditController(application, viewModelScope, { context === it && generation == it.generation },
         onSaved = { bound, _ -> if (context === bound) { documents.retry(); transferRefreshPending = true; refreshTransferDirectoryIfVisible() } },
         onCreated = { bound, _ -> if (context === bound) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
@@ -262,6 +265,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 recentAccess.bind(bound)
                 fileChecksum.bind(bound)
                 documents.bind(bound)
+                archives.bind(bound)
                 documentEdits.bind(bound)
                 accountSettings.bind(bound)
                 trash.bind(bound)
@@ -466,6 +470,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     private fun openQueued(file: ResourceRef, queue: MediaQueue?, autoplay: Boolean = true) {
         if (file.downloadId.isNotEmpty()) { openLocal(file, queue, autoplay); return }
+        if (isBrowsableArchive(file)) {
+            val bound = context ?: return
+            search.cancel(); operation?.cancel(); mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false; endPlayback(); documents.close()
+            mutable.value = mutable.value.copy(selected = null, image = null, mediaQueue = null, busy = false, stage = "", error = null)
+            archives.open(file, bound.api.id)
+            archives.setVisible(foreground)
+            return
+        }
         if (file.directory) {
             navigation.addLast(mutable.value.path to mutable.value.wirePath)
             browse(file.path, file.wirePath)
@@ -727,6 +739,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun back(): Boolean {
         if (documents.state.value.file != null) { documents.close(); return true }
+        if (archives.state.value.file != null) { archives.close(); return true }
         if (mutable.value.image != null) { closeImage(); return true }
         if (mutable.value.selected != null) { leavePlayer(); return true }
         if (search.state.value.open) { cancel(); search.close(); return true }
@@ -793,6 +806,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
         accountSettings.setVisible(visible && mutable.value.tab == "account")
+        archives.setVisible(foreground && archives.state.value.file != null && mutable.value.connected)
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
         uploads.visible(foreground && mutable.value.tab == "uploads")
         fileOperations.setVisible(foreground && mutable.value.connected)
@@ -1033,6 +1047,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         recentAccess.bind(null)
         fileChecksum.bind(null)
         documents.bind(null)
+        archives.bind(null)
         documentEdits.bind(null)
         accountSettings.bind(null)
         trash.bind(null)

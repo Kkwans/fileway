@@ -40,6 +40,7 @@ import java.util.Locale
     val search by model.search.state.collectAsStateWithLifecycle()
     val document by model.documents.state.collectAsStateWithLifecycle()
     val documentEdit by model.documentEdits.state.collectAsStateWithLifecycle()
+    val archive by model.archives.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     // Local queue filters/scroll survive connecting or changing the server.
     val localTaskState = rememberSaveableStateHolder()
@@ -82,6 +83,10 @@ import java.util.Locale
             onEdit = if (state.permissions.modify) {
                 file, text -> model.documentEdits.open(file, text, state.previewScope)
             } else null)
+    }; return }
+    if (archive.file != null) { LibraryTheme {
+        ArchiveScreen(model.archives, {}, { model.archives.close(); model.tab("tasks") },
+            { directory -> model.archives.close(); model.verifyDocumentDirectory(directory) })
     }; return }
     if (state.tab == "account" && state.connected) { LibraryTheme {
         AccountSettingsScreen(model.accountSettings, { model.tab("settings") }, model::disconnect)
