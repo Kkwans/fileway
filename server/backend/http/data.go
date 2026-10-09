@@ -3,7 +3,10 @@ package fbhttp
 import (
 	"log"
 	"net/http"
+	"runtime"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/tomasen/realip"
 
@@ -31,6 +34,15 @@ type data struct {
 
 // Check implements rules.Checker.
 func (d *data) Check(path string) bool {
+	// HTTP resource paths use '/' separators. On Windows, accepting '\\'
+	// would let Fs normalize a different path after rules were checked, and
+	// BasePathFs can then resolve '..\\' into a same-prefix sibling scope.
+	// Invalid UTF-8 would become U+FFFD in Windows UTF-16 conversion and
+	// could address a different Unicode sibling after the rules check.
+	// Linux keeps backslashes as legal filename bytes.
+	if runtime.GOOS == "windows" && (strings.ContainsRune(path, '\\') || !utf8.ValidString(path)) {
+		return false
+	}
 	if trash.IsInternalPath(path) || files.IsUploadPartPath(path) {
 		return false
 	}
