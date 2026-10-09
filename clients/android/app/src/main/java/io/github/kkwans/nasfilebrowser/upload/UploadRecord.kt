@@ -22,6 +22,8 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
 @Dao interface UploadDao {
     @Query("SELECT * FROM uploads ORDER BY createdAt DESC") fun observe(): Flow<List<UploadRecord>>
     @Query("SELECT * FROM uploads WHERE id = :id") suspend fun get(id: String): UploadRecord?
+    @Query("SELECT targetWire FROM uploads WHERE accountKey = :accountKey AND sourceRevision = :sourceRevision AND status NOT IN ('completed', 'canceled', 'restarted')")
+    suspend fun pendingTargets(accountKey: String, sourceRevision: Long): List<String>
     @Query("SELECT COALESCE(MAX(jobId), 7900000) FROM uploads") suspend fun lastJobId(): Int
     @Insert suspend fun insert(record: UploadRecord)
     @Query("UPDATE uploads SET status = 'running', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status IN ('queued', 'interrupted', 'running')")

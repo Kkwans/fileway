@@ -20,6 +20,20 @@ data class UploadsState(val items: List<UploadRecord> = emptyList(), val busy: B
     val restart: UploadRestartDraft? = null)
 private data class UploadSelection(val binding: SessionContext, val directory: DirectoryCrumb)
 
+internal suspend fun dispatchUploadRows(rows: List<UploadRecord>, scheduled: MutableSet<String>, current: () -> Boolean,
+    start: (UploadRecord) -> Unit, failed: suspend (UploadRecord) -> Unit): Int {
+    var failures = 0
+    for (row in rows) {
+        currentCoroutineContext().ensureActive()
+        check(current()) { "上传目标已切换，已建立任务按原账号保留" }
+        try { start(row) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { failures++; failed(row) }
+        scheduled.add(row.id)
+    }
+    return failures
+}
+
 class UploadController(private val context: Context, private val scope: CoroutineScope, private val isCurrent: (SessionContext) -> Boolean) {
     private val database = ClientDatabase.get(context); private val dao = database.uploads()
     private val mutable = MutableStateFlow(UploadsState()); val state = mutable.asStateFlow()
@@ -144,47 +158,59 @@ class UploadController(private val context: Context, private val scope: Coroutin
         mutable.value = before.copy(busy = true, error = null, notice = null)
         action = scope.launch {
             var created = 0
+            var added = emptyList<UploadRecord>()
+            val scheduled = hashSetOf<String>()
             try {
                 check(selected.binding.api.permissions().create) { "当前账号没有上传权限" }
-                val batch = UUID.randomUUID().toString(); val bytes = before.drafts.fold(0L) { n, item -> Math.addExact(n, item.source.size) }
-                for (draft in before.drafts) {
-                    check(current(selected)) { "上传目标已切换，已经建立的任务保留" }
-                    if (draft.existingIdentity != null && draft.choice == UploadConflict.SKIP) {
-                        mutable.value = mutable.value.copy(drafts = mutable.value.drafts.filterNot { it === draft }); continue
+                val reservations = dao.pendingTargets(selected.binding.account.key, selected.binding.profile.sourceRevision)
+                val targets = resolveUploadTargets(before.drafts, reservations) { wire ->
+                    check(current(selected)) { "上传目标已切换，未建立新任务" }
+                    existing(selected.binding.api, wire) != null
+                }
+                check(current(selected)) { "上传目标已切换，未建立新任务" }
+                val batch = UUID.randomUUID().toString(); val bytes = targets.fold(0L) { n, item -> Math.addExact(n, item.draft.source.size) }
+                val permissions = selected.binding.api.permissions()
+                check(permissions.create) { "当前账号没有上传权限" }
+                targets.forEach { target ->
+                    val draft = target.draft
+                    check(draft.choice != UploadConflict.REPLACE || draft.existingIdentity == null ||
+                        draft.existingIdentity != "directory" && permissions.modify) { "不能覆盖文件夹，或没有覆盖权限" }
+                }
+                val now = System.currentTimeMillis()
+                added = database.withTransaction {
+                    check(current(selected)) { "上传目标已切换，未建立新任务" }
+                    val occupied = dao.pendingTargets(selected.binding.account.key, selected.binding.profile.sourceRevision)
+                        .map { uploadTargetKey(it, foldCase = true) }.toMutableSet()
+                    check(targets.all { occupied.add(uploadTargetKey(it.wire, foldCase = true)) }) {
+                        "该目标已有其他上传任务，整批未建立，请核对原任务后重试"
                     }
-                    var target = draft.targetPath; var wire = draft.targetWire
-                    if (draft.existingIdentity != null && draft.choice == UploadConflict.KEEP_BOTH) {
-                        val name = draft.source.name; val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
-                        var suffix = 2
-                        do {
-                            require(suffix <= 1000) { "同名文件太多，请换一个目录或重命名本机来源" }
-                            val candidate = name.substring(0, dot) + "（${suffix++}）" + name.substring(dot)
-                            target = draft.targetPath.substringBeforeLast('/') + "/" + candidate
-                            wire = draft.targetWire.substringBeforeLast('/') + "/" + SearchResult.encodePath(candidate)
-                        } while (existing(selected.binding.api, wire) != null)
-                    }
-                    val overwrite = draft.existingIdentity != null && draft.choice == UploadConflict.REPLACE
-                    check(!overwrite || draft.existingIdentity != "directory" && selected.binding.api.permissions().modify) { "不能覆盖文件夹，或没有覆盖权限" }
-                    val now = System.currentTimeMillis()
-                    val row = database.withTransaction {
-                        check(current(selected)) { "上传目标已切换" }
-                        val job = dao.lastJobId() + 1; require(job in 7900001..8500000) { "上传任务编号已用完" }
-                        UploadRecord(UUID.randomUUID().toString(), job, selected.binding.account.key, selected.binding.profile.id,
+                    val firstJob = dao.lastJobId() + 1
+                    require(targets.isEmpty() || firstJob in 7900001..8500000 && firstJob.toLong() + targets.size - 1 <= 8500000) { "上传任务编号已用完" }
+                    targets.mapIndexed { index, target ->
+                        val draft = target.draft
+                        val overwrite = draft.existingIdentity != null && draft.choice == UploadConflict.REPLACE
+                        UploadRecord(UUID.randomUUID().toString(), firstJob + index, selected.binding.account.key, selected.binding.profile.id,
                             selected.binding.profile.sourceRevision, draft.source.uri, draft.source.name, draft.source.mime, draft.source.size,
-                            draft.source.modified, target, wire, selected.directory.wirePath!!, selected.binding.profile.name + " · " + selected.binding.account.username,
+                            draft.source.modified, target.path, target.wire, selected.directory.wirePath!!, selected.binding.profile.name + " · " + selected.binding.account.username,
                             overwrite, if (overwrite) draft.existingIdentity!! else "", if (draft.source.size == 0L) "resources" else "tus",
                             createdAt = now, updatedAt = now, batchId = batch, batchName = draft.source.relativeDirectory.substringBefore('/').ifEmpty { "本机文件" },
-                            batchItems = before.drafts.size, batchBytes = bytes, folderUpload = before.folder).also { dao.insert(it) }
+                            batchItems = targets.size, batchBytes = bytes, folderUpload = before.folder).also { dao.insert(it) }
                     }
-                    created++
-                    if (current(selected)) mutable.value = mutable.value.copy(drafts = mutable.value.drafts.filterNot { it === draft }, notice = "已建立 $created 项上传任务")
-                    try { UploadScheduler.start(context, row) }
-                    catch (failure: Exception) { dao.command(row.id, "failed", now); throw failure }
+                }
+                created = added.size
+                if (current(selected)) mutable.value = mutable.value.copy(drafts = emptyList(), notice = "已建立 $created 项上传任务")
+                val failed = dispatchUploadRows(added, scheduled, { current(selected) }, { UploadScheduler.start(context, it) }) { row ->
+                    withContext(NonCancellable) { dao.command(row.id, "failed", now) }
                 }
                 check(current(selected)) { "上传目标已切换，已建立任务保留" }
-                selection = null; mutable.value = mutable.value.copy(busy = false, selecting = false, drafts = emptyList(), notice = "已添加 $created 项上传任务，可从上传页查看")
+                selection = null; mutable.value = mutable.value.copy(busy = false, selecting = false, drafts = emptyList(),
+                    notice = "已添加 $created 项上传任务，可从上传页查看", error = if (failed > 0) "$failed 项未能启动，可从上传页继续；任务记录已保留" else null)
             } catch (failure: Exception) {
-                if (failure !is CancellationException && current(selected)) mutable.value = mutable.value.copy(busy = false,
+                if (added.isNotEmpty()) withContext(NonCancellable) {
+                    added.filterNot { it.id in scheduled }.forEach { dao.command(it.id, "interrupted", System.currentTimeMillis()) }
+                }
+                if (failure is CancellationException) throw failure
+                if (current(selected)) mutable.value = mutable.value.copy(busy = false,
                     error = "已建立 $created 项任务；${failure.message ?: "上传准备失败"}。已有任务保留，可添加剩余项。")
             }
         }

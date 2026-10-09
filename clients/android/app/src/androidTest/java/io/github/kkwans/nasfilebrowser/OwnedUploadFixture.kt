@@ -26,6 +26,7 @@ internal class OwnedUploadFixture : Closeable {
     @Volatile var includeTusVersion = true
     @Volatile var deleteStatus = 0
     @Volatile var holdSecondChunk = false
+    @Volatile var beforeMetadata: ((String) -> Unit)? = null
     val held = CountDownLatch(1); val release = CountDownLatch(1); val lateAccepted = CountDownLatch(1)
     val url = "http://127.0.0.1:${server.localPort}"
     private val acceptor = Thread({
@@ -57,6 +58,7 @@ internal class OwnedUploadFixture : Closeable {
         if (uri.path == "/api/resources/" && uri.rawQuery == null) { reply(200, JSONObject().put("items", JSONArray()).toString()); return }
         if (uri.path.startsWith("/api/resources") && method == "GET") {
             val path = uri.path.removePrefix("/api/resources")
+            beforeMetadata?.invoke(path)
             val bytes = if (durableCancellation) published[path] ?: files[path]?.takeIf { it.size.toLong() == lengths[path] } else files[path]
             if (path != "/" && bytes == null) { reply(404, "{}"); return }
             reply(200, JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
