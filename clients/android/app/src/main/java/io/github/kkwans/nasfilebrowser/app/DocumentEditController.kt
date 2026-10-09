@@ -91,7 +91,7 @@ class DocumentEditController internal constructor(private val context: Context, 
         val epoch = ++revision
         mutable.value = before.copy(saving = true, error = null, notice = null, acknowledged = false)
         work = scope.launch {
-            var sending = false; var acknowledged = false
+            var sending = false; var acknowledged = false; var synchronizing = false
             try {
                 check(owner.api.permissions().modify) { "当前账号没有修改权限" }
                 val supported = try { owner.api.request("GET", "/api/client-capabilities").opt("conditionalTextSave") == true }
@@ -113,16 +113,23 @@ class DocumentEditController internal constructor(private val context: Context, 
                 val decoded = withContext(Dispatchers.Default) { decodeDocumentText(content) }
                 if (current(owner, epoch)) {
                     val text = documentEditorText(decoded)
-                    mutable.value = before.copy(file = actual, document = decoded, draft = text, baseline = text, saving = false, acknowledged = true, notice = "已保存并核对服务器内容")
-                    runCatching { onSaved(owner, actual) }
+                    synchronizing = true
+                    onSaved(owner, actual)
+                    if (!current(owner, epoch)) return@launch
+                    mutable.value = before.copy(file = actual, document = decoded, draft = text, baseline = text, saving = false, acknowledged = true,
+                        error = null, notice = "已保存并核对服务器内容")
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (current(owner, epoch)) {
                     val unknown = sending && (acknowledged || error !is ServiceException || error.status !in setOf(400, 401, 403, 404, 409, 413))
-                    mutable.value = before.copy(saving = false, conflict = error is ServiceException && error.status == 409,
+                    mutable.value = before.copy(saving = false, conflict = !acknowledged && error is ServiceException && error.status == 409,
                         unknownWrite = unknown, acknowledged = acknowledged,
-                        error = if (unknown) { if (acknowledged) "保存已获确认，但无法读取新版本；请核对后继续" else "保存结果尚未确认；请先核对服务器内容，避免重复提交" }
+                        error = if (unknown) {
+                            if (synchronizing) "保存已获确认且服务器内容一致，但本地刷新失败；草稿保留，请核对后继续"
+                            else if (acknowledged) "保存已获确认，但无法读取新版本；请核对后继续"
+                            else "保存结果尚未确认；请先核对服务器内容，避免重复提交"
+                        }
                         else if (error is ServiceException && error.status == 409) "服务器文件已变化，草稿已保留；请重新读取后编辑"
                         else error.message ?: "保存失败，草稿已保留")
                 }
@@ -156,6 +163,7 @@ class DocumentEditController internal constructor(private val context: Context, 
         val epoch = ++revision
         mutable.value = before.copy(loading = true, error = null)
         work = scope.launch {
+            var verified = false; var synchronizing = false
             try {
                 val expected = withContext(Dispatchers.Default) { encodeEditedDocument(before.draft, original) }
                 val (actual, bytes) = read(owner, file)
@@ -164,14 +172,18 @@ class DocumentEditController internal constructor(private val context: Context, 
                     val decoded = withContext(Dispatchers.Default) { decodeDocumentText(bytes) }
                     if (current(owner, epoch)) {
                         val text = documentEditorText(decoded)
+                        verified = true; synchronizing = true
+                        onSaved(owner, actual)
+                        if (!current(owner, epoch)) return@launch
                         mutable.value = before.copy(file = actual, document = decoded, draft = text, baseline = text, loading = false,
                             unknownWrite = false, conflict = false, acknowledged = true, error = null, notice = "已核对：服务器内容与当前草稿一致")
-                        runCatching { onSaved(owner, actual) }
                     }
                 } else mutable.value = before.copy(loading = false, unknownWrite = false, conflict = true, error = "服务器内容与草稿不同；草稿已保留，请重新读取后编辑")
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (current(owner, epoch)) mutable.value = before.copy(loading = false, error = error.message ?: "仍无法核对，请恢复连接后重试")
+                if (current(owner, epoch)) mutable.value = before.copy(loading = false, acknowledged = before.acknowledged || verified,
+                    error = if (synchronizing) "服务器内容已核对一致，但本地刷新失败；草稿保留，再次核对不会重发保存"
+                    else error.message ?: "仍无法核对，请恢复连接后重试")
             }
         }
     }
@@ -182,7 +194,7 @@ class DocumentEditController internal constructor(private val context: Context, 
         val epoch = ++revision
         mutable.value = before.copy(saving = true, error = null, notice = null)
         work = scope.launch {
-            var sending = false; var acknowledged = false; var target: DirectoryCrumb? = null
+            var sending = false; var acknowledged = false; var synchronizing = false; var target: DirectoryCrumb? = null
             try {
                 check(owner.api.permissions().create) { "当前账号没有创建文件权限" }
                 target = createdDocumentTarget(draft.parent, draft.name)
@@ -197,15 +209,18 @@ class DocumentEditController internal constructor(private val context: Context, 
                 val file = metadata(owner, ResourceRef(target.path, target.wirePath!!, target.label, false, "text", bytes.size.toLong()))
                 check(file.size == bytes.size.toLong()) { "创建已确认，但文件大小随后变化，请核对原目录" }
                 if (current(owner, epoch)) {
+                    synchronizing = true
+                    onCreated(owner, file)
+                    if (!current(owner, epoch)) return@launch
                     mutable.value = DocumentEditState(scope = owner.owner, notice = "已创建文件：${file.name}")
-                    runCatching { onCreated(owner, file) }
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 if (current(owner, epoch)) {
                     val unknown = sending && (acknowledged || error !is ServiceException || error.status !in setOf(400, 401, 403, 404, 409, 413))
                     mutable.value = before.copy(saving = false, creation = draft.copy(target = target), unknownWrite = unknown, acknowledged = acknowledged,
-                        error = if (unknown) "创建结果待核对，请勿再次提交同名文件"
+                        error = if (synchronizing) "创建已获确认，但本地刷新失败；输入和目标保留，请核对后继续"
+                        else if (unknown) "创建结果待核对，请勿再次提交同名文件"
                         else if (error is ServiceException && error.status == 409) "同名文件或文件夹已存在，未覆盖；请修改名称"
                         else error.message ?: "创建失败，输入已保留")
                 }
@@ -219,17 +234,22 @@ class DocumentEditController internal constructor(private val context: Context, 
         val epoch = ++revision
         mutable.value = before.copy(loading = true, error = null)
         work = scope.launch {
+            var verified = false; var synchronizing = false
             try {
                 val expected = withContext(Dispatchers.Default) { encodeCreatedDocument(draft.content) }
                 val (actual, bytes) = read(owner, ResourceRef(target.path, target.wirePath!!, target.label, false, "text", expected.size.toLong()))
                 check(bytes.contentEquals(expected)) { "服务器已有不同内容，请返回原目录核对并使用其他名称" }
                 if (current(owner, epoch)) {
+                    verified = true; synchronizing = true
+                    onCreated(owner, actual)
+                    if (!current(owner, epoch)) return@launch
                     mutable.value = DocumentEditState(scope = owner.owner, notice = "已核对服务器文件内容一致")
-                    runCatching { onCreated(owner, actual) }
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
-                if (current(owner, epoch)) mutable.value = before.copy(loading = false, error = error.message ?: "仍无法核对，请返回原目录查看")
+                if (current(owner, epoch)) mutable.value = before.copy(loading = false, acknowledged = before.acknowledged || verified,
+                    error = if (synchronizing) "服务器文件已核对一致，但本地刷新失败；输入保留，再次核对不会重发创建"
+                    else error.message ?: "仍无法核对，请返回原目录查看")
             }
         }
     }

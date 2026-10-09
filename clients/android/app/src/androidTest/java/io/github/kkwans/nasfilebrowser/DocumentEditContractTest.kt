@@ -27,11 +27,16 @@ internal class DocumentEditFixture(bytes: ByteArray = "old\r\n".toByteArray(), m
     val writeEntered = CompletableDeferred<Unit>()
     val writeFinished = CompletableDeferred<Unit>()
     val writes = mutableListOf<JSONObject>()
+    val metadataReads = mutableListOf<String>()
+    var contentReads = 0
     private val leases = mutableMapOf<String, String>()
     private val token = "owned." + Base64.encodeToString("{\"user\":{\"id\":1,\"username\":\"fixture\",\"perm\":{\"modify\":$modify,\"create\":$create,\"download\":$download}}}".toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP) + ".fixture"
     val file get() = ResourceRef("/�/notes.txt", sourceWire, "notes.txt", false, "text", files.getValue(sourceWire).size.toLong(), version)
     val reader = object : DocumentPreviewReader {
-        override suspend fun text(lease: PreviewLease, expected: Long): ByteArray = files.getValue(leases.getValue(lease.url)).copyOf()
+        override suspend fun text(lease: PreviewLease, expected: Long): ByteArray {
+            contentReads++
+            return files.getValue(leases.getValue(lease.url)).copyOf()
+        }
         override suspend fun pdf(context: Context, lease: PreviewLease, expected: Long): DocumentWorkingFile = error("Not a PDF fixture")
     }
     suspend fun session(owner: String): SessionContext {
@@ -46,6 +51,7 @@ internal class DocumentEditFixture(bytes: ByteArray = "old\r\n".toByteArray(), m
                 if (method == "GET" && endpoint == "/api/client-capabilities") JSONObject().put("status", 200).put("body", JSONObject().put("conditionalTextSave", supported).toString())
                 else if (method == "GET") {
                     val wire = endpoint.substringBefore('?').removePrefix("/api/resources")
+                    metadataReads.add(wire)
                     val directory = wire == parent.wirePath
                     val content = files[wire]
                     if (!directory && content == null) JSONObject().put("status", 404).put("body", "missing")
@@ -86,6 +92,185 @@ class DocumentEditContractTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
     private suspend fun settled(controller: DocumentEditController) = withTimeout(5000) { controller.state.first { !it.saving && !it.loading } }
+    private fun beginCallbackWrite(controller: DocumentEditController, fixture: DocumentEditFixture, owner: SessionContext, creating: Boolean) {
+        controller.bind(owner)
+        if (creating) {
+            controller.startCreate(fixture.parent, owner.api.id); controller.createName("callback.txt"); controller.createContent("callback draft\n"); controller.create()
+        } else {
+            controller.open(fixture.file, decodeDocumentText(fixture.files.getValue(fixture.sourceWire)), owner.api.id)
+            controller.edit("callback draft\n"); controller.save()
+        }
+    }
+
+    @Test fun savePublishesCompletionAfterReadbackAndSynchronousCallbackOnly(): Unit = runBlocking {
+        val fixture = DocumentEditFixture(); val owner = fixture.session("save-order")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main); val checked = CompletableDeferred<Result<Unit>>()
+        lateinit var controller: DocumentEditController
+        controller = DocumentEditController(context, scope, { it === owner }, onSaved = { bound, actual ->
+            checked.complete(runCatching {
+                assertSame(owner, bound); assertEquals(1, fixture.writes.size); assertEquals(1, fixture.contentReads)
+                assertEquals(fixture.version, actual.modified)
+                assertArrayEquals("callback draft\r\n".toByteArray(), fixture.files.getValue(actual.wirePath))
+                assertTrue("Keep save locked until local refresh returns", controller.state.value.saving)
+                assertTrue(controller.state.value.dirty); assertNull(controller.state.value.notice)
+                assertEquals("callback draft\n", controller.state.value.draft)
+                controller.edit("reentrant edit"); controller.save(); controller.close(discard = true)
+                assertTrue(controller.state.value.saving); assertEquals("callback draft\n", controller.state.value.draft)
+                assertEquals(1, fixture.writes.size)
+            })
+        }, reader = fixture.reader)
+        try {
+            main { beginCallbackWrite(controller, fixture, owner, false) }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertTrue(controller.state.value.acknowledged); assertFalse(controller.state.value.dirty)
+            assertFalse(controller.state.value.unknownWrite); assertNull(controller.state.value.error)
+            assertEquals(fixture.version, controller.state.value.file!!.modified)
+        } finally { main { controller.close(discard = true) }; scope.cancel() }
+    }
+
+    @Test fun createKeepsItsInputLockedUntilSynchronousCallbackReturnsWithoutDownloadPermission(): Unit = runBlocking {
+        val fixture = DocumentEditFixture(download = false); val owner = fixture.session("create-order")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main); val checked = CompletableDeferred<Result<Unit>>()
+        lateinit var controller: DocumentEditController
+        controller = DocumentEditController(context, scope, { it === owner }, onCreated = { bound, actual ->
+            checked.complete(runCatching {
+                assertSame(owner, bound); assertEquals(1, fixture.writes.size); assertEquals(0, fixture.contentReads)
+                assertTrue(fixture.metadataReads.contains(actual.wirePath))
+                assertArrayEquals("callback draft\n".toByteArray(), fixture.files.getValue(actual.wirePath))
+                assertTrue(controller.state.value.saving); assertNull(controller.state.value.notice)
+                assertEquals("callback.txt", controller.state.value.creation!!.name)
+                controller.create(); controller.createName("reentrant.txt"); controller.closeCreation()
+                assertTrue(controller.state.value.saving); assertEquals("callback.txt", controller.state.value.creation!!.name)
+                assertEquals(1, fixture.writes.size)
+            })
+        }, reader = fixture.reader)
+        try {
+            main { beginCallbackWrite(controller, fixture, owner, true) }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertNull(controller.state.value.creation); assertNull(controller.state.value.error)
+            assertEquals(1, fixture.writes.size)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun saveCallbackFailureRetainsAcknowledgementAndDraftUntilReadonlyVerificationRecovers(): Unit = runBlocking {
+        val fixture = DocumentEditFixture(); val owner = fixture.session("save-callback-failure")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main); var failCallback = true; var callbacks = 0
+        var checked = CompletableDeferred<Result<Unit>>()
+        lateinit var controller: DocumentEditController
+        controller = DocumentEditController(context, scope, { it === owner }, onSaved = { _, _ ->
+            callbacks++
+            checked.complete(runCatching {
+                assertTrue(controller.state.value.saving || controller.state.value.loading)
+                assertNull(controller.state.value.notice); assertTrue(controller.state.value.dirty)
+            })
+            if (failCallback) throw ServiceException(409, "Owned saved-view refresh failure after a successful PUT")
+        }, reader = fixture.reader)
+        try {
+            main { beginCallbackWrite(controller, fixture, owner, false) }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertTrue(controller.state.value.acknowledged); assertTrue(controller.state.value.unknownWrite)
+            assertFalse("A callback's status is not a rejected remote save", controller.state.value.conflict)
+            assertEquals("callback draft\n", controller.state.value.draft); assertTrue(controller.state.value.dirty)
+            assertTrue(controller.state.value.error.orEmpty().contains("本地")); assertNull(controller.state.value.notice)
+            main { controller.save(); controller.save() }; assertEquals(1, fixture.writes.size)
+            checked = CompletableDeferred()
+            main { controller.verifySave() }; withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertTrue(controller.state.value.unknownWrite); assertTrue(controller.state.value.acknowledged); assertEquals(1, fixture.writes.size)
+            failCallback = false; checked = CompletableDeferred()
+            main { controller.verifySave() }; withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertFalse(controller.state.value.unknownWrite); assertFalse(controller.state.value.dirty)
+            assertNull(controller.state.value.error); assertEquals(3, callbacks); assertEquals(1, fixture.writes.size)
+            assertArrayEquals("callback draft\r\n".toByteArray(), fixture.files.getValue(fixture.sourceWire))
+        } finally { main { controller.close(discard = true) }; scope.cancel() }
+    }
+
+    @Test fun createCallbackFailureKeepsConfirmedTargetAndInputWithoutRepeatingPost(): Unit = runBlocking {
+        val fixture = DocumentEditFixture(); val owner = fixture.session("create-callback-failure")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main); var failCallback = true; var callbacks = 0
+        var checked = CompletableDeferred<Result<Unit>>()
+        lateinit var controller: DocumentEditController
+        controller = DocumentEditController(context, scope, { it === owner }, onCreated = { _, _ ->
+            callbacks++
+            checked.complete(runCatching {
+                assertTrue(controller.state.value.saving || controller.state.value.loading)
+                assertNull(controller.state.value.notice); assertEquals("callback draft\n", controller.state.value.creation!!.content)
+            })
+            if (failCallback) throw ServiceException(403, "Owned created-view refresh failure after a successful POST")
+        }, reader = fixture.reader)
+        try {
+            main { beginCallbackWrite(controller, fixture, owner, true) }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            val target = fixture.parent.wirePath!! + "/callback.txt"
+            assertTrue(controller.state.value.acknowledged); assertTrue(controller.state.value.unknownWrite)
+            assertEquals(target, controller.state.value.creation!!.target!!.wirePath)
+            assertTrue(controller.state.value.error.orEmpty().contains("本地")); assertNull(controller.state.value.notice)
+            main { controller.create(); controller.createName("must-not-change.txt") }; assertEquals(1, fixture.writes.size)
+            assertEquals("callback.txt", controller.state.value.creation!!.name)
+            checked = CompletableDeferred()
+            main { controller.verifyCreation() }; withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertTrue(controller.state.value.unknownWrite); assertTrue(controller.state.value.acknowledged); assertEquals(1, fixture.writes.size)
+            failCallback = false; checked = CompletableDeferred()
+            main { controller.verifyCreation() }; withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertNull(controller.state.value.creation); assertNull(controller.state.value.error)
+            assertEquals(3, callbacks); assertEquals(1, fixture.writes.size)
+            assertArrayEquals("callback draft\n".toByteArray(), fixture.files.getValue(target))
+        } finally { scope.cancel() }
+    }
+
+    @Test fun lostAckVerificationCallbackFailureKeepsUnknownAndPromotesProvenAcknowledgement(): Unit = runBlocking {
+        for (creating in listOf(false, true)) {
+            val fixture = DocumentEditFixture(); fixture.loseWriteResponse = true
+            val owner = fixture.session("verify-failure-$creating"); val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            val checked = CompletableDeferred<Result<Unit>>()
+            lateinit var controller: DocumentEditController
+            val callback: (SessionContext, ResourceRef) -> Unit = { _, _ ->
+                checked.complete(runCatching { assertTrue(controller.state.value.loading); assertTrue(controller.state.value.unknownWrite); assertNull(controller.state.value.notice) })
+                throw IllegalStateException("Owned verification-view refresh failure")
+            }
+            controller = DocumentEditController(context, scope, { it === owner }, onSaved = callback, onCreated = callback, reader = fixture.reader)
+            try {
+                main { beginCallbackWrite(controller, fixture, owner, creating) }; settled(controller)
+                assertTrue(controller.state.value.unknownWrite); assertFalse(controller.state.value.acknowledged)
+                main { if (creating) controller.verifyCreation() else controller.verifySave() }
+                withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+                assertTrue(controller.state.value.unknownWrite); assertTrue(controller.state.value.acknowledged)
+                assertTrue(controller.state.value.error.orEmpty().contains("本地")); assertNull(controller.state.value.notice)
+                main { if (creating) controller.create() else controller.save() }; assertEquals(1, fixture.writes.size)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun saveCreateAndVerificationCallbacksCannotRestoreAnUnboundOrDifferentOwner(): Unit = runBlocking {
+        for (creating in listOf(false, true)) for (verifying in listOf(false, true)) for (switchOwner in listOf(false, true)) {
+            val fixture = DocumentEditFixture(); fixture.loseWriteResponse = verifying
+            val owner = fixture.session("old-$creating-$verifying-$switchOwner")
+            val fresh = DocumentEditFixture("fresh\n".toByteArray()); val next = fresh.session("next")
+            var active = owner
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main); val checked = CompletableDeferred<Result<Unit>>()
+            lateinit var controller: DocumentEditController
+            val callback: (SessionContext, ResourceRef) -> Unit = { bound, _ ->
+                checked.complete(runCatching {
+                    assertSame(owner, bound); assertTrue(controller.state.value.saving || controller.state.value.loading)
+                    if (switchOwner) {
+                        active = next; controller.bind(next)
+                        controller.open(fresh.file, decodeDocumentText(fresh.files.getValue(fresh.sourceWire)), next.api.id)
+                    } else controller.bind(null)
+                })
+            }
+            controller = DocumentEditController(context, scope, { it === active }, onSaved = callback, onCreated = callback, reader = fixture.reader)
+            try {
+                main { beginCallbackWrite(controller, fixture, owner, creating) }
+                if (verifying) { settled(controller); main { if (creating) controller.verifyCreation() else controller.verifySave() } }
+                withTimeout(5000) { checked.await() }.getOrThrow(); main { }
+                assertEquals(if (switchOwner) next.owner else "", controller.state.value.scope)
+                assertEquals(if (switchOwner) "fresh\n" else "", controller.state.value.draft)
+                assertNull(controller.state.value.notice); assertNull(controller.state.value.error); assertNull(controller.state.value.creation)
+                assertFalse(controller.state.value.loading); assertFalse(controller.state.value.saving); assertFalse(controller.state.value.unknownWrite)
+                assertEquals(1, fixture.writes.size); assertTrue(fresh.writes.isEmpty())
+            } finally { scope.cancel() }
+        }
+    }
+
     @Test fun rawConditionalSavePreservesUtf16BomCrLfAndUnsupportedServersNeverReceiveWrites(): Unit = runBlocking {
         val initial = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "old\r\n".toByteArray(Charsets.UTF_16LE)
         val fixture = DocumentEditFixture(initial); val owner = fixture.session("one")
