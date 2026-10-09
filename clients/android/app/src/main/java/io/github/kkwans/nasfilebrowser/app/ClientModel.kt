@@ -184,7 +184,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             var recordedGeneration = -1L
             player.state.collect { value ->
                 val binding = playback
-                if (value.firstFrameRendered && value.error == null && binding != null && value.mediaGeneration != recordedGeneration &&
+                val opened = value.firstFrameRendered || binding?.file?.mediaKind() == MediaKind.AUDIO && value.playing && value.positionMs > 0
+                if (opened && value.error == null && binding != null && value.mediaGeneration != recordedGeneration &&
                     context === binding.context && generation == binding.context.generation) {
                     recordedGeneration = value.mediaGeneration
                     recentAccess.record(binding.file)
@@ -488,7 +489,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (file.directory) {
             navigation.addLast(mutable.value.path to mutable.value.wirePath)
             browse(file.path, file.wirePath)
-        } else if (file.mediaKind() == MediaKind.VIDEO) {
+        } else if (file.mediaKind() in setOf(MediaKind.VIDEO, MediaKind.AUDIO)) {
             val bound = context ?: return
             search.cancel()
             operation?.cancel(); val expected = generation; val request = ++mediaRequest
@@ -496,7 +497,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             // initial open that has not completed yet.
             pendingOpenFromPlayer = if (pendingMediaOpen != null) pendingOpenFromPlayer else mutable.value.selected != null
             pendingMediaOpen = request
-            mutable.value = mutable.value.copy(selected = file, image = null, mediaQueue = queue, busy = true, stage = "正在打开视频", error = null)
+            documents.close()
+            mutable.value = mutable.value.copy(selected = file, image = null, mediaQueue = queue, busy = true, stage = if (file.mediaKind() == MediaKind.AUDIO) "正在打开音频" else "正在打开视频", error = null)
             operation = viewModelScope.launch {
                 try {
                     endPlayback()
@@ -559,7 +561,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val request = ++mediaRequest
         pendingOpenFromPlayer = mutable.value.selected != null
         pendingMediaOpen = request
-        mutable.value = mutable.value.copy(selected = file.takeIf { it.mediaKind() == MediaKind.VIDEO }, image = null, mediaQueue = queue,
+        mutable.value = mutable.value.copy(selected = file.takeIf { it.mediaKind() in setOf(MediaKind.VIDEO, MediaKind.AUDIO) }, image = null, mediaQueue = queue,
             busy = true, stage = "正在打开本机文件", error = null)
         operation = viewModelScope.launch {
             try {
@@ -573,7 +575,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                         check(item.complete) { "图片下载完成后即可查看" }
                         mutable.value = mutable.value.copy(image = file, selected = null, busy = false, stage = "", progressStatus = null)
                     }
-                    MediaKind.VIDEO -> {
+                    MediaKind.VIDEO, MediaKind.AUDIO -> {
                         if (!item.complete) {
                             mutable.value = mutable.value.copy(stage = "正在准备播放索引")
                             try { withContext(Dispatchers.IO) { io.github.kkwans.nasfilebrowser.download.DownloadIndex.get(getApplication()).prepare(item) } }
@@ -595,7 +597,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 if (mediaRequest == request) {
                     pendingMediaOpen = null; pendingOpenFromPlayer = false
                     mutable.value = mutable.value.copy(busy = false, stage = "", error = failure.message ?: "无法打开本机文件，请检查下载目录")
-                    if (file.mediaKind() != MediaKind.VIDEO) downloads.reportError(failure.message ?: "本机文件无法打开")
+                    if (file.mediaKind() !in setOf(MediaKind.VIDEO, MediaKind.AUDIO)) downloads.reportError(failure.message ?: "本机文件无法打开")
                 }
             }
         }

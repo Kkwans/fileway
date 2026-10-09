@@ -2,7 +2,7 @@ package io.github.kkwans.nasfilebrowser.app
 
 import java.util.Locale
 
-enum class MediaKind { IMAGE, VIDEO }
+enum class MediaKind { IMAGE, VIDEO, AUDIO }
 enum class MediaQueueSource(val label: String) { DIRECTORY("当前目录"), SEARCH("当前搜索结果"), SINGLE("单个文件"), TAGGED("当前标签结果"), DOWNLOADED("本机下载") }
 
 fun ResourceRef.mediaKind(): MediaKind? {
@@ -10,6 +10,7 @@ fun ResourceRef.mediaKind(): MediaKind? {
     return when {
         type == "video" || name.substringAfterLast('.').lowercase(Locale.ROOT) in setOf("mkv", "mp4", "m4v", "webm", "avi", "mov", "m2ts", "ts") -> MediaKind.VIDEO
         type == "image" || name.substringAfterLast('.').lowercase(Locale.ROOT) in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "avif") -> MediaKind.IMAGE
+        type == "audio" || name.substringAfterLast('.').lowercase(Locale.ROOT) in setOf("mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "aiff", "aif", "wma", "ape", "alac") -> MediaKind.AUDIO
         else -> null
     }
 }

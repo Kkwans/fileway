@@ -25,6 +25,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
+import io.github.kkwans.nasfilebrowser.app.mediaKind
+import io.github.kkwans.nasfilebrowser.app.MediaKind
 import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.RecentSection
 import io.github.kkwans.nasfilebrowser.app.TaskCenterSection
@@ -75,7 +77,10 @@ import java.util.Locale
         return
     }
     if (state.image != null) { ImageScreen(model, state.image!!); return }
-    if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
+    if (state.selected != null) {
+        if (state.selected!!.mediaKind() == MediaKind.AUDIO) AudioScreen(model, state.selected!!) else PlayerScreen(model, state.selected!!)
+        return
+    }
     if (documentEdit.file != null) { LibraryTheme { DocumentEditorScreen(model.documentEdits, {}) }; return }
     if (document.file != null) { LibraryTheme {
         DocumentPreviewScreen(model.documents, {}, model::download,

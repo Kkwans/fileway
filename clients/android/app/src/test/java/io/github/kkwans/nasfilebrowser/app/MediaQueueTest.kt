@@ -37,4 +37,11 @@ class MediaQueueTest {
         assertFalse(queue.hasPrevious || queue.hasNext)
         assertNull(MediaQueue.snapshot(4, "account", video.copy(directory = true), emptyList(), MediaQueueSource.DIRECTORY))
     }
+    @Test fun audioSnapshotKeepsOnlyAudioAndItsOriginalWireIdentity() {
+        val audio = file("/same.wav").copy(type = "audio", wirePath = "/%FF.wav")
+        val next = file("/next.mp3")
+        val queue = MediaQueue.snapshot(5, "account-audio", audio, listOf(audio, file("/video.mp4"), file("/image.png"), next), MediaQueueSource.DIRECTORY)!!
+        assertEquals(MediaKind.AUDIO, queue.kind)
+        assertEquals(listOf(audio, next), queue.items)
+    }
 }
