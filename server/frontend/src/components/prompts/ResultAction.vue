@@ -2,8 +2,9 @@
   <PathPicker
     v-if="mode !== 'info'"
     :title="`${title}到目标目录`"
-    :exclude="mode === 'move' && result.dir ? [result.url] : []"
-    @select="transfer"
+    :exclude="excludedFolders"
+    wire-paths
+    @select-resource="transfer"
     @close="close"
   />
 
@@ -78,7 +79,12 @@ import { getFileTypeLabel } from "@/utils/fileListing";
 import { getResourceIconName } from "@/utils/fileIcons";
 import { filesize } from "@/utils";
 import dayjs from "@/utils/date";
-import url from "@/utils/url";
+import {
+  operationWireTarget,
+  operationDestinationRoute,
+} from "@/utils/resourceOperationWire";
+import type { ListingResourceRef } from "@/utils/fileListing";
+import { useFileStore } from "@/stores/file";
 import type { ConflictResult, MoveCopyItem } from "@/types/file";
 import * as upload from "@/utils/upload";
 import type { ExplorerResult } from "@/components/search/ResultExplorer.vue";
@@ -89,7 +95,19 @@ const props = defineProps<{
 }>();
 
 const layoutStore = useLayoutStore();
+const fileStore = useFileStore();
+const sourceScope = fileStore.scope;
+const resultAtOpen = { ...props.result };
+const modeAtOpen = props.mode;
+const changed = layoutStore.currentPrompt?.action;
+const currentSource = () => fileStore.scope === sourceScope;
+const excludedFolders = computed(() =>
+  modeAtOpen === "move" && resultAtOpen.dir
+    ? [operationWireTarget(resultAtOpen.url, true).wirePath]
+    : []
+);
 const $showError = inject<IToastError>("$showError")!;
+const $showSuccess = inject<IToastSuccess>("$showSuccess");
 const copied = ref(false);
 
 const title = computed(
@@ -112,7 +130,7 @@ const modifiedTime = computed(() =>
 );
 
 function close() {
-  layoutStore.closeHovers();
+  if (currentSource()) layoutStore.closeHovers();
 }
 
 async function copyPath() {
@@ -122,54 +140,65 @@ async function copyPath() {
 }
 
 async function executeTransfer(item: MoveCopyItem) {
+  if (!currentSource()) return;
   try {
-    if (props.mode === "copy") await api.copy([item], false, false);
-    else await api.move([item], false, false);
-    const action = layoutStore.currentPrompt?.action;
+    const responses =
+      modeAtOpen === "copy"
+        ? await api.copy([item], false, false)
+        : await api.move([item], false, false);
+    if (!currentSource()) return;
     close();
-    action?.(new Event("result-action"));
+    if (responses.some((response) => response.status === 202))
+      $showSuccess?.("文件操作任务已提交，请在任务中心查看", {
+        importance: "minor",
+      });
+    else changed?.(new Event("result-action"));
   } catch (error) {
-    $showError(error as Error);
+    if (currentSource()) $showError(error as Error);
   }
 }
 
-async function transfer(value: string | string[]) {
-  if (props.mode === "info") return;
-  const destination = Array.isArray(value) ? value[0] : value;
-  if (!destination) return;
-  const item: MoveCopyItem = {
-    from: props.result.url,
-    to: url.appendResourceRouteSegment(destination, props.result.name),
-    name: props.result.name,
-    size: props.result.size ?? undefined,
-    modified: props.result.modified ?? undefined,
-    isDir: props.result.dir,
-    overwrite: false,
-    rename: false,
-  };
-
-  const conflicts = await upload.checkConflict(
-    [item],
-    url.encodeResourceRoute(destination)
-  );
-  if (conflicts.length === 0) {
-    await executeTransfer(item);
-    return;
+async function transfer(value: ListingResourceRef | ListingResourceRef[]) {
+  if (!currentSource() || modeAtOpen === "info") return;
+  try {
+    const resource = Array.isArray(value) ? value[0] : value;
+    if (!resource) return;
+    if (resultAtOpen.pathVerified === false)
+      throw new Error("原始路径无法确认，请重新选择文件");
+    const destination = operationWireTarget(resource).legacyRoute;
+    const item: MoveCopyItem = {
+      from: resultAtOpen.url,
+      to: operationDestinationRoute(resource, resultAtOpen.url),
+      name: resultAtOpen.name,
+      size: resultAtOpen.size ?? undefined,
+      modified: resultAtOpen.modified ?? undefined,
+      isDir: resultAtOpen.dir,
+      overwrite: false,
+      rename: false,
+    };
+    const conflicts = await upload.checkConflict([item], destination);
+    if (!currentSource()) return;
+    if (!conflicts.length) {
+      await executeTransfer(item);
+      return;
+    }
+    layoutStore.showHover({
+      prompt: "resolve-conflict",
+      props: { conflict: conflicts },
+      confirm: (_event: Event, result: ConflictResult[]) => {
+        if (!currentSource()) return;
+        layoutStore.closeHovers();
+        const decision = result[0];
+        if (!decision || decision.checked.length === 0) return;
+        item.rename = decision.checked.length === 2;
+        item.overwrite =
+          decision.checked.length === 1 && decision.checked[0] === "origin";
+        void executeTransfer(item);
+      },
+    });
+  } catch (error) {
+    if (currentSource()) $showError(error as Error);
   }
-
-  layoutStore.showHover({
-    prompt: "resolve-conflict",
-    props: { conflict: conflicts },
-    confirm: (_event: Event, result: ConflictResult[]) => {
-      layoutStore.closeHovers();
-      const decision = result[0];
-      if (!decision || decision.checked.length === 0) return;
-      item.rename = decision.checked.length === 2;
-      item.overwrite =
-        decision.checked.length === 1 && decision.checked[0] === "origin";
-      void executeTransfer(item);
-    },
-  });
 }
 </script>
 

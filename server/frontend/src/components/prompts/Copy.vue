@@ -1,5 +1,10 @@
 <template>
-  <PathPicker title="选择复制目标目录" @select="copyTo" @close="closeHovers" />
+  <PathPicker
+    title="选择复制目标目录"
+    wire-paths
+    @select-resource="copyTo"
+    @close="closeHovers"
+  />
 </template>
 
 <script setup lang="ts">
@@ -13,29 +18,39 @@ import PathPicker from "./PathPicker.vue";
 import type { ConflictResult, MoveCopyItem } from "@/types/file";
 import { files as api } from "@/api";
 import * as upload from "@/utils/upload";
-import { appendResourceRouteSegment, encodeResourceRoute } from "@/utils/url";
 import buttons from "@/utils/buttons";
 
-import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
+import {
+  operationAcknowledgedTarget,
+  operationDestinationRoute,
+  operationWireTarget,
+  operationResourceSnapshot,
+} from "@/utils/resourceOperationWire";
+import type { ListingResourceRef } from "@/utils/fileListing";
 
 const $showError = inject<IToastError>("$showError")!;
+const $showSuccess = inject<IToastSuccess>("$showSuccess");
 const router = useRouter();
 const fileStore = useFileStore();
 const sourceScope = fileStore.scope;
+const snapshot = operationResourceSnapshot(
+  sourceScope,
+  fileStore.selectedItems
+);
 const layoutStore = useLayoutStore();
 const authStore = useAuthStore();
-const { selectedItems, reload } = storeToRefs(fileStore);
+const { reload } = storeToRefs(fileStore);
 const { user } = storeToRefs(authStore);
 const { showHover, closeHovers } = layoutStore;
 
-function firstPath(value: string | string[]) {
+function firstPath(value: ListingResourceRef | ListingResourceRef[]) {
   return Array.isArray(value) ? value[0] : value;
 }
 
 function buildItems(destination: string): MoveCopyItem[] {
-  return selectedItems.value.map((item) => ({
+  return snapshot.rows.map((item) => ({
     from: item.url,
-    to: appendResourceRouteSegment(destination, item.name),
+    to: operationDestinationRoute(destination, item),
     name: item.name,
     size: item.size,
     modified: item.modified,
@@ -51,7 +66,12 @@ async function submit(items: MoveCopyItem[], destination: string) {
   try {
     const responses = await api.copy(items, false, false);
     if (fileStore.scope !== sourceScope) return;
-    buttons.success("copy");
+    if (responses.some((response) => response.status === 202)) {
+      buttons.done("copy");
+      $showSuccess?.("复制任务已提交，请在任务中心查看", {
+        importance: "minor",
+      });
+    } else buttons.success("copy");
     fileStore.clearSelection();
     fileStore.setPreselect(
       operationAcknowledgedTarget(responses[0], [items[0].from, items[0].to]),
@@ -59,45 +79,49 @@ async function submit(items: MoveCopyItem[], destination: string) {
     );
     reload.value = true;
     if (user.value?.redirectAfterCopyMove) {
-      await router.push({ path: encodeResourceRoute(destination) });
+      await router.push({ path: destination });
     }
   } catch (error) {
+    if (fileStore.scope !== sourceScope) return;
     buttons.done("copy");
     $showError(error as Error);
   }
 }
 
-async function copyTo(value: string | string[]) {
-  if (fileStore.scope !== sourceScope) return;
-  const destination = firstPath(value);
-  if (!destination) return;
-  const items = buildItems(destination);
-  if (items.length === 0) return;
+async function copyTo(value: ListingResourceRef | ListingResourceRef[]) {
+  try {
+    if (fileStore.scope !== sourceScope) return;
+    const resource = firstPath(value);
+    if (!resource) return;
+    const destination = operationWireTarget(resource).legacyRoute;
+    const items = buildItems(destination);
+    if (items.length === 0) return;
 
-  const conflict = await upload.checkConflict(
-    items,
-    encodeResourceRoute(destination)
-  );
-  if (fileStore.scope !== sourceScope) return;
-  if (conflict.length > 0) {
-    showHover({
-      prompt: "resolve-conflict",
-      props: { conflict },
-      confirm: (event: Event, result: ConflictResult[]) => {
-        event.preventDefault();
-        closeHovers();
-        for (let index = result.length - 1; index >= 0; index--) {
-          const item = result[index];
-          if (item.checked.length === 2) items[item.index].rename = true;
-          else if (item.checked.length === 1 && item.checked[0] === "origin")
-            items[item.index].overwrite = true;
-          else items.splice(item.index, 1);
-        }
-        if (items.length > 0) void submit(items, destination);
-      },
-    });
-    return;
+    const conflict = await upload.checkConflict(items, destination);
+    if (fileStore.scope !== sourceScope) return;
+    if (conflict.length > 0) {
+      showHover({
+        prompt: "resolve-conflict",
+        props: { conflict },
+        confirm: (event: Event, result: ConflictResult[]) => {
+          if (fileStore.scope !== sourceScope) return;
+          event.preventDefault();
+          closeHovers();
+          for (let index = result.length - 1; index >= 0; index--) {
+            const item = result[index];
+            if (item.checked.length === 2) items[item.index].rename = true;
+            else if (item.checked.length === 1 && item.checked[0] === "origin")
+              items[item.index].overwrite = true;
+            else items.splice(item.index, 1);
+          }
+          if (items.length > 0) void submit(items, destination);
+        },
+      });
+      return;
+    }
+    await submit(items, destination);
+  } catch (error) {
+    if (fileStore.scope === sourceScope) $showError(error as Error);
   }
-  await submit(items, destination);
 }
 </script>

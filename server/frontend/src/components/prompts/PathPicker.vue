@@ -167,11 +167,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import { files } from "@/api";
 import { canonicalResourcePath, encodeResourceRoute } from "@/utils/url";
-import { archiveWirePath } from "@/utils/archiveWire";
+import { operationWireTarget } from "@/utils/resourceOperationWire";
+import { favoriteIdentity } from "@/utils/favoritePersistence";
+import { batchRenameWireKey } from "@/utils/batchRename";
+import { useAuthStore } from "@/stores/auth";
+import { fileSelectionScope } from "@/utils/fileListing";
 
 type PickedResource = {
   name: string;
@@ -219,6 +230,12 @@ const emit = defineEmits<{
   "select-resource": [resource: PickedResource | PickedResource[]];
 }>();
 
+const authStore = useAuthStore();
+const owner = () => fileSelectionScope(authStore.user);
+const sourceScope = owner();
+let disposed = false;
+const currentSource = () => !disposed && owner() === sourceScope;
+
 const currentPath = ref(
   normalizePath(
     typeof props.modelValue === "string"
@@ -243,7 +260,14 @@ const currentWirePath = ref(props.modelWirePath || "");
 const pickedResources = new Map<string, PickedResource>();
 let loadSequence = 0;
 function entryKey(item: { path: string; wirePath?: string }) {
-  return props.wirePaths ? item.wirePath || "" : item.path;
+  return props.wirePaths ? favoriteIdentity(item) || "" : item.path;
+}
+function excludedWire(wirePath: string) {
+  const key = batchRenameWireKey(wirePath);
+  return props.exclude.some((excluded) => {
+    const prefix = batchRenameWireKey(excluded);
+    return prefix === "/" || key === prefix || key.startsWith(prefix + "/");
+  });
 }
 const dialog = ref<HTMLElement | null>(null);
 const loading = ref(false);
@@ -304,26 +328,36 @@ function fileMatchesFilter(name: string) {
 }
 
 async function load(path: string, wirePath?: string) {
+  if (!currentSource()) return;
   const sequence = ++loadSequence;
   currentPath.value = normalizePath(path);
   loading.value = true;
   error.value = "";
   try {
-    const wire = props.wirePaths ? archiveWirePath(path, wirePath) : "";
+    const requested = props.wirePaths
+      ? operationWireTarget({ path, wirePath })
+      : null;
+    const wire = requested?.wirePath || "";
     if (props.wirePaths) currentWirePath.value = wire;
     const resource = await files.fetch(
       props.wirePaths ? `/files${wire}` : encodeResourceRoute(currentPath.value)
     );
-    if (sequence !== loadSequence) return;
+    if (sequence !== loadSequence || !currentSource()) return;
     if (props.wirePaths) {
       currentPath.value = normalizePath(resource.path, true);
-      currentWirePath.value = archiveWirePath(resource.path, resource.wirePath);
-      pickedResources.set(currentWirePath.value, {
-        name: resource.name,
-        path: currentPath.value,
-        wirePath: currentWirePath.value,
-        isDir: true,
-      });
+      const actual = operationWireTarget(resource);
+      if (actual.identity !== requested!.identity)
+        throw new Error("服务器返回的目录原始路径不一致");
+      currentWirePath.value = actual.wirePath;
+      pickedResources.set(
+        entryKey({ path: currentPath.value, wirePath: currentWirePath.value }),
+        {
+          name: resource.name,
+          path: currentPath.value,
+          wirePath: currentWirePath.value,
+          isDir: true,
+        }
+      );
     }
     // Directories are always listed so the user can navigate; only files are filtered.
     const next = resource.items
@@ -342,16 +376,17 @@ async function load(path: string, wirePath?: string) {
         ),
         isDir: item.isDir,
         wirePath: props.wirePaths
-          ? archiveWirePath(item.path, item.wirePath)
+          ? operationWireTarget(item).wirePath
           : undefined,
       }))
-      .filter(
-        (item) =>
-          !props.exclude.some(
-            (excluded) =>
-              normalizePath(excluded, item.isDir) ===
-              normalizePath(item.path, item.isDir)
-          )
+      .filter((item) =>
+        props.wirePaths
+          ? !excludedWire(item.wirePath!)
+          : !props.exclude.some(
+              (excluded) =>
+                normalizePath(excluded, item.isDir) ===
+                normalizePath(item.path, item.isDir)
+            )
       );
     entries.value = parentPath.value
       ? [
@@ -373,17 +408,22 @@ async function load(path: string, wirePath?: string) {
       : next;
     if (props.mode === "directory") {
       selectedPaths.value = [
-        props.wirePaths ? currentWirePath.value : currentPath.value,
+        props.wirePaths
+          ? entryKey({
+              path: currentPath.value,
+              wirePath: currentWirePath.value,
+            })
+          : currentPath.value,
       ];
     }
     if (props.wirePaths)
       for (const item of next)
-        pickedResources.set(item.wirePath!, item as PickedResource);
+        pickedResources.set(entryKey(item), item as PickedResource);
   } catch (cause) {
-    if (sequence === loadSequence)
+    if (sequence === loadSequence && currentSource())
       error.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
-    if (sequence === loadSequence) loading.value = false;
+    if (sequence === loadSequence && currentSource()) loading.value = false;
   }
 }
 
@@ -424,14 +464,21 @@ function toggleEntrySelection(item: (typeof entries.value)[number]) {
 
 function select(path: string, wirePath?: string) {
   if (
+    !currentSource() ||
+    (props.wirePaths && (!wirePath || excludedWire(wirePath)))
+  )
+    return;
+  if (
     props.mode === "file" &&
     !entries.value.some(
       (item) =>
-        entryKey(item) === (props.wirePaths ? wirePath : path) && !item.isDir
+        entryKey(item) ===
+          (props.wirePaths ? entryKey({ path, wirePath }) : path) && !item.isDir
     )
   )
     return;
-  const key = props.wirePaths ? wirePath! : path;
+  const key = entryKey({ path, wirePath });
+  if (!key) return;
   if (!props.multiple) {
     selectedPaths.value = [key];
     return;
@@ -442,8 +489,13 @@ function select(path: string, wirePath?: string) {
 }
 
 function selectCurrentDirectory() {
+  if (
+    !currentSource() ||
+    (props.wirePaths && excludedWire(currentWirePath.value))
+  )
+    return;
   const path = props.wirePaths
-    ? currentWirePath.value
+    ? entryKey({ path: currentPath.value, wirePath: currentWirePath.value })
     : normalizePath(currentPath.value, true);
   if (!props.multiple) {
     selectedPaths.value = [path];
@@ -455,11 +507,19 @@ function selectCurrentDirectory() {
 }
 
 function confirm() {
+  if (!currentSource()) return;
   if (props.mode === "file" && selectedPaths.value.length === 0) return;
   const values =
     selectedPaths.value.length > 0
       ? selectedPaths.value
-      : [props.wirePaths ? currentWirePath.value : currentPath.value];
+      : [
+          props.wirePaths
+            ? entryKey({
+                path: currentPath.value,
+                wirePath: currentWirePath.value,
+              })
+            : currentPath.value,
+        ];
   const resources = props.wirePaths
     ? values
         .map((key) => pickedResources.get(key))
@@ -467,7 +527,10 @@ function confirm() {
     : [];
   if (
     props.wirePaths &&
-    (loading.value || error.value || resources.length !== values.length)
+    (loading.value ||
+      error.value ||
+      resources.length !== values.length ||
+      resources.some((resource) => excludedWire(resource.wirePath)))
   )
     return;
   const displayValues = props.wirePaths
@@ -475,15 +538,31 @@ function confirm() {
     : values;
   const value = props.multiple ? displayValues : displayValues[0];
   emit("update:modelValue", value);
+  if (!currentSource()) return;
   emit("select", value);
+  if (!currentSource()) return;
   if (props.wirePaths)
     emit("select-resource", props.multiple ? resources : resources[0]);
-  emit("close");
+  if (currentSource()) emit("close");
 }
 
 function close() {
-  emit("close");
+  if (currentSource()) emit("close");
 }
+
+watch(
+  owner,
+  () => {
+    loadSequence++;
+    entries.value = [];
+    pickedResources.clear();
+    selectedPaths.value = [];
+    currentWirePath.value = "";
+    loading.value = false;
+    error.value = "来源已切换，请重新选择位置";
+  },
+  { flush: "sync" }
+);
 
 const focusableSelector =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -551,6 +630,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  loadSequence++;
   if (entryClickTimer !== undefined) window.clearTimeout(entryClickTimer);
   document.removeEventListener("keydown", handleKeydown);
   document.body.style.overflow = previousBodyOverflow;

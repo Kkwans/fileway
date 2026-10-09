@@ -11,6 +11,43 @@ export type OperationWireTarget = {
   legacyRoute: string;
 };
 
+/** Copy/move preserves the source's basename bytes, not its display spelling. */
+export function operationDestinationRoute(
+  destination: OperationResource,
+  source: OperationResource
+): string {
+  const parent = operationWireTarget(destination, true).wirePath.replace(
+    /\/+$/,
+    ""
+  );
+  const basename = operationWireTarget(source, true).wirePath.split("/").at(-1);
+  if (!basename) throw new Error("不能复制或移动文件系统根目录");
+  return `/files${parent}/${basename}`;
+}
+
+/** Browser upload relative names are known Unicode input, encoded once. */
+export function operationRelativeTarget(
+  base: OperationResource,
+  relative: string
+): OperationWireTarget {
+  const segments = relative.replace(/^\/+|\/+$/g, "").split("/");
+  if (
+    segments.some(
+      (part) => !part || part === "." || part === ".." || part.includes("\0")
+    )
+  )
+    throw new Error("上传相对路径无效");
+  const parent = operationWireTarget(base, true).wirePath.replace(/\/+$/, "");
+  const wirePath = `${parent}/${segments.map(encodeURIComponent).join("/")}`;
+  let path = wirePath;
+  try {
+    path = wirePath.split("/").map(decodeURIComponent).join("/");
+  } catch {
+    /* opaque parent stays opaque */
+  }
+  return operationWireTarget({ path, wirePath });
+}
+
 /** Strings at old route-taking APIs are /files routes; ResourceRefs always
  * describe real filesystem paths, including a real directory named /files. */
 export function operationWireTarget(
