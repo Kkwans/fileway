@@ -173,7 +173,8 @@ class ClientSearchTest {
     }
 
     internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null,
-        private val modified: String = "", private val imageBodies: Map<String, ByteArray> = emptyMap(), val library: LibraryFixtureData? = null) : Closeable {
+        private val modified: String = "", private val imageBodies: Map<String, ByteArray> = emptyMap(), val library: LibraryFixtureData? = null,
+        private val previewStatusCodes: Map<String, Int> = emptyMap(), private val rawStatusCodes: Map<String, Int> = emptyMap()) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -186,6 +187,9 @@ class ClientSearchTest {
         val previewPaths = ConcurrentHashMap.newKeySet<String>()
         val searchRequests = ConcurrentHashMap.newKeySet<String>()
         val rawImages = ConcurrentHashMap.newKeySet<String>()
+        val previewFailures = AtomicInteger()
+        val imageMetadataRequests = AtomicInteger(); val heldImageMetadataFinished = AtomicInteger()
+        @Volatile var heldImageMetadata: String? = null
         val favoriteRecords = JSONArray()
         val favoriteGroups = JSONArray()
         private val favoriteLock = Any()
@@ -260,27 +264,36 @@ class ClientSearchTest {
                 val name = uri.path.removePrefix("/api/raw/")
                 rawImages.add(name)
                 if (heldImage == name) { imageStarted.countDown(); releaseImage.await(10, TimeUnit.SECONDS) }
-                val bytes = imageBodies.getValue(name)
+                val status = rawStatusCodes[name] ?: 200
+                val responseStatus = if (status == 200) "200 OK" else "$status Fixture"
+                val bytes = if (status == 200) imageBodies.getValue(name) else "Owned image request rejected".toByteArray()
                 socket.getOutputStream().apply {
-                    write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                    write("HTTP/1.1 $responseStatus\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
                     write(bytes); flush()
                 }
                 return
             }
             if (uri.path.startsWith("/api/resources/") && imageBodies.containsKey(uri.path.removePrefix("/api/resources/"))) {
                 val name = uri.path.removePrefix("/api/resources/")
-                reply(socket, JSONObject().put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
-                    .put("name", name).put("isDir", false).put("type", "image").put("size", imageBodies.getValue(name).size)
-                    .put("modified", modified).toString())
+                imageMetadataRequests.incrementAndGet()
+                val held = heldImageMetadata == name
+                try {
+                    if (held) { metadataStarted.countDown(); releaseMetadata.await(10, TimeUnit.SECONDS) }
+                    reply(socket, JSONObject().put("path", "/$name").put("wirePath", SearchResult.encodePath("/$name"))
+                        .put("name", name).put("isDir", false).put("type", "image").put("size", imageBodies.getValue(name).size)
+                        .put("modified", modified).toString())
+                } finally { if (held) heldImageMetadataFinished.incrementAndGet() }
                 return
             }
             if (uri.path.startsWith("/api/preview/thumb/")) {
                 previewPaths.add(uri.path)
                 previewSeen.countDown()
                 val bytes = previewBody ?: byteArrayOf()
-                val status = if (previewBody == null) "404 Not Found" else "200 OK"
+                val status = previewStatusCodes[uri.path.removePrefix("/api/preview/thumb/")] ?: if (previewBody == null) 404 else 200
+                val responseStatus = when (status) { 200 -> "200 OK"; 404 -> "404 Not Found"; else -> "$status Fixture" }
+                if (status != 200) previewFailures.incrementAndGet()
                 socket.getOutputStream().apply {
-                    write("HTTP/1.1 $status\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                    write("HTTP/1.1 $responseStatus\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
                     write(bytes); flush()
                 }
                 return
@@ -326,6 +339,6 @@ class ClientSearchTest {
             val bytes = body.toByteArray()
             socket.getOutputStream().apply { write("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
         }
-        override fun close() { releaseImage.countDown(); releasePlayback.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
+        override fun close() { releaseImage.countDown(); releaseMetadata.countDown(); releasePlayback.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
     }
 }

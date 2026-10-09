@@ -116,10 +116,9 @@ import kotlin.math.abs
     var preview by remember { mutableStateOf<CoilImage?>(null) }
     var previewStatus by remember { mutableStateOf("正在读取预览") }
     val latestPreview by rememberUpdatedState(preview)
-    var asset by remember { mutableStateOf<PreviewLease?>(null) }
+    var asset by remember { mutableStateOf<ImagePageAsset?>(null) }
     var readingLease by remember { mutableStateOf<PreviewLease?>(null) }
     var readProgress by remember { mutableStateOf<Float?>(null) }
-    var working by remember { mutableStateOf<TemporaryImage?>(null) }
     var current by remember { mutableStateOf(file) }
     var attempt by remember { mutableIntStateOf(0) }
     var requestToken by remember { mutableLongStateOf(0) }
@@ -167,17 +166,15 @@ import kotlin.math.abs
             phase = if (local) "正在打开本机图片" else if (quality == ImageQuality.ORIGINAL) "正在读取原图" else "正在读取图片"
             if (!local && (cache.settings.imageMB == 0L || forceWorkingFile)) {
                 temporary = TemporaryImages.read(context, owned, if (quality == ImageQuality.ORIGINAL || quality == ImageQuality.HIGH) current.size else 0)
-                working = temporary
             }
-            asset = owned
+            asset = ImagePageAsset(owned, temporary, quality, cache.revision, attempt, token)
             awaitCancellation()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             if (requestToken == token && activeNow) failure = imageFailure(error)
         } finally {
             if (readingLease === owned) readingLease = null
-            if (asset === owned) asset = null
-            if (working === temporary) working = null
+            if (asset?.lease === owned) asset = null
             withContext(NonCancellable + Dispatchers.IO) { temporary?.close() }
             owned?.release()
         }
@@ -201,10 +198,14 @@ import kotlin.math.abs
         if (active) snapshotFlow { (imageState.zoomableState.zoomFraction ?: 0f) > .001f }.collect(onZoom)
     }
     val cacheKey = model.cache.key(account, current.mediaKey, "${current.size}/${current.modified}/${quality.name}")
-    val lease = asset
+    // A quality/retry change is composed before the previous effect finishes.
+    // Never load its old lease under the new request's cache key or callbacks.
+    val loaded = asset?.takeIf { active && !canceled && it.quality == quality &&
+        it.cacheRevision == cache.revision && it.attempt == attempt && it.token == requestToken }
+    val lease = loaded?.lease
     val token = requestToken
     val imageLoader = model.cache.imageLoader.value
-    val data = working?.file ?: lease?.url?.let { if (local) android.net.Uri.parse(it) else it }
+    val data = loaded?.working?.file ?: lease?.url?.let { if (local) android.net.Uri.parse(it) else it }
     val request = remember(data, cacheKey, token, attempt, quality, imageLoader) {
         ImageRequest.Builder(context).data(data).placeholder { latestPreview }.error { latestPreview }.fallback { latestPreview }
             .memoryCacheKey(cacheKey).diskCacheKey(cacheKey)
@@ -270,12 +271,16 @@ import kotlin.math.abs
                 Text(message, Modifier.weight(1f, fill = false).padding(vertical = 12.dp), color = Color.White, style = MaterialTheme.typography.bodySmall)
                 if (failure != null || canceled) TextButton(onClick = { canceled = false; failure = null; attempt++ }) { Text("重试", color = Color(0xFF69A8FF)) }
                 else if (!ready) TextButton(onClick = { canceled = true }) { Text("取消读取", color = Color(0xFF69A8FF)) }
-                else if (quality != ImageQuality.ORIGINAL) TextButton(onClick = { originalRequested = true }) { Text("查看原图", color = Color(0xFF69A8FF)) }
-                else Spacer(Modifier.width(8.dp))
+                if (quality != ImageQuality.ORIGINAL && (ready || failure != null || canceled)) {
+                    TextButton(onClick = { requestToken++; canceled = false; failure = null; originalRequested = true }) { Text("查看原图", color = Color(0xFF69A8FF)) }
+                } else if (ready) Spacer(Modifier.width(8.dp))
             }
         }
     }
 }
+
+private data class ImagePageAsset(val lease: PreviewLease, val working: TemporaryImage?, val quality: ImageQuality,
+    val cacheRevision: Int, val attempt: Int, val token: Long)
 
 private fun imageFailure(error: Throwable): String = when (error) {
     is ServiceException -> imageHttpFailure(error.status)

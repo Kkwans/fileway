@@ -168,6 +168,8 @@ class MediaQueueUiTest {
         // Owned 16x16 solid red/blue frames, 300/450 ms, looping. No external media.
         val gif = android.util.Base64.decode("R0lGODlhEAAQAIEAAOYoPAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAHgAAACwAAAAAEAAQAAAIHQABCBxIsKDBgwgTKlzIsKHDhxAjSpxIsaLFgQEBACH5BAAtAAAALAAAAAAQABAAgR5a5gAAAAAAAAAAAAgdAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWBAQEAOw==", android.util.Base64.DEFAULT)
         val source = ClientSearchTest.Fixture(listOf("animated.gif"), ownedPreviewPng(), imageBodies = mapOf("animated.gif" to gif))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
         val model = model(); val store = store()
         val profile = store.save(ServerProfile(name = "Animated image fixture", address = source.url))
         model.cache.awaitReady(); val original = model.cache.state.value.settings
@@ -184,9 +186,16 @@ class MediaQueueUiTest {
             capture("gallery-animated-gif")
         } finally {
             withContext(NonCancellable) {
-                main { model.closeImage(); model.cache.save(original) }
-                withTimeout(5000) { model.cache.state.first { !it.busy && it.settings == original } }
-                main { model.disconnect() }; store.remove(profile); source.close()
+                try {
+                    main { model.closeImage(); model.cache.save(original) }
+                    withTimeout(5000) { model.cache.state.first { !it.busy && it.settings == original } }
+                } finally {
+                    try { main { model.disconnect() }; store.remove(profile) } finally {
+                        try { source.close() } finally {
+                            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+                        }
+                    }
+                }
             }
         }
     }
