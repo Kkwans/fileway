@@ -3,7 +3,7 @@
 Native Android client for Fileway's Linux/Windows servers. Windows desktop is
 planned as a later delivery in this same repository.
 
-Android 10+ / arm64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
+Android 10+ / arm64-v8a and x86_64. Kotlin, Compose, Media3 with FFmpeg audio and libass subtitles,
 and an embedded Go/tsnet transport. The 0.7 line uses this native playback chain;
 actual HDR output, audible continuity and long-play acceptance remain open.
 
@@ -14,20 +14,27 @@ are separate from full API35/API37 CI, physical HDR, speaker/Bluetooth continuit
 long-film performance and complete UI acceptance. This preview does not certify
 all formats, server/provider behavior or recovery scenarios.
 
-## Install the 0.7.1 preview
+## Install the 0.7.2 preview
 
-[Android 0.7.1 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.1-b0f0c4b/fileway-android-0.7.1-preview.apk)
+[Android 0.7.2 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.2-7191801/fileway-android-0.7.2-preview.apk)
 
-Published artifact: `0.7.1-preview`, **signed release**, versionCode **11**, Room **8**.
+Published artifact: `0.7.2-preview`, **signed release**, versionCode **12**, Room **8**.
 Package `io.github.kkwans.nasfilebrowser` and the original signing identity are
-preserved. Source: `b0f0c4bce5d3e3a157f049808f5dc76f55fe47e2`.
-See [0.7.1 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.1-b0f0c4b).
+preserved. Source: `71918010a8c2f2e82cd972773184854d6718cc7e`.
+See [0.7.2 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.2-7191801).
 
-The release build and lint passed, with 87 JVM tests in the configured debug
-host-test variant. The signed APK passed both ABI and 16 KiB ELF/ZIP checks.
-Xiaomi14 was cover-upgraded to code 11; launch, retained download records, and
-actual local MKV picture/subtitle output were verified. Full CI and the remaining
-media/functional acceptance are still in progress.
+Release build/lint and 95 JVM tests in the configured debug host-test variant
+passed. Both ABI and 16 KiB ELF/ZIP checks passed. Xiaomi14 was cover-upgraded to
+code 12; saved-account restore, the retained directory/download records, actual
+network MKV picture/styled subtitles, and local PDF page/zoom and text reading
+were exercised on the release APK. Linux and Windows use the same server source
+and one Web build; 574 Web tests and native backend test/vet passed.
+
+The [complete Android CI](https://github.com/Kkwans/fileway/actions/runs/37990113163)
+is **not green**: API35 ordinary suite has 89 failures out of 270, and API37 has
+11 out of 271. Separate theme prepare passed on both; theme verify failed on both.
+These failures and remaining hardware/media/functional acceptance stay open;
+scoped real-device results do not replace the full suite.
 
 ### Features available in the 0.7 line
 
@@ -52,6 +59,25 @@ These are implemented feature groups, with scoped verification. Server capabilit
 and versions determine availability; unsupported newer operations request an upgrade.
 The full App-internal download/install/cover-upgrade flow remains a separate gate.
 
+### Core fixes in 0.7.2
+
+- Read completed local PDF/text downloads inside the App without the original
+  server/account; bound source identity, read-only descriptors, size budgets and
+  retries retain the original file. PDF layout uses finite pixel constraints.
+- Recover from failed/canceled image previews by explicitly opening the original;
+  bind leases, quality, cache revision and request generation during transitions.
+- Ignore superseded external-subtitle parse failures and closed admin-page reads;
+  retain acknowledged Web writes across renewal or account changes.
+- Preserve original file identities through tags, selection, destination pickers,
+  conflict preflight, copy/move/rename and deletion. Queued tasks require current
+  owner permissions at submission, retry, publication and source deletion.
+
+New original-path writes require server `2026.10.10-v2` or later. Older servers
+remain usable for compatible operations; missing capabilities request an upgrade.
+Persisted `wire-v1` tasks require a compatible server binary for recovery: retain
+live database writes and use a forward repair, rather than blindly restoring a
+pre-v2 executable or database.
+
 ### Core fixes in 0.7.1
 
 - Decode external PGS/SUP display sets on demand and replay ended audio/video on
@@ -75,10 +101,13 @@ schemas use the existing migrations; there is no destructive migration fallback.
 Use a same-certificate, higher-versionCode repair for recovery rather than a
 lower-version APK against a newer database. See [local state](docs/local-state.md).
 
-Additional repair-set evidence comes from signed debug/test-APK waves: build/lint,
-87 JVM tests, five PGS device tests, and a 12-method phone set. Complete offline
-MKV cold start and actual picture output were also exercised. These results do
-not certify full CI, HDR/audio/long-play or complete UI acceptance.
+Additional evidence comes from signed debug/test-APK waves, including 95 JVM
+tests, directly affected local-document/image device regressions, and separate
+track/admin/tag/file-operation contracts. A real NAS source with eight embedded
+PGS tracks was exercised across seeks, track/off/delay changes and actual subtitle
+pixels. Complete offline MKV cold start and actual picture output were also
+exercised. These results do not certify full CI, HDR, audible continuity,
+long-play performance or complete UI acceptance.
 
 Older partial videos need one online opening to prepare missing startup metadata
 before offline cold start. New supported MKV/MP4/WebM downloads prepare it before
