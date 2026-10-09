@@ -29,7 +29,11 @@ import (
 )
 
 var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
-	metadataOnly := r.URL.Query().Get("metadata") == "1" || r.URL.Query().Get("metadata") == "true"
+	checksum := r.URL.Query().Get("checksum")
+	if checksum != "" && !d.user.Perm.Download {
+		return http.StatusForbidden, fmt.Errorf("没有读取文件内容的权限")
+	}
+	metadataOnly := checksum != "" || r.URL.Query().Get("metadata") == "1" || r.URL.Query().Get("metadata") == "true"
 	file, err := files.NewFileInfo(&files.FileOptions{
 		Fs:         d.user.Fs,
 		Path:       r.URL.Path,
@@ -46,6 +50,17 @@ var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	// target's base metadata before the listing-only sort path below; a
 	// directory created with Expand=false has no embedded Listing value.
 	if metadataOnly {
+		if checksum != "" {
+			err := file.ChecksumContext(r.Context(), checksum)
+			switch {
+			case errors.Is(err, fberrors.ErrInvalidOption), errors.Is(err, fberrors.ErrIsDirectory):
+				return http.StatusBadRequest, fmt.Errorf("不支持的校验算法或文件类型")
+			case errors.Is(err, files.ErrChecksumSourceChanged):
+				return http.StatusConflict, fmt.Errorf("文件在计算期间已变化，请刷新后重试")
+			case err != nil:
+				return errToStatus(err), err
+			}
+		}
 		return renderJSON(w, r, file)
 	}
 
@@ -74,18 +89,6 @@ var resourceGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 		// Stream data directly instead of loading entire file into memory.
 		_, err = io.Copy(w, f)
 		return 0, err
-	}
-
-	if checksum := r.URL.Query().Get("checksum"); checksum != "" {
-		err := file.Checksum(checksum)
-		if errors.Is(err, fberrors.ErrInvalidOption) {
-			return http.StatusBadRequest, fmt.Errorf("不支持的校验和类型")
-		} else if err != nil {
-			return http.StatusInternalServerError, err
-		}
-
-		// do not waste bandwidth if we just want the checksum
-		file.Content = ""
 	}
 
 	return renderJSON(w, r, file)
