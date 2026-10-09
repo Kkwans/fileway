@@ -259,6 +259,12 @@ func (b *Broker) request(ctx context.Context, id, method, endpoint string, body 
 	r, err := readResponse(res)
 	if err == nil && needsRenew && previous != "" {
 		if renewErr := s.renew(ctx, previous); renewErr != nil {
+			// The write has already been acknowledged. A failed renewal must
+			// not hide that response or encourage replaying the mutation. Keep
+			// the original token; later reads can still report expired login.
+			if method != http.MethodGet && r.Status >= 200 && r.Status < 300 {
+				return r, nil
+			}
 			return Response{}, renewErr
 		}
 	}

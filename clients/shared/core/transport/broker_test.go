@@ -205,6 +205,133 @@ func TestRenewSingleFlightAndCredentialRedirect(t *testing.T) {
 	}
 }
 
+func TestSuccessfulMutationSurvivesRenewalFailure(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		for _, renewal := range []string{"rejected", "invalid-token"} {
+			t.Run(method+"/"+renewal, func(t *testing.T) {
+				status := map[string]int{http.MethodPost: http.StatusAccepted, http.MethodPut: http.StatusCreated,
+					http.MethodPatch: http.StatusOK, http.MethodDelete: http.StatusNoContent}[method]
+				body := `{"id":"accepted-once"}`
+				if status == http.StatusNoContent {
+					body = ""
+				}
+				var mutations, renews atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/api/renew":
+						renews.Add(1)
+						if renewal == "rejected" {
+							w.WriteHeader(http.StatusUnauthorized)
+						} else {
+							fmt.Fprint(w, "not-a-token")
+						}
+					case "/api/resources/owned":
+						if r.Method != method || r.Header.Get("X-Auth") != "old.account.token" {
+							t.Error("mutation changed method or account")
+						}
+						mutations.Add(1)
+						w.Header().Set("X-Renew-Token", "true")
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(status)
+						fmt.Fprint(w, body)
+					case "/api/resources/":
+						w.WriteHeader(http.StatusUnauthorized)
+					case "/api/login":
+						fmt.Fprint(w, "new.account.token")
+					default:
+						t.Errorf("unexpected request: %s", r.URL.Path)
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				defer server.Close()
+				b, err := New()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer b.Close()
+				sid, err := b.Open(server.URL, "old.account.token", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				other, err := b.Open(server.URL, "other.account.token", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := b.Request(context.Background(), sid, method, "/api/resources/owned", nil)
+				if err != nil || response.Status != status || response.Body != body || response.ContentType != "application/json" {
+					t.Fatalf("known mutation acknowledgement lost: %+v, %v", response, err)
+				}
+				if mutations.Load() != 1 || renews.Load() != 1 {
+					t.Fatal("mutation replayed or renewal not attempted", mutations.Load(), renews.Load())
+				}
+				if token, _ := b.Token(sid); token != "old.account.token" {
+					t.Fatal("failed renewal replaced the original token", token)
+				}
+				if response, err := b.Request(context.Background(), sid, http.MethodGet, "/api/resources/", nil); err != nil || response.Status != http.StatusUnauthorized {
+					t.Fatal("later authentication failure was hidden", response, err)
+				}
+				if response, err := b.Login(context.Background(), sid, "owned", "fixture-only"); err != nil || response.Status != http.StatusOK {
+					t.Fatal(response, err)
+				}
+				if token, _ := b.Token(sid); token != "new.account.token" {
+					t.Fatal("explicit reauthentication failed", token)
+				}
+				if token, _ := b.Token(other); token != "other.account.token" {
+					t.Fatal("another account was changed", token)
+				}
+			})
+		}
+	}
+}
+
+func TestRenewalFailureDoesNotInventMutationSuccess(t *testing.T) {
+	for _, test := range []struct {
+		name, method string
+		status       int
+		incomplete   bool
+	}{
+		{"read", http.MethodGet, http.StatusOK, false},
+		{"failed-write", http.MethodPost, http.StatusConflict, false},
+		{"incomplete-acknowledgement", http.MethodPost, http.StatusOK, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var mutations atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/renew" {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				mutations.Add(1)
+				w.Header().Set("X-Renew-Token", "true")
+				if test.incomplete {
+					w.Header().Set("Content-Length", "100")
+				}
+				w.WriteHeader(test.status)
+				fmt.Fprint(w, "{}")
+			}))
+			defer server.Close()
+			b, err := New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.Close()
+			sid, err := b.Open(server.URL, "old.account.token", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response, err := b.Request(context.Background(), sid, test.method, "/api/resources/owned", nil); err == nil {
+				t.Fatal("unconfirmed success was invented", response)
+			}
+			if mutations.Load() != 1 {
+				t.Fatal("request replayed", mutations.Load())
+			}
+			if token, _ := b.Token(sid); token != "old.account.token" {
+				t.Fatal("failed renewal changed token", token)
+			}
+		})
+	}
+}
+
 func TestRevokeCancelsStreamingAndRejectsUnknownOrigins(t *testing.T) {
 	cancelled := make(chan struct{})
 	started := make(chan struct{})
