@@ -26,13 +26,21 @@ export async function fetchURL(
   opts.headers = opts.headers || {};
 
   const { headers, ...rest } = opts;
+  const requestHeaders = new Headers(headers as HeadersInit);
+  if (!requestHeaders.has("X-Auth"))
+    requestHeaders.set("X-Auth", authStore.jwt);
+  const requestToken = requestHeaders.get("X-Auth");
+  const owner = () =>
+    JSON.stringify(
+      authStore.user ? [authStore.user.id, authStore.user.scope] : null
+    );
+  const requestOwner = owner();
+  const currentRequest = () =>
+    authStore.jwt === requestToken && owner() === requestOwner;
   let res;
   try {
     res = await fetch(`${baseURL}${url}`, {
-      headers: {
-        "X-Auth": authStore.jwt,
-        ...headers,
-      },
+      headers: requestHeaders,
       ...rest,
     });
   } catch (e) {
@@ -43,8 +51,15 @@ export async function fetchURL(
     throw new StatusError("000 No connection", 0);
   }
 
-  if (auth && res.headers.get("X-Renew-Token") === "true") {
-    await renew(authStore.jwt);
+  if (auth && res.headers.get("X-Renew-Token") === "true" && currentRequest()) {
+    try {
+      await renew(requestToken!, currentRequest);
+    } catch (error) {
+      // The server has already accepted this write. Losing its response can
+      // cause duplicate task creation or another destructive submission.
+      const acknowledgedWrite = res.ok && (rest.method ?? "GET") !== "GET";
+      if (!acknowledgedWrite) throw error;
+    }
   }
 
   if (res.status < 200 || res.status > 299) {
@@ -54,7 +69,7 @@ export async function fetchURL(
       res.status
     );
 
-    if (auth && res.status == 401) {
+    if (auth && res.status == 401 && currentRequest()) {
       logout();
     }
 

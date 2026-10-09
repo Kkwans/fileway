@@ -56,7 +56,7 @@ export function parseToken(token: string) {
   const timeout = expiresAt.getTime() - Date.now();
   authStore.setLogoutTimer(
     setSafeTimeout(() => {
-      logout("inactivity");
+      if (authStore.jwt === token) logout("inactivity");
     }, timeout)
   );
 }
@@ -93,7 +93,14 @@ export async function login(
   }
 }
 
-export async function renew(jwt: string) {
+export async function renew(jwt: string, accepts?: () => boolean) {
+  const authStore = useAuthStore();
+  const beforeToken = authStore.jwt;
+  const owner = () =>
+    JSON.stringify(
+      authStore.user ? [authStore.user.id, authStore.user.scope] : null
+    );
+  const beforeOwner = owner();
   const res = await fetch(`${baseURL}/api/renew`, {
     method: "POST",
     headers: {
@@ -103,7 +110,20 @@ export async function renew(jwt: string) {
 
   const body = await res.text();
 
+  if (
+    authStore.jwt !== beforeToken ||
+    owner() !== beforeOwner ||
+    (accepts && !accepts())
+  ) {
+    throw new StatusError("已忽略过期的登录响应", 0, true);
+  }
+
   if (res.status === 200) {
+    const previous = jwtDecode<JwtPayload & { user: IUser }>(jwt);
+    const next = jwtDecode<JwtPayload & { user: IUser }>(body);
+    if (!previous.user || !next.user || previous.user.id !== next.user.id) {
+      throw new StatusError("续期响应的账号不匹配，已保留原登录状态", 502);
+    }
     parseToken(body);
   } else {
     throw new StatusError(
