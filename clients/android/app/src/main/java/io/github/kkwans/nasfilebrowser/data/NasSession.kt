@@ -3,6 +3,7 @@ package io.github.kkwans.nasfilebrowser.data
 import android.util.Base64
 import io.github.kkwans.nasfilebrowser.core.NativeTransport
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
@@ -33,9 +34,29 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         token
     }
     suspend fun permissions(): ServerPermissions = parseIdentity(token()).permissions
-    private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200), statusTextBody: Boolean = false): String {
+    suspend fun accountProfile(): AccountProfile = AccountProfile.from(request("GET", "/api/users/${identity.id}")).also {
+        check(it.id == identity.id) { "服务器返回了其他账号的资料" }
+    }
+    suspend fun clientCapabilities(): ServerCapabilities = ServerCapabilities.from(request("GET", "/api/client-capabilities"))
+    suspend fun updateOwnAccount(patch: JSONObject, currentPassword: String? = null): AccountWriteAcknowledgement {
+        val fields = patch.keys().asSequence().toList()
+        require(fields.isNotEmpty() && fields.all { it in ACCOUNT_PREFERENCE_FIELDS || it == "password" })
+        require("password" !in fields || fields.size == 1) { "密码须单独保存" }
+        val body = JSONObject().put("what", "user").put("which", JSONArray(fields))
+            .put("data", JSONObject(patch.toString()).put("id", identity.id))
+        currentPassword?.let { body.put("current_password", it) }
+        val result = native(JSONObject().put("op", "request").put("session", id).put("method", "PUT")
+            .put("endpoint", "/api/users/${identity.id}").put("body", body)) as JSONObject
+        val status = result.getInt("status")
+        if (status != 200) throw ServiceException(status, "账户更改未获服务器确认")
+        // A later local token-storage error cannot erase a known HTTP acknowledgement.
+        return try { token(); AccountWriteAcknowledgement() }
+        catch (error: Exception) { if (error is CancellationException) throw error; AccountWriteAcknowledgement(tokenStorageFailed = true) }
+    }
+    private suspend fun response(method: String, endpoint: String, body: JSONObject? = null, accepted: Set<Int> = setOf(200), statusTextBody: Boolean = false, rawBody: ByteArray? = null): String {
         val command = JSONObject().put("op", "request").put("session", id).put("method", method).put("endpoint", endpoint)
         body?.let { command.put("body", it) }
+        rawBody?.let { command.put("bodyBase64", Base64.encodeToString(it, Base64.NO_WRAP)) }
         val result = native(command) as JSONObject
         when (result.getInt("status")) {
             in accepted -> {
@@ -57,10 +78,27 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         val text = response(method, endpoint, body, setOf(200, 201, 202, 204), statusTextBody = true)
         return if (text.isBlank()) JSONObject() else JSONObject(text)
     }
+    suspend fun rawResource(method: String, wire: String, bytes: ByteArray, expectedModified: String? = null, expectedSize: Long? = null): JSONObject {
+        require(method in setOf("PUT", "POST") && bytes.size <= 10 * 1024 * 1024)
+        require(wire.startsWith('/') && wire != "/" && !wire.endsWith('/'))
+        resourceWireBytes(wire)
+        val query = if (method == "POST") "override=false" else {
+            require(!expectedModified.isNullOrEmpty() && expectedSize != null && expectedSize >= 0) { "缺少原文件版本，请重新读取" }
+            "conditional=true&expectedSize=$expectedSize&expectedModified=" + java.net.URLEncoder.encode(expectedModified, "UTF-8")
+        }
+        val text = response(method, "/api/resources$wire?$query", accepted = setOf(200, 201, 202, 204), statusTextBody = true, rawBody = bytes)
+        return if (text.isBlank()) JSONObject() else JSONObject(text)
+    }
     suspend fun spriteMetadata(path: String): JSONObject {
         require(path.startsWith('/'))
         val query = java.net.URLEncoder.encode(path, "UTF-8")
         return JSONObject(response("GET", "/api/media/sprite?path=$query", accepted = setOf(200, 202)))
+    }
+    suspend fun assetLease(endpoint: String): PreviewLease {
+        require(endpoint.startsWith("/api/") && !endpoint.startsWith("//"))
+        token()
+        val url = native(JSONObject().put("op", "asset").put("session", id).put("endpoint", endpoint)) as String
+        return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
     }
     suspend fun spriteImage(path: String): PreviewLease {
         require(path.startsWith('/'))
