@@ -484,12 +484,20 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
                 val response = context.api.request("POST", "/api/resources/batch-rename", batchBody(draft.reviewedChanges, draft.legacy, false))
                 val reply = batchReply(response, draft.reviewedChanges, draft.legacy, true)
                 if (!current(context) || batchEpoch != epoch) return@launch
-                mutable.value = mutable.value.copy(changing = false, batchRename = null, batchCompletion = mutable.value.batchCompletion + 1,
-                    lastBatchSources = reply.changes.map { it.file }, error = null, notice = "已重命名 ${reply.changes.size} 项")
                 // One atomic callback is essential for swaps; sequential rewrites corrupt references.
-                try { onBatchRenamed(context, reply.changes) } catch (error: Exception) {
+                // Keep reentry locked until synchronous local references have
+                // been updated. A callback may rebind the controller itself.
+                var refreshFailed = false
+                try { onBatchRenamed(context, reply.changes) }
+                catch (error: Exception) {
+                    refreshFailed = true
                     if (error is CancellationException) throw error
-                    if (current(context)) mutable.value = mutable.value.copy(error = "重命名已完成，本地关联刷新失败，请刷新原目录核对")
+                } finally {
+                    if (current(context) && batchEpoch == epoch) mutable.value = mutable.value.copy(
+                        changing = false, batchRename = null, batchCompletion = mutable.value.batchCompletion + 1,
+                        lastBatchSources = reply.changes.map { it.file },
+                        error = if (refreshFailed) "重命名已完成，本地关联刷新失败，请刷新原目录核对" else null,
+                        notice = "已重命名 ${reply.changes.size} 项")
                 }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error

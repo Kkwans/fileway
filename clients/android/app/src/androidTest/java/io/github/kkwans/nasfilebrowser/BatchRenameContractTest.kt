@@ -245,4 +245,92 @@ class BatchRenameContractTest {
             assertEquals(0, fresh.executions)
         } finally { old.hold?.complete(Unit); scope.cancel() }
     }
+
+    @Test fun acknowledgedBatchKeepsWriteLockedUntilTheAtomicCallbackFinishes(): Unit = runBlocking {
+        val authority = BatchRenameAuthority(); val context = authority.context("callback-order")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val checked = CompletableDeferred<Result<Unit>>(); var callbacks = 0
+        lateinit var controller: FileOperationsController
+        controller = FileOperationsController(scope, { it === context }, { _, _, _ -> }, onBatchRenamed = { owner, changes ->
+            callbacks++
+            checked.complete(runCatching {
+                assertSame(context, owner); assertEquals(1, authority.executions)
+                assertEquals(authority.files.size, changes.size)
+                assertTrue("Keep reentry locked while local references are refreshed", controller.state.value.changing)
+                assertNotNull(controller.state.value.batchRename)
+                assertEquals(0L, controller.state.value.batchCompletion)
+                assertNull(controller.state.value.notice)
+                controller.executeBatchRename(); controller.checkBatchRename(); controller.closeBatchRename()
+                assertTrue(controller.state.value.changing); assertEquals(1, authority.executions)
+            })
+        })
+        try {
+            main { start(controller, context, authority.files); controller.checkBatchRename() }; settled(controller)
+            main { controller.executeBatchRename() }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertEquals(1, callbacks); assertEquals(1, authority.executions)
+            assertNull(controller.state.value.batchRename); assertEquals(1L, controller.state.value.batchCompletion)
+            assertEquals(authority.files, controller.state.value.lastBatchSources)
+            assertNull(controller.state.value.error)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun batchCallbackMayUnbindOrReplaceItsOwnerWithoutRestoringOldCompletion(): Unit = runBlocking {
+        for (replace in listOf(false, true)) {
+            val authority = BatchRenameAuthority(); val context = authority.context("callback-old-$replace")
+            val fresh = BatchRenameAuthority(); val next = fresh.context("callback-next-$replace")
+            var active: SessionContext? = context
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            val checked = CompletableDeferred<Result<Unit>>()
+            lateinit var controller: FileOperationsController
+            controller = FileOperationsController(scope, { it === active }, { _, _, _ -> }, onBatchRenamed = { _, _ ->
+                checked.complete(runCatching {
+                    assertTrue(controller.state.value.changing)
+                    active = if (replace) next else null
+                    controller.bind(active)
+                    if (replace) controller.startBatchRename(fresh.files, batchRenameParent(fresh.files.first()), next.api.id)
+                })
+            })
+            try {
+                main { start(controller, context, authority.files); controller.checkBatchRename() }; settled(controller)
+                main { controller.executeBatchRename() }
+                withTimeout(5000) { checked.await() }.getOrThrow(); main { }
+                assertEquals(if (replace) next.owner else "", controller.state.value.scope)
+                assertFalse(controller.state.value.changing); assertEquals(0L, controller.state.value.batchCompletion)
+                assertTrue(controller.state.value.lastBatchSources.isEmpty())
+                assertNull(controller.state.value.notice); assertNull(controller.state.value.error)
+                assertEquals(replace, controller.state.value.batchRename != null)
+                assertEquals(1, authority.executions); assertEquals(0, fresh.executions)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun acknowledgedBatchCallbackFailureCannotReopenOrReplayTheRemoteWrite(): Unit = runBlocking {
+        for (cancel in listOf(false, true)) {
+            val authority = BatchRenameAuthority(); val context = authority.context("callback-failure-$cancel")
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            val checked = CompletableDeferred<Result<Unit>>(); var callbacks = 0
+            lateinit var controller: FileOperationsController
+            controller = FileOperationsController(scope, { it === context }, { _, _, _ -> }, onBatchRenamed = { _, _ ->
+                callbacks++
+                checked.complete(runCatching {
+                    assertTrue(controller.state.value.changing)
+                    assertEquals(0L, controller.state.value.batchCompletion)
+                })
+                if (cancel) throw CancellationException("Owned local refresh canceled after acknowledgement")
+                throw IllegalStateException("Owned local refresh failed after acknowledgement")
+            })
+            try {
+                main { start(controller, context, authority.files); controller.checkBatchRename() }; settled(controller)
+                main { controller.executeBatchRename() }
+                withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+                assertNull(controller.state.value.batchRename); assertEquals(1L, controller.state.value.batchCompletion)
+                assertEquals(authority.files, controller.state.value.lastBatchSources)
+                assertTrue(controller.state.value.error.orEmpty().contains("重命名已完成"))
+                assertTrue(controller.state.value.error.orEmpty().contains("本地关联刷新"))
+                main { controller.executeBatchRename(); controller.checkBatchRename() }
+                assertEquals(1, callbacks); assertEquals(1, authority.executions)
+            } finally { scope.cancel() }
+        }
+    }
 }
