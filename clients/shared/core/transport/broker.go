@@ -55,6 +55,7 @@ type Broker struct {
 	sessions map[string]*Session
 	leases   map[string]*Lease
 	searches map[string]*searchStream
+	commands map[string]*commandStream
 	listener net.Listener
 	server   *http.Server
 	closed   bool
@@ -65,7 +66,7 @@ func New() (*Broker, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := &Broker{sessions: make(map[string]*Session), leases: make(map[string]*Lease), searches: make(map[string]*searchStream), listener: ln}
+	b := &Broker{sessions: make(map[string]*Session), leases: make(map[string]*Lease), searches: make(map[string]*searchStream), commands: make(map[string]*commandStream), listener: ln}
 	b.server = &http.Server{Handler: b, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() { _ = b.server.Serve(ln) }()
 	return b, nil
@@ -326,6 +327,12 @@ func (b *Broker) CloseSession(id string) {
 			delete(b.searches, key)
 		}
 	}
+	for key, command := range b.commands {
+		if command.session == s {
+			command.stop()
+			delete(b.commands, key)
+		}
+	}
 	b.mu.Unlock()
 	if s != nil {
 		s.cancel()
@@ -346,9 +353,13 @@ func (b *Broker) Close() error {
 	for _, search := range b.searches {
 		search.stop()
 	}
+	for _, command := range b.commands {
+		command.stop()
+	}
 	b.sessions = make(map[string]*Session)
 	b.leases = make(map[string]*Lease)
 	b.searches = make(map[string]*searchStream)
+	b.commands = make(map[string]*commandStream)
 	b.mu.Unlock()
 	return b.server.Close()
 }

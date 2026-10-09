@@ -39,6 +39,8 @@ type Command struct {
 	Query           string                  `json:"query"`
 	Scope           string                  `json:"scope"`
 	Search          string                  `json:"search"`
+	RawCommand      string                  `json:"command"`
+	CommandHandle   string                  `json:"commandHandle"`
 	PlatformNetwork tailnet.PlatformNetwork `json:"platformNetwork"`
 	Upload          transport.UploadOptions `json:"upload"`
 }
@@ -254,6 +256,8 @@ func (e *Engine) execute(c Command) (any, error) {
 		return b.PollSearch(c.Session, c.Search)
 	case "search_cancel":
 		return nil, b.CancelSearch(c.Session, c.Search)
+	case "command_start", "command_poll", "command_cancel":
+		return commandControl(ctx, b, c)
 	case "token":
 		return b.Token(c.Session)
 	case "cache_configure":
