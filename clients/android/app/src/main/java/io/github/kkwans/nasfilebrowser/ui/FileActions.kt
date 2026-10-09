@@ -47,6 +47,10 @@ import io.github.kkwans.nasfilebrowser.R
 }
 
 @Composable internal fun FileActions(model: ClientModel, file: ResourceRef, onMoved: () -> Unit = {}) {
+    if (model.isTemporaryContent(file)) {
+        Text("包内文件 · 解压后可收藏、打标签或修改", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        return
+    }
     if (file.downloadId.isNotEmpty()) {
         Text("本机下载 · 收藏和标签在服务器原文件上管理", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         return

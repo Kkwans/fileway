@@ -65,6 +65,7 @@ data class ClientState(
 )
 data class SessionContext(val profile: ServerProfile, val account: AccountRecord, val api: NasSession, val generation: Int, val owner: String = java.util.UUID.randomUUID().toString())
 private data class PlaybackBinding(val context: SessionContext, val file: ResourceRef, val identity: String, val writer: PlaybackWriter)
+private data class TemporaryMediaBinding(val context: SessionContext, val file: ResourceRef, val asset: PreviewLease)
 
 class ClientModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(ClientState(startupPending = true))
@@ -111,6 +112,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var pendingDirectory: Pair<String, String>? = null
     private var playback: PlaybackBinding? = null
     private var localPlayback: DownloadRecord? = null
+    private var temporaryMedia: TemporaryMediaBinding? = null
     private var localProgressPending: Job? = null
     private var saveTimer: Job? = null
     private var transferTimer: Job? = null
@@ -133,6 +135,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val archives = ArchiveController(viewModelScope, isCurrent = { context === it && generation == it.generation },
         onOpened = { bound, file -> if (context === bound) recentAccess.record(file) },
         onTaskAccepted = { bound, _ -> if (context === bound) tasks.refresh() })
+    val archiveEntry = ArchiveEntryController(viewModelScope, { context === it && generation == it.generation }, ::openTemporaryContent)
     val serverSettings = ServerSettingsController(viewModelScope) { context === it && generation == it.generation }
     val shell = ShellController(viewModelScope) { context === it && generation == it.generation }
     val documentEdits = DocumentEditController(application, viewModelScope, { context === it && generation == it.generation },
@@ -275,6 +278,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 fileChecksum.bind(bound)
                 documents.bind(bound)
                 archives.bind(bound)
+                archiveEntry.bind(bound)
                 serverSettings.bind(bound)
                 shell.bind(bound)
                 documentEdits.bind(bound)
@@ -372,6 +376,49 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun openShell() {
         val bound = context ?: return
         shell.open(DirectoryCrumb("当前目录", mutable.value.path, mutable.value.wirePath), bound.api.id)
+    }
+    fun openArchiveEntry(entry: ArchiveEntry, sourceScope: String) {
+        val bound = context ?: return
+        val state = archives.state.value
+        if (sourceScope != bound.api.id || state.scope != bound.owner) return
+        archiveEntry.open(state.file ?: return, state.listing ?: return, entry, sourceScope)
+    }
+    fun isTemporaryContent(file: ResourceRef): Boolean = temporaryMedia?.let { it.file.mediaKey == file.mediaKey } == true
+    fun closeTemporaryContent() {
+        val previous = temporaryMedia ?: return
+        temporaryMedia = null
+        cleanup.launch { previous.asset.release() }
+    }
+    private fun openTemporaryContent(bound: SessionContext, original: ResourceRef, asset: PreviewLease, kind: ArchiveEntryKind) {
+        if (context !== bound || generation != bound.generation || archiveEntry.state.value.archive?.mediaKey != archives.state.value.file?.mediaKey) {
+            cleanup.launch { asset.release() }; return
+        }
+        operation?.cancel(); val request = ++mediaRequest; pendingMediaOpen = null; pendingOpenFromPlayer = false
+        documents.close(); endPlayback()
+        val file = original.copy(wirePath = "/@archive-preview/${java.util.UUID.randomUUID()}/${original.wirePath}")
+        mutable.value = mutable.value.copy(selected = null, image = null, mediaQueue = null, busy = true, stage = "正在打开包内文件", error = null)
+        operation = viewModelScope.launch {
+            var transferred = false
+            try {
+                mediaClosing?.join(); currentCoroutineContext().ensureActive()
+                check(context === bound && generation == bound.generation && mediaRequest == request)
+                temporaryMedia = TemporaryMediaBinding(bound, file, asset); transferred = true
+                mutable.value = mutable.value.copy(busy = false, stage = "", progressStatus = "包内临时预览")
+                when (kind) {
+                    ArchiveEntryKind.IMAGE -> mutable.value = mutable.value.copy(image = file)
+                    ArchiveEntryKind.VIDEO, ArchiveEntryKind.AUDIO -> {
+                        mutable.value = mutable.value.copy(selected = file)
+                        player.open(asset.url, 0, autoplay = foreground, videoDecodePolicy = playbackPreferences.videoDecodePolicy.value)
+                        observeTransfer(bound, asset.url)
+                    }
+                    else -> documents.openAsset(file, asset, bound.api.id)
+                }
+            } catch (error: Exception) {
+                if (error !is CancellationException && context === bound && mediaRequest == request)
+                    mutable.value = mutable.value.copy(busy = false, stage = "", error = "包内文件打开失败，请返回压缩包重试")
+                if (transferred) closeTemporaryContent()
+            } finally { if (!transferred) asset.release() }
+        }
     }
     fun verifyDocumentDirectory(parent: DirectoryCrumb) { tab("files"); browse(parent.path, parent.wirePath ?: SearchResult.encodePath(parent.path)) }
     fun openRemotePath(path: String) = openRemotePathWithWire(path, "")
@@ -649,6 +696,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         browse(crumb.path, crumb.wirePath)
     }
     suspend fun preview(file: ResourceRef, contain: Boolean = false): PreviewLease {
+        temporaryMedia?.takeIf { it.file.mediaKey == file.mediaKey && context === it.context }?.let { return PreviewLease(it.asset.url, it.asset.scope) {} }
         if (file.downloadId.isNotEmpty()) return image(file, ImageQuality.ORIGINAL).first
         val bound = context ?: error("服务器尚未连接")
         val asset = bound.api.preview(file.path, file.wirePath, contain)
@@ -721,8 +769,9 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             subtitleLeases.add(asset)
         } catch (error: Throwable) { asset.release(); throw error }
     }
-    fun closeImage() { mutable.value = mutable.value.copy(image = null, mediaQueue = null) }
+    fun closeImage() { if (mutable.value.image?.let(::isTemporaryContent) == true) closeTemporaryContent(); mutable.value = mutable.value.copy(image = null, mediaQueue = null) }
     suspend fun image(file: ResourceRef, quality: ImageQuality): Pair<PreviewLease, ResourceRef> {
+        temporaryMedia?.takeIf { it.file.mediaKey == file.mediaKey && context === it.context }?.let { return PreviewLease(it.asset.url, it.asset.scope) {} to file }
         if (file.downloadId.isNotEmpty()) {
             val item = ClientDatabase.get(getApplication()).downloads().get(file.downloadId) ?: error("下载记录已移除")
             check(item.complete && item.localUri.isNotEmpty()) { "图片下载完成后即可查看" }
@@ -761,7 +810,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             error = if (returnToSource) null else if (opening) "已取消打开，可重试或选择其他视频" else mutable.value.error)
     }
     fun back(): Boolean {
-        if (documents.state.value.file != null) { documents.close(); return true }
+        if (documents.state.value.file != null) { documents.close(); closeTemporaryContent(); return true }
         if (shell.state.value.open) { shell.close(); return true }
         if (archives.state.value.file != null) { archives.close(); return true }
         if (mutable.value.image != null) { closeImage(); return true }
@@ -919,6 +968,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     /** Called only after the active remote image has actually decoded. */
     fun recordRecentAccess(file: ResourceRef, sourceScope: String = mutable.value.previewScope) {
+        if (isTemporaryContent(file)) return
         val bound = context ?: return
         val active = mutable.value.image ?: return
         if (sourceScope == mutable.value.previewScope && file.downloadId.isEmpty() && active.mediaKey == file.mediaKey && generation == bound.generation) recentAccess.record(file)
@@ -996,6 +1046,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         binding.writer.submit(value)
     }
     private fun endPlayback() {
+        closeTemporaryContent()
         saveProgress()
         val oldLocal = localPlayback; localPlayback = null
         val localStored = localProgressPending
@@ -1038,11 +1089,11 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             var previousBytes = 0L
             var previousMillis = -1L
             val samples = ArrayDeque<Long>()
-            while (context == bound && lease == url) {
+            while (context == bound && (lease == url || temporaryMedia?.asset?.url == url)) {
                 try {
                     val result = NativeTransport.call(JSONObject().put("op", "lease_stats").put("session", bound.api.id).put("url", url)) as JSONObject
                     bound.api.token()
-                    if (context != bound || lease != url) break
+                    if (context != bound || lease != url && temporaryMedia?.asset?.url != url) break
                     val bytes = result.getLong("upstreamBytes")
                     val millis = result.getLong("elapsedMillis")
                     if (previousMillis >= 0 && millis > previousMillis) {
@@ -1074,6 +1125,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         fileChecksum.bind(null)
         documents.bind(null)
         archives.bind(null)
+        archiveEntry.bind(null)
         serverSettings.bind(null)
         shell.bind(null)
         documentEdits.bind(null)

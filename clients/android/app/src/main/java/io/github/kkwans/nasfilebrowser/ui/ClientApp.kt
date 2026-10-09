@@ -26,6 +26,7 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.mediaKind
+import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.app.MediaKind
 import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.app.RecentSection
@@ -43,6 +44,7 @@ import java.util.Locale
     val document by model.documents.state.collectAsStateWithLifecycle()
     val documentEdit by model.documentEdits.state.collectAsStateWithLifecycle()
     val archive by model.archives.state.collectAsStateWithLifecycle()
+    val archiveEntry by model.archiveEntry.state.collectAsStateWithLifecycle()
     val shell by model.shell.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     // Local queue filters/scroll survive connecting or changing the server.
@@ -84,15 +86,31 @@ import java.util.Locale
     }
     if (documentEdit.file != null) { LibraryTheme { DocumentEditorScreen(model.documentEdits, {}) }; return }
     if (document.file != null) { LibraryTheme {
-        DocumentPreviewScreen(model.documents, {}, model::download,
-            state.permissions.download,
-            onEdit = if (state.permissions.modify) {
+        DocumentPreviewScreen(model.documents, model::closeTemporaryContent, model::download,
+            state.permissions.download && !model.isTemporaryContent(document.file!!),
+            onEdit = if (state.permissions.modify && !model.isTemporaryContent(document.file!!)) {
                 file, text -> model.documentEdits.open(file, text, state.previewScope)
             } else null)
     }; return }
     if (archive.file != null) { LibraryTheme {
         ArchiveScreen(model.archives, {}, { model.archives.close(); model.tab("tasks") },
-            { directory -> model.archives.close(); model.verifyDocumentDirectory(directory) })
+            { directory -> model.archives.close(); model.verifyDocumentDirectory(directory) },
+            onOpenEntry = { entry -> model.openArchiveEntry(entry, state.previewScope) })
+        if (archiveEntry.archive?.mediaKey == archive.file?.mediaKey && (archiveEntry.preparing || archiveEntry.canceling || archiveEntry.error != null))
+            AlertDialog(onDismissRequest = { if (archiveEntry.preparing) model.archiveEntry.cancel() else model.archiveEntry.dismissError() },
+                title = { Text(if (archiveEntry.error != null) "包内文件未能打开" else "正在准备包内文件") }, text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(archiveEntry.error ?: archiveEntry.stage)
+                        if (archiveEntry.preparing) {
+                            val progress = archiveEntry.progress
+                            if (progress != null) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                            else LinearProgressIndicator(Modifier.fillMaxWidth())
+                            if (archiveEntry.size > 0) Text("${readableSize(archiveEntry.processedBytes)} / ${readableSize(archiveEntry.size)}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }, confirmButton = { TextButton({ if (archiveEntry.preparing) model.archiveEntry.cancel() else model.archiveEntry.dismissError() }, enabled = !archiveEntry.canceling) {
+                    Text(if (archiveEntry.preparing) "取消准备" else "关闭")
+                } })
     }; return }
     if (state.tab == "account" && state.connected) { LibraryTheme {
         AccountSettingsScreen(model.accountSettings, { model.tab("settings") }, model::disconnect)
