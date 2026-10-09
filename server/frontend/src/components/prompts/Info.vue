@@ -185,6 +185,8 @@ import AppIcon from "@/components/ui/AppIcon.vue";
 import type { AppIconName } from "@/components/ui/iconRegistry";
 import { getResourceIconName } from "@/utils/fileIcons";
 
+import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
+
 const $showError = inject<IToastError>("$showError")!;
 const showChecksums = ref(false);
 const directoryStats = ref<ReturnType<typeof summarizeDirectory> | null>(null);
@@ -387,16 +389,14 @@ const renameFromInfo = async () => {
   );
   renaming.value = true;
   try {
-    await api.move([{ from: oldLink, to: newLink }]);
+    const responses = await api.move([{ from: oldLink, to: newLink }]);
     if (fileStore.scope !== sourceScope) return;
     if (!isListing.value) {
       await router.push({ path: newLink });
     } else {
+      fileStore.clearSelection();
       fileStore.setPreselect(
-        {
-          path: url.canonicalResourcePath(newLink),
-          wirePath: newLink.slice("/files".length),
-        },
+        operationAcknowledgedTarget(responses[0], [oldLink, newLink]),
         sourceScope
       );
       reload.value = true;

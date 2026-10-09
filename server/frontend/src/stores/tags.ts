@@ -569,6 +569,7 @@ export const useTagsStore = defineStore("tags", () => {
     activeFilterTag,
     filteredPaths,
     loadTags,
+    refreshAfterMutation,
     saveTags,
     createTag,
     updateTag,

@@ -1051,6 +1051,7 @@
 
 <script setup lang="ts">
 import { useAuthStore } from "@/stores/auth";
+import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
 import { useClipboardStore } from "@/stores/clipboard";
 import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
@@ -1870,18 +1871,20 @@ const paste = async (event: Event) => {
     return;
   }
 
-  const preselect = {
-    path: removePrefix(route.path) + items[0].name,
-    wirePath: removePrefix(items[0].to),
-  };
-
   let action = (overwrite?: boolean, rename?: boolean) => {
     if (fileStore.scope !== sourceScope) return;
     api
       .copy(items, overwrite, rename)
-      .then(() => {
+      .then((responses) => {
         if (fileStore.scope !== sourceScope) return;
-        fileStore.setPreselect(preselect, sourceScope);
+        fileStore.clearSelection();
+        fileStore.setPreselect(
+          operationAcknowledgedTarget(responses[0], [
+            items[0].from,
+            items[0].to,
+          ]),
+          sourceScope
+        );
         fileStore.reload = true;
       })
       .catch($showError);
@@ -1892,10 +1895,17 @@ const paste = async (event: Event) => {
       if (fileStore.scope !== sourceScope) return;
       api
         .move(items, overwrite, rename)
-        .then(() => {
+        .then((responses) => {
           if (fileStore.scope !== sourceScope) return;
           clipboardStore.resetClipboard();
-          fileStore.setPreselect(preselect, sourceScope);
+          fileStore.clearSelection();
+          fileStore.setPreselect(
+            operationAcknowledgedTarget(responses[0], [
+              items[0].from,
+              items[0].to,
+            ]),
+            sourceScope
+          );
           fileStore.reload = true;
         })
         .catch($showError);

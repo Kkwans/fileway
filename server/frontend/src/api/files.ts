@@ -28,6 +28,58 @@ import { batchRenameWireKey } from "@/utils/batchRename";
 import { mediaResourceURL } from "@/utils/mediaResource";
 import { favoriteIdentity } from "@/utils/favoritePersistence";
 import { tagAssociationBody } from "@/utils/tagPersistence";
+import { fileSelectionScope } from "@/utils/fileListing";
+import {
+  operationWireTarget,
+  operationSource,
+  type OperationResource,
+} from "@/utils/resourceOperationWire";
+
+function captureOperationSource() {
+  return operationSource(() =>
+    fileSelectionScope(useAuthStore()?.user ?? null)
+  );
+}
+async function confirmWireSupport(
+  opaque: boolean,
+  source: ReturnType<typeof captureOperationSource>
+) {
+  source.ensure();
+  if (!opaque) return;
+  let capabilities;
+  try {
+    const response = await fetchURL("/api/client-capabilities", {});
+    capabilities = await response.json();
+  } catch (error) {
+    source.ensure();
+    if (
+      error instanceof SyntaxError ||
+      (error instanceof StatusError &&
+        (error.status === 404 || error.status === 405))
+    )
+      throw new Error("服务器不支持原始路径写入，请升级服务器后重试");
+    throw error;
+  }
+  source.ensure();
+  if (capabilities?.resourceWireOperations !== true)
+    throw new Error("服务器不支持原始路径写入，请升级服务器后重试");
+}
+function refreshOperationCollections(
+  source: ReturnType<typeof captureOperationSource>
+) {
+  if (!source.current()) return;
+  // Reuse the stores authority refresh and their owner/revision guards. A
+  // refresh failure cannot turn an acknowledged filesystem write into failure.
+  void useFavoritesStore()
+    .refreshAfterMutation(true)
+    .catch(() => {});
+  void useTagsStore()
+    .refreshAfterMutation(true)
+    .catch(() => {});
+  void useRecentStore()
+    .load()
+    .catch(() => {});
+}
 
 export interface BatchRenameItem {
   from: string;
@@ -206,28 +258,40 @@ async function resourceAction(
 }
 
 export async function remove(
-  url: string,
+  resource: OperationResource,
   mode: "trash" | "permanent" = "permanent"
 ): Promise<TrashItem | null> {
-  const removedPath = removePrefix(url);
+  const source = captureOperationSource();
+  const target = operationWireTarget(resource, true);
+  await confirmWireSupport(target.plainPath === undefined, source);
+  source.ensure();
   const response = await fetchURL(
-    `/api/resources${removedPath}?mode=${encodeURIComponent(mode)}`,
+    `/api/resources${target.wirePath}?mode=${encodeURIComponent(mode)}`,
     { method: "DELETE" }
   );
-  useFavoritesStore().applyPathRemoval(removedPath);
-  useTagsStore().applyPathRemoval(removedPath);
-  useRecentStore().applyPathRemoval(removedPath);
-  if (mode === "trash") return (await response.json()) as TrashItem;
-  return null;
+  refreshOperationCollections(source);
+  return mode === "trash" ? ((await response.json()) as TrashItem) : null;
 }
 
 export async function schedulePermanentDeletion(
-  paths: string[]
+  resources: OperationResource[]
 ): Promise<TaskItem> {
+  const source = captureOperationSource();
+  const targets = resources.map((resource) => operationWireTarget(resource));
+  if (targets.length === 0) throw new Error("请选择需要删除的文件");
+  const compatible = targets.every((target) => target.plainPath !== undefined);
+  await confirmWireSupport(!compatible, source);
+  source.ensure();
   const response = await fetchURL("/api/deletions/pending", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "resources", paths }),
+    body: JSON.stringify({
+      kind: "resources",
+      wirePaths: targets.map((target) => target.wirePath),
+      ...(compatible
+        ? { paths: targets.map((target) => target.plainPath!) }
+        : {}),
+    }),
   });
   return (await response.json()) as TaskItem;
 }
@@ -408,30 +472,43 @@ async function postResources(
   });
 }
 
+type ResourceTransferItem = {
+  from: OperationResource;
+  to?: OperationResource;
+  overwrite?: boolean;
+  rename?: boolean;
+};
+
 async function moveCopy(
-  items: { from: string; to?: string; overwrite?: boolean; rename?: boolean }[],
+  items: ResourceTransferItem[],
   copy = false,
   overwrite = false,
   rename = false
 ) {
-  // Copy and cross-directory move are durable file tasks. Same-directory move
-  // remains the lightweight rename contract for keyboard and inline rename
-  // callers that rely on its destination response header.
+  const source = captureOperationSource();
+  if (!items.length || items.length > 1000)
+    throw new Error("文件操作必须包含1到1000项");
+  const targets = items.map((item) => {
+    if (!item.to) throw new Error("目标路径无法确认");
+    return {
+      item,
+      from: operationWireTarget(item.from, true),
+      to: operationWireTarget(item.to, true),
+    };
+  });
+  const opaque = targets.some(
+    ({ from, to }) => from.plainPath === undefined || to.plainPath === undefined
+  );
+  await confirmWireSupport(opaque, source);
+  source.ensure();
   const layoutStore = useLayoutStore();
   const sameDirectoryMove =
     !copy &&
-    items.every((item) => {
-      const source = urlUtils
-        .canonicalResourcePath(item.from)
-        .replace(/\/+$/, "");
-      const destination = urlUtils
-        .canonicalResourcePath(item.to ?? "")
-        .replace(/\/+$/, "");
-      const sourceParent = source.slice(0, source.lastIndexOf("/")) || "/";
-      const destinationParent =
-        destination.slice(0, destination.lastIndexOf("/")) || "/";
-      return sourceParent === destinationParent;
-    });
+    targets.every(
+      ({ from, to }) =>
+        (from.identity.slice(0, from.identity.lastIndexOf("/")) || "/") ===
+        (to.identity.slice(0, to.identity.lastIndexOf("/")) || "/")
+    );
 
   if (!sameDirectoryMove) {
     const response = await fetchURL("/api/resources/transfer", {
@@ -439,64 +516,39 @@ async function moveCopy(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: copy ? "copy" : "move",
-        items: items.map((item) => ({
+        items: targets.map(({ item, from, to }) => ({
           ...item,
-          from: urlUtils.canonicalResourcePath(item.from),
-          to: urlUtils.canonicalResourcePath(item.to ?? ""),
+          from: undefined,
+          to: undefined,
+          fromWirePath: from.wirePath,
+          toWirePath: to.wirePath,
+          ...(from.plainPath !== undefined && to.plainPath !== undefined
+            ? { from: from.legacyRoute, to: to.legacyRoute }
+            : {}),
         })),
       }),
     });
-    layoutStore.closeHovers();
+    if (source.current()) layoutStore.closeHovers();
     return [response];
   }
 
-  const promises: Promise<Response>[] = [];
-
-  for (const item of items) {
-    // Listing URLs are already wire-safe routes. Keep them opaque so legacy
-    // non-UTF-8 bytes (for example `%D6%D0`) are sent to the backend once;
-    // re-encoding here would turn `%D6` into `%25D6` and target a different
-    // filename. Canonical paths still go through the normal encoder.
-    const from =
-      item.from === "/files" || item.from.startsWith("/files/")
-        ? item.from.replace(/\/+$/, "") || "/files"
-        : urlUtils.encodeResourceRoute(item.from);
-    const destinationPath = urlUtils.canonicalResourcePath(item.to ?? "");
-    const to = encodeURIComponent(destinationPath);
-    const finalOverwrite =
-      item.overwrite == undefined ? overwrite : item.overwrite;
-    const finalRename = item.rename == undefined ? rename : item.rename;
-    const url = `${from}?action=${
-      copy ? "copy" : "rename"
-    }&destination=${to}&override=${finalOverwrite}&rename=${finalRename}`;
-    promises.push(resourceAction(url, "PATCH"));
-  }
-  layoutStore.closeHovers();
-  const outcomes = await Promise.allSettled(promises);
-  if (!copy) {
-    const favoritesStore = useFavoritesStore();
-    const tagsStore = useTagsStore();
-    outcomes.forEach((outcome, index) => {
-      if (outcome.status !== "fulfilled") return;
-      const source = urlUtils.canonicalResourcePath(items[index].from);
-      const encodedDestination = outcome.value.headers.get(
-        "X-Resource-Destination"
-      );
-      let destination = urlUtils.canonicalResourcePath(items[index].to ?? "");
-      if (encodedDestination) {
-        try {
-          destination = decodeURIComponent(encodedDestination);
-        } catch {
-          // A malformed optional response header must not hide a successful
-          // filesystem operation; the requested destination remains usable.
-        }
-      }
-      favoritesStore.applyPathRewrite(source, destination);
-      tagsStore.applyPathRewrite(source, destination);
-      useRecentStore().applyPathRewrite(source, destination);
+  const promises = targets.map(async ({ item, from, to }) => {
+    source.ensure();
+    const params = new URLSearchParams({
+      action: "rename",
+      destinationWirePath: to.wirePath,
+      override: String(item.overwrite ?? overwrite),
+      rename: String(item.rename ?? rename),
     });
-  }
-
+    if (to.plainPath !== undefined) params.set("destination", to.plainPath);
+    return fetchURL(`/api/resources${from.wirePath}?${params}`, {
+      method: "PATCH",
+    });
+  });
+  if (source.current()) layoutStore.closeHovers();
+  const outcomes = await Promise.allSettled(promises);
+  if (outcomes.some((outcome) => outcome.status === "fulfilled"))
+    refreshOperationCollections(source);
   const failure = outcomes.find(
     (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
   );
@@ -507,7 +559,7 @@ async function moveCopy(
 }
 
 export function move(
-  items: { from: string; to?: string; overwrite?: boolean; rename?: boolean }[],
+  items: ResourceTransferItem[],
   overwrite = false,
   rename = false
 ) {
@@ -568,6 +620,7 @@ export async function batchRename(
   items: BatchRenameItem[],
   dryRun: boolean
 ): Promise<BatchRenameResult> {
+  const source = captureOperationSource();
   const response = await fetchURL("/api/resources/batch-rename", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -603,13 +656,13 @@ export async function batchRename(
       result.items.some((item) => item.status !== "completed")
     )
       throw new Error("服务器返回的批量重命名执行状态无效，请刷新文件状态");
-    applyCompletedBatchRename(result.items);
+    if (source.current()) applyCompletedBatchRename(result.items);
   }
   return result;
 }
 
 export function copy(
-  items: { from: string; to?: string; overwrite?: boolean; rename?: boolean }[],
+  items: ResourceTransferItem[],
   overwrite = false,
   rename = false
 ) {

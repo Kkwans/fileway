@@ -51,47 +51,60 @@
 
 <script setup lang="ts">
 import { computed, inject, ref } from "vue";
-import { useRoute } from "vue-router";
-import { storeToRefs } from "pinia";
 import { files as api } from "@/api";
 import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
 import * as taskApi from "@/api/tasks";
+import { operationResourceSnapshot } from "@/utils/resourceOperationWire";
+import { fileResourceIdentity } from "@/utils/fileListing";
 import AppDialog from "@/components/ui/AppDialog.vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 
 const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
 const $showAction = inject<IToastAction>("$showAction")!;
-const route = useRoute();
-
 const fileStore = useFileStore();
 const layoutStore = useLayoutStore();
 const { closeHovers, showHover } = layoutStore;
-const { isListing, selectedCount, req, selectedItems } = storeToRefs(fileStore);
-const { reload, preselect } = storeToRefs(fileStore);
+const sourceScope = fileStore.scope;
+const listingAtOpen = fileStore.isListing;
+const sourceResource = fileStore.req;
+const resourceAtOpen = sourceResource && fileResourceIdentity(sourceResource);
+const sourcePrompt = layoutStore.currentPrompt;
+const confirmed = sourcePrompt?.confirm;
+const snapshot = operationResourceSnapshot(
+  sourceScope,
+  listingAtOpen
+    ? fileStore.selectedItems
+    : sourceResource
+      ? [sourceResource]
+      : []
+);
+const firstIndex = Math.min(...snapshot.rows.map((item) => item.index));
+const originalNearby = sourceResource?.items?.[Math.max(0, firstIndex - 1)];
+const nearbyItem = originalNearby ? { ...originalNearby } : undefined;
+const current = () => fileStore.scope === snapshot.scope;
 const submitting = ref(false);
+let executing = false;
 
 const itemSummary = computed(() => {
-  if (isListing.value && selectedCount.value > 1) {
-    return `即将处理 ${selectedCount.value} 个已选项目。`;
-  }
-  const item = !isListing.value
-    ? req.value?.name
-    : selectedItems.value[0]?.name;
-  return item ? `即将处理“${item}”。` : "即将处理当前项目。";
+  if (listingAtOpen && snapshot.rows.length > 1)
+    return `即将处理 ${snapshot.rows.length} 个已选项目。`;
+  const name = snapshot.rows[0]?.name;
+  return name ? `即将处理“${name}”。` : "即将处理当前项目。";
 });
 
-function candidates() {
-  return isListing.value && selectedCount.value > 0
-    ? [...selectedItems.value]
-    : !isListing.value && req.value
-      ? [req.value]
-      : [];
+function closeOwnedDialog() {
+  if (!current()) return;
+  if (layoutStore.currentPrompt === sourcePrompt) closeHovers();
+  else if (sourcePrompt)
+    layoutStore.prompts = layoutStore.prompts.filter(
+      (prompt) => prompt !== sourcePrompt
+    );
 }
-
 function checkRisk(onconfirm: () => void) {
-  for (const item of candidates()) {
+  if (!current()) return false;
+  for (const item of snapshot.rows) {
     const risk = item.riskLevel ?? "low";
     if (risk === "high" || risk === "medium") {
       showHover({
@@ -100,7 +113,9 @@ function checkRisk(onconfirm: () => void) {
           riskLevel: risk,
           targetPath: item.path,
           actionType: "delete",
-          onconfirm,
+          onconfirm: () => {
+            if (current()) onconfirm();
+          },
         },
       });
       return true;
@@ -108,85 +123,82 @@ function checkRisk(onconfirm: () => void) {
   }
   return false;
 }
-
 const closeDialog = () => {
-  if (!submitting.value) closeHovers();
+  if (!submitting.value) closeOwnedDialog();
 };
-
 const submit = async () => {
-  if (submitting.value) return;
-  submitting.value = true;
+  if (!current() || submitting.value) return;
   await executeDelete("trash");
 };
-
 const submitPermanent = async () => {
-  if (submitting.value) return;
-  submitting.value = true;
-  if (checkRisk(() => void executeDelete("permanent"))) {
-    submitting.value = false;
-    return;
-  }
+  if (!current() || submitting.value) return;
+  if (checkRisk(() => void executeDelete("permanent"))) return;
   await executeDelete("permanent");
 };
-
 const executeDelete = async (mode: "trash" | "permanent") => {
+  if (!current() || executing) return;
+  executing = true;
+  submitting.value = true;
   try {
-    const items = candidates();
-    if (items.length === 0) {
-      closeHovers();
+    if (!snapshot.rows.length) {
+      closeOwnedDialog();
       return;
     }
     if (mode === "permanent") {
-      const task = await api.schedulePermanentDeletion(
-        items.map((item) => item.path)
-      );
-      closeHovers();
+      const task = await api.schedulePermanentDeletion([...snapshot.rows]);
+      if (!current()) return;
+      closeOwnedDialog();
       $showAction("永久删除将在 3 秒后执行", "撤回", async () => {
-        await taskApi.cancel(task.id);
+        if (!current()) return;
+        try {
+          await taskApi.cancel(task.id);
+        } catch (error) {
+          if (current()) throw error;
+          return;
+        }
+        if (!current()) return;
         $showSuccess("已撤回永久删除", { importance: "minor" });
-        reload.value = true;
+        fileStore.reload = true;
       });
-      reload.value = true;
+      fileStore.reload = true;
       return;
     }
-    if (!isListing.value) {
-      await api.remove(route.path, "trash");
-      const confirm = layoutStore.currentPrompt?.confirm;
-      confirm?.();
-      closeHovers();
-      $showSuccess("已移入回收站", { importance: "minor" });
-      return;
-    }
-
-    const deletingItems = items;
     const failures: unknown[] = [];
-    for (const item of deletingItems) {
+    for (const item of snapshot.rows) {
+      if (!current()) return;
       try {
-        await api.remove(item.url, "trash");
+        await api.remove(item, "trash");
       } catch (error) {
         failures.push(error);
       }
+      if (!current()) return;
     }
-    if (failures.length > 0) throw failures[0];
-
-    closeHovers();
+    if (failures.length) throw failures[0];
+    if (!listingAtOpen) {
+      if (
+        fileStore.req &&
+        fileResourceIdentity(fileStore.req) === resourceAtOpen
+      )
+        confirmed?.();
+      closeOwnedDialog();
+      $showSuccess("已移入回收站", { importance: "minor" });
+      return;
+    }
+    closeOwnedDialog();
     $showSuccess(
-      deletingItems.length === 1
+      snapshot.rows.length === 1
         ? "已移入回收站"
-        : `${deletingItems.length} 项已移入回收站`,
+        : `${snapshot.rows.length} 项已移入回收站`,
       { importance: "minor" }
     );
-
-    const firstSelectedIndex = Math.min(
-      ...deletingItems.map((item) => item.index)
-    );
-    const nearbyItem = req.value!.items[Math.max(0, firstSelectedIndex - 1)];
-    preselect.value = nearbyItem?.path;
-    reload.value = true;
+    fileStore.setPreselect(nearbyItem, sourceScope);
+    fileStore.reload = true;
   } catch (error) {
+    if (!current()) return;
     $showError(error instanceof Error ? error : String(error));
-    if (isListing.value) reload.value = true;
+    if (listingAtOpen) fileStore.reload = true;
   } finally {
+    executing = false;
     submitting.value = false;
   }
 };

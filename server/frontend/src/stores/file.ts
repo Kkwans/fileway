@@ -212,6 +212,7 @@ export const useFileStore = defineStore("file", () => {
       if (key) selectOnly(key);
       return;
     }
+    if (source !== null) return;
     const parent = fileResourceIdentity(state.req),
       previous = state.oldReq && fileResourceIdentity(state.oldReq);
     if (parent === null || !previous || previous === parent) return;

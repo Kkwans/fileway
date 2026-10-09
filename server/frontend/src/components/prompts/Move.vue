@@ -25,6 +25,8 @@ import {
 } from "@/utils/url";
 import buttons from "@/utils/buttons";
 
+import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
+
 const $showError = inject<IToastError>("$showError")!;
 const route = useRoute();
 const router = useRouter();
@@ -61,14 +63,12 @@ async function submit(items: MoveCopyItem[], destination: string) {
   if (fileStore.scope !== sourceScope) return;
   buttons.loading("move");
   try {
-    await api.move(items, false, false);
+    const responses = await api.move(items, false, false);
     if (fileStore.scope !== sourceScope) return;
     buttons.success("move");
+    fileStore.clearSelection();
     fileStore.setPreselect(
-      {
-        path: canonicalResourcePath(items[0].to),
-        wirePath: items[0].to.slice("/files".length),
-      },
+      operationAcknowledgedTarget(responses[0], [items[0].from, items[0].to]),
       sourceScope
     );
     reload.value = true;

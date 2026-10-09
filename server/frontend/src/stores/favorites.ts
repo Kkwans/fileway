@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
+import { fileSelectionScope } from "@/utils/fileListing";
 import { useAuthStore } from "@/stores/auth";
 import { fetchURL, StatusError } from "@/api/utils";
 import {
@@ -45,25 +46,73 @@ export const useFavoritesStore = defineStore("favorites", () => {
   const groups = ref<FavoriteGroup[]>([]);
   const loaded = ref(false);
 
-  const snapshotFavorites = () => favorites.value.map((item) => ({ ...item }));
-  const snapshotGroups = () => groups.value.map((item) => ({ ...item }));
-
-  function restoreFavorites(snapshot: Favorite[]) {
-    favorites.value = snapshot.map((item) => ({ ...item }));
+  const owner = () => fileSelectionScope(authStore.user ?? null);
+  let revision = 0,
+    mutationRevision = 0;
+  const captureSource = (mutation = false) => ({
+    owner: owner(),
+    revision: ++revision,
+    mutationRevision: mutation ? ++mutationRevision : undefined,
+  });
+  const currentSource = (source: ReturnType<typeof captureSource>) =>
+    source.owner === owner() &&
+    (source.mutationRevision === undefined
+      ? source.revision === revision
+      : source.mutationRevision === mutationRevision);
+  function settleMutation(source: ReturnType<typeof captureSource>) {
+    if (currentSource(source) && source.revision === revision) return true;
+    // A read does not cancel an explicit write. After its ACK, converge from
+    // the authority instead of replacing newer rows with an old snapshot.
+    if (source.owner === owner())
+      void refreshAfterMutation(true).catch(() => {});
+    return false;
+  }
+  watch(
+    owner,
+    () => {
+      revision++;
+      mutationRevision++;
+      favorites.value = [];
+      groups.value = [];
+      loaded.value = false;
+    },
+    { flush: "sync" }
+  );
+  const snapshotFavorites = () => ({
+    source: captureSource(true),
+    rows: favorites.value.map((item) => ({ ...item })),
+  });
+  const snapshotGroups = () => ({
+    source: captureSource(true),
+    rows: groups.value.map((item) => ({ ...item })),
+  });
+  function restoreFavorites(snapshot: ReturnType<typeof snapshotFavorites>) {
+    if (
+      !currentSource(snapshot.source) ||
+      snapshot.source.revision !== revision
+    )
+      return;
+    favorites.value = snapshot.rows.map((item) => ({ ...item }));
     saveToLocalStorage();
   }
-
-  function restoreGroups(snapshot: FavoriteGroup[]) {
-    groups.value = snapshot.map((item) => ({ ...item }));
+  function restoreGroups(snapshot: ReturnType<typeof snapshotGroups>) {
+    if (
+      !currentSource(snapshot.source) ||
+      snapshot.source.revision !== revision
+    )
+      return;
+    groups.value = snapshot.rows.map((item) => ({ ...item }));
     saveGroupsToLocalStorage();
   }
 
   // --- API helpers ---
 
   async function apiGet(): Promise<Favorite[] | null> {
+    const sourceOwner = owner();
     try {
       const res = await fetchURL(API_BASE, {});
-      return await res.json();
+      const rows = await res.json();
+      return owner() === sourceOwner ? rows : null;
     } catch {
       return null;
     }
@@ -137,9 +186,11 @@ export const useFavoritesStore = defineStore("favorites", () => {
   // --- Groups API helpers ---
 
   async function apiGetGroups(): Promise<FavoriteGroup[] | null> {
+    const sourceOwner = owner();
     try {
       const res = await fetchURL(GROUPS_API_BASE, {});
-      return await res.json();
+      const rows = await res.json();
+      return owner() === sourceOwner ? rows : null;
     } catch {
       return null;
     }
@@ -209,7 +260,8 @@ export const useFavoritesStore = defineStore("favorites", () => {
   // --- localStorage helpers ---
 
   function scopedStorageKey(prefix: string): string {
-    return userStorageKey(prefix, authStore.user?.id ?? "anonymous");
+    // Retain old user-only caches without guessing their workspace.
+    return userStorageKey(prefix, owner());
   }
 
   function saveToLocalStorage() {
@@ -251,14 +303,17 @@ export const useFavoritesStore = defineStore("favorites", () => {
   // --- Public methods ---
 
   async function loadFavorites() {
+    const source = captureSource();
     const cachedGroups = loadGroupsFromLocalStorage();
     const apiGroups = await apiGetGroups();
+    if (!currentSource(source)) return;
     const groupState = resolvePersistenceState(apiGroups ?? [], cachedGroups);
     groups.value = apiGroups === null ? cachedGroups : groupState.data;
     saveGroupsToLocalStorage();
 
     const cachedFavorites = loadFromLocalStorage();
     const apiData = await apiGet();
+    if (!currentSource(source)) return;
     const favoriteState = resolvePersistenceState(
       apiData ?? [],
       cachedFavorites
@@ -266,9 +321,10 @@ export const useFavoritesStore = defineStore("favorites", () => {
     favorites.value = apiData === null ? cachedFavorites : favoriteState.data;
     saveToLocalStorage();
 
-    if (groupState.shouldSync) await syncGroups();
-    if (favoriteState.shouldSync) await syncFavorites();
-    loaded.value = true;
+    if (groupState.shouldSync) await syncGroups(source);
+    if (currentSource(source) && favoriteState.shouldSync)
+      await syncFavorites(source);
+    if (currentSource(source)) loaded.value = true;
   }
 
   /**
@@ -276,28 +332,36 @@ export const useFavoritesStore = defineStore("favorites", () => {
    * 服务端记录；若服务端暂时为空，则把本地缓存重新同步并取得真实 ID。
    */
   async function refreshAfterMutation(preferRemote = false) {
+    const source = captureSource();
     const [remoteGroups, remoteFavorites] = await Promise.all([
       apiGetGroups(),
       apiGet(),
     ]);
-    if (remoteGroups === null || remoteFavorites === null) return;
+    if (
+      !currentSource(source) ||
+      remoteGroups === null ||
+      remoteFavorites === null
+    )
+      return;
 
     if (!preferRemote && remoteGroups.length === 0 && groups.value.length > 0) {
-      await syncGroups();
+      await syncGroups(source);
     } else {
       groups.value = remoteGroups;
     }
 
+    if (!currentSource(source)) return;
     if (
       !preferRemote &&
       remoteFavorites.length === 0 &&
       favorites.value.length > 0
     ) {
-      await syncFavorites();
+      await syncFavorites(source);
     } else {
       favorites.value = remoteFavorites;
     }
 
+    if (!currentSource(source)) return;
     saveGroupsToLocalStorage();
     saveToLocalStorage();
   }
@@ -340,6 +404,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     favorites.value.push(newFav);
     saveToLocalStorage();
     const created = await apiCreate(newFav);
+    if (!settleMutation(snapshot.source)) return;
     if (created) {
       favorites.value = replaceFavoriteByPath(favorites.value, created);
       saveToLocalStorage();
@@ -354,6 +419,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     favorites.value.forEach((f, i) => (f.order = i));
     saveToLocalStorage();
     const result = await apiDelete(id);
+    if (!settleMutation(snapshot.source)) return;
     if (!result.ok) {
       restoreFavorites(snapshot);
       if (result.status === 404) await refreshAfterMutation();
@@ -369,6 +435,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     favorites.value.forEach((f, i) => (f.order = i));
     saveToLocalStorage();
     const result = await apiDelete(target.id);
+    if (!settleMutation(snapshot.source)) return;
     if (!result.ok) {
       restoreFavorites(snapshot);
       if (result.status === 404) await refreshAfterMutation();
@@ -380,6 +447,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
   }
 
   function applyPathRewrite(from: string, to: string) {
+    revision++;
     // Display-only mutation callbacks cannot identify opaque siblings. The
     // server has already committed the corresponding metadata transaction.
     if (
@@ -403,6 +471,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
   }
 
   function applyPathRemoval(prefix: string) {
+    revision++;
     if (
       favorites.value.some(
         (item) => item.wirePath || item.pathVerified !== undefined
@@ -442,6 +511,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     fav.groupId = groupId;
     saveToLocalStorage();
     const result = await apiUpdate(favId, { groupId });
+    if (!settleMutation(snapshot.source)) return;
     if (!result.ok) {
       restoreFavorites(snapshot);
       if (result.status === 404) await refreshAfterMutation();
@@ -462,9 +532,9 @@ export const useFavoritesStore = defineStore("favorites", () => {
     favorites.value.splice(toIndex, 0, item);
     favorites.value.forEach((f, i) => (f.order = i));
     saveToLocalStorage();
-    if (!(await apiReorder(favorites.value.map((f) => f.id)))) {
-      restoreFavorites(snapshot);
-    }
+    const reordered = await apiReorder(favorites.value.map((f) => f.id));
+    if (!settleMutation(snapshot.source)) return;
+    if (!reordered) restoreFavorites(snapshot);
   }
 
   async function moveAndReorderFavorite(
@@ -492,22 +562,33 @@ export const useFavoritesStore = defineStore("favorites", () => {
       const result = await apiUpdate(draggedId, {
         groupId: moved.groupId || "",
       });
+      if (!currentSource(snapshot.source)) {
+        settleMutation(snapshot.source);
+        return;
+      }
       if (!result.ok) {
+        if (!settleMutation(snapshot.source)) return;
         restoreFavorites(snapshot);
         if (result.status === 404) await refreshAfterMutation();
         return;
       }
     }
-    if (!(await apiReorder(next.map((favorite) => favorite.id)))) {
-      if (groupChanged) {
-        await apiUpdate(draggedId, { groupId: previous.groupId || "" });
-      }
-      restoreFavorites(snapshot);
+    const reordered = await apiReorder(next.map((favorite) => favorite.id));
+    if (!currentSource(snapshot.source)) {
+      settleMutation(snapshot.source);
+      return;
     }
+    if (!reordered && groupChanged) {
+      await apiUpdate(draggedId, { groupId: previous.groupId || "" });
+    }
+    if (!settleMutation(snapshot.source)) return;
+    if (!reordered) restoreFavorites(snapshot);
   }
 
-  async function syncFavorites() {
+  async function syncFavorites(source = captureSource()) {
+    if (!currentSource(source)) return;
     const apiData = await apiGet();
+    if (!currentSource(source)) return;
     if (apiData) {
       const apiPaths = new Set(
         apiData.map(favoriteIdentity).filter((key) => key !== null)
@@ -517,27 +598,32 @@ export const useFavoritesStore = defineStore("favorites", () => {
         return key !== null && !apiPaths.has(key);
       });
       for (const fav of localOnly) {
+        if (!currentSource(source)) return;
         await apiCreate(fav);
       }
+      if (!currentSource(source)) return;
       const merged = await apiGet();
-      if (merged) {
+      if (merged && currentSource(source)) {
         favorites.value = merged;
         saveToLocalStorage();
       }
     }
   }
 
-  async function syncGroups() {
+  async function syncGroups(source = captureSource()) {
+    if (!currentSource(source)) return;
     const remoteGroups = await apiGetGroups();
-    if (!remoteGroups) return;
+    if (!currentSource(source) || !remoteGroups) return;
 
     for (const localGroup of [...groups.value]) {
+      if (!currentSource(source)) return;
       if (remoteGroups.some((group) => group.name === localGroup.name))
         continue;
       const created = await apiCreateGroup({
         name: localGroup.name,
         color: localGroup.color,
       });
+      if (!currentSource(source)) return;
       if (!created) continue;
 
       favorites.value.forEach((favorite) => {
@@ -546,6 +632,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     }
 
     const mergedGroups = await apiGetGroups();
+    if (!currentSource(source)) return;
     if (mergedGroups) groups.value = mergedGroups;
     saveGroupsToLocalStorage();
     saveToLocalStorage();
@@ -554,8 +641,10 @@ export const useFavoritesStore = defineStore("favorites", () => {
   // --- Group methods ---
 
   async function addGroup(name: string, color?: string) {
+    const source = captureSource(true);
     const newGroup: Partial<FavoriteGroup> = { name, color: color || "" };
     const created = await apiCreateGroup(newGroup);
+    if (!settleMutation(source)) return currentSource(source) ? created : null;
     if (created) {
       groups.value.push(created);
       saveGroupsToLocalStorage();
@@ -572,6 +661,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     if (updates.color !== undefined) group.color = updates.color;
     saveGroupsToLocalStorage();
     const result = await apiUpdateGroup(id, updates);
+    if (!settleMutation(snapshot.source)) return;
     if (!result.ok) {
       restoreGroups(snapshot);
       if (result.status === 404) await refreshAfterMutation();
@@ -581,7 +671,9 @@ export const useFavoritesStore = defineStore("favorites", () => {
   async function deleteGroup(
     id: string
   ): Promise<{ ok: boolean; status?: number }> {
+    const source = captureSource(true);
     const result = await apiDeleteGroup(id);
+    if (!settleMutation(source)) return result;
     if (result.ok) {
       groups.value = groups.value.filter((g) => g.id !== id);
       favorites.value.forEach((f) => {
@@ -609,9 +701,9 @@ export const useFavoritesStore = defineStore("favorites", () => {
     groups.value.splice(toIndex, 0, item);
     groups.value.forEach((g, i) => (g.order = i));
     saveGroupsToLocalStorage();
-    if (!(await apiReorderGroups(groups.value.map((g) => g.id)))) {
-      restoreGroups(previous);
-    }
+    const reordered = await apiReorderGroups(groups.value.map((g) => g.id));
+    if (!settleMutation(previous.source)) return;
+    if (!reordered) restoreGroups(previous);
   }
 
   // Sorted favorites
@@ -647,6 +739,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     favoritesByGroup,
     loaded,
     loadFavorites,
+    refreshAfterMutation,
     saveFavorites,
     addFavorite,
     removeFavorite,

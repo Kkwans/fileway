@@ -244,6 +244,8 @@ import {
   type BatchRenameRule,
 } from "@/utils/batchRename";
 
+import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
+
 const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
 const router = useRouter();
@@ -415,18 +417,16 @@ async function executeSingleRename() {
     name.value
   );
   try {
-    await api.move([{ from: oldLink, to: newLink }]);
+    const responses = await api.move([{ from: oldLink, to: newLink }]);
     if (fileStore.scope !== sourceScope) return;
     if (!isListing.value) {
       await router.push({ path: newLink });
       closeHovers();
       return;
     }
+    fileStore.clearSelection();
     fileStore.setPreselect(
-      {
-        path: url.canonicalResourcePath(newLink),
-        wirePath: newLink.slice("/files".length),
-      },
+      operationAcknowledgedTarget(responses[0], [oldLink, newLink]),
       sourceScope
     );
     reload.value = true;

@@ -13,12 +13,10 @@ import PathPicker from "./PathPicker.vue";
 import type { ConflictResult, MoveCopyItem } from "@/types/file";
 import { files as api } from "@/api";
 import * as upload from "@/utils/upload";
-import {
-  appendResourceRouteSegment,
-  canonicalResourcePath,
-  encodeResourceRoute,
-} from "@/utils/url";
+import { appendResourceRouteSegment, encodeResourceRoute } from "@/utils/url";
 import buttons from "@/utils/buttons";
+
+import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
 
 const $showError = inject<IToastError>("$showError")!;
 const router = useRouter();
@@ -51,14 +49,12 @@ async function submit(items: MoveCopyItem[], destination: string) {
   if (fileStore.scope !== sourceScope) return;
   buttons.loading("copy");
   try {
-    await api.copy(items, false, false);
+    const responses = await api.copy(items, false, false);
     if (fileStore.scope !== sourceScope) return;
     buttons.success("copy");
+    fileStore.clearSelection();
     fileStore.setPreselect(
-      {
-        path: canonicalResourcePath(items[0].to),
-        wirePath: items[0].to.slice("/files".length),
-      },
+      operationAcknowledgedTarget(responses[0], [items[0].from, items[0].to]),
       sourceScope
     );
     reload.value = true;
