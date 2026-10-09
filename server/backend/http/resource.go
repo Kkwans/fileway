@@ -539,17 +539,18 @@ func patchAction(ctx context.Context, action, src, dst string, d *data, fileCach
 }
 
 func rewritePathMetadata(d *data, from, to string) error {
-	favoriteMutation, err := d.store.Favorites.RewritePathPrefix(from, to)
+	mapper := metadataPathMapper(d, from, to)
+	favoriteMutation, err := d.store.Favorites.RewritePathPrefix(from, to, mapper)
 	if err != nil {
 		return err
 	}
 
-	tagMutation, err := d.store.Tags.RewritePathPrefix(from, to)
+	tagMutation, err := d.store.Tags.RewritePathPrefix(from, to, mapper)
 	if err != nil {
 		return errors.Join(err, d.store.Favorites.RestorePathMutation(favoriteMutation))
 	}
 	if d.store.Recent != nil {
-		if _, err := d.store.Recent.RewritePathPrefix(from, to); err != nil {
+		if _, err := d.store.Recent.RewritePathPrefix(from, to, mapper); err != nil {
 			return errors.Join(
 				err,
 				d.store.Tags.RestorePathMutation(tagMutation),
@@ -561,19 +562,20 @@ func rewritePathMetadata(d *data, from, to string) error {
 }
 
 func removePathMetadata(d *data, prefix string) (*favorites.PathMutation, *tags.PathMutation, *recent.PathMutation, error) {
-	favoriteMutation, err := d.store.Favorites.RemovePathPrefix(prefix)
+	mapper := metadataPathMapper(d, prefix, prefix)
+	favoriteMutation, err := d.store.Favorites.RemovePathPrefix(prefix, mapper)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	tagMutation, err := d.store.Tags.RemovePathPrefix(prefix)
+	tagMutation, err := d.store.Tags.RemovePathPrefix(prefix, mapper)
 	if err != nil {
 		return nil, nil, nil, errors.Join(err, d.store.Favorites.RestorePathMutation(favoriteMutation))
 	}
 	if d.store.Recent == nil {
 		return favoriteMutation, tagMutation, nil, nil
 	}
-	recentMutation, err := d.store.Recent.RemovePathPrefix(prefix)
+	recentMutation, err := d.store.Recent.RemovePathPrefix(prefix, mapper)
 	if err != nil {
 		return nil, nil, nil, errors.Join(
 			err,

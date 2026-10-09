@@ -42,13 +42,14 @@ type RestoreResult struct {
 }
 
 type Service struct {
-	Fs        afero.Fs
-	Records   *Storage
-	Favorites *favorites.Storage
-	Tags      *tags.Storage
-	Recent    *recent.Storage
-	DirMode   fs.FileMode
-	OnMoved   func(*Item)
+	Fs             afero.Fs
+	Records        *Storage
+	Favorites      *favorites.Storage
+	Tags           *tags.Storage
+	Recent         *recent.Storage
+	DirMode        fs.FileMode
+	OnMoved        func(*Item)
+	MetadataMapper func(from, to string) pathmeta.Mapper
 }
 
 func (service *Service) Move(userID uint, ownerName, source string) (*Item, error) {
@@ -80,7 +81,7 @@ func (service *Service) Move(userID uint, ownerName, source string) (*Item, erro
 		return nil, errors.Join(err, service.deleteRecordAndDirectory(item))
 	}
 
-	favoriteMutation, tagMutation, recentMutation, err := service.removeMetadata(source)
+	favoriteMutation, tagMutation, recentMutation, err := service.removeMetadata(userID, source)
 	if err != nil {
 		return nil, service.rollbackMove(item, nil, nil, nil, err)
 	}
@@ -160,12 +161,13 @@ func (service *Service) Restore(actorUserID uint, id string, admin bool, strateg
 		return nil, service.restoreDisplaced(displaced, service.markAvailable(item, err))
 	}
 
-	favoriteSnapshots := rewriteFavoriteSnapshots(item.FavoriteSnapshots, item.OriginalPath, destination)
+	mapper := service.metadataMapper(item.UserID, item.OriginalPath, destination)
+	favoriteSnapshots := rewriteFavoriteSnapshots(item.FavoriteSnapshots, item.OriginalPath, destination, mapper)
 	restoredFavorites, err := service.Favorites.RestoreStagedSnapshot(favoriteSnapshots)
 	if err != nil {
 		return nil, service.restoreDisplaced(displaced, service.rollbackRestore(item, destination, nil, err))
 	}
-	if err := service.Tags.RestoreRemovedSnapshot(item.TagSnapshots, item.OriginalPath, destination); err != nil {
+	if err := service.Tags.RestoreRemovedSnapshot(item.TagSnapshots, item.OriginalPath, destination, mapper); err != nil {
 		return nil, service.restoreDisplaced(displaced, service.rollbackRestore(item, destination, restoredFavorites, err))
 	}
 	if err := service.Records.Delete(actorUserID, item.ID, admin); err != nil {
@@ -237,19 +239,33 @@ func (service *Service) storageRoot(source string, sourceInfo os.FileInfo) (stri
 	return root, nil
 }
 
-func (service *Service) removeMetadata(source string) (*favorites.PathMutation, *tags.PathMutation, *recent.PathMutation, error) {
-	favoriteMutation, err := service.Favorites.RemovePathPrefix(source)
+func (service *Service) metadataMapper(userID uint, from, to string) pathmeta.Mapper {
+	if service.MetadataMapper != nil {
+		return service.MetadataMapper(from, to)
+	}
+	// A standalone service cannot resolve other users' filesystem roots.
+	return func(owner uint, candidate string) (string, bool) {
+		if owner == 0 || owner != userID {
+			return candidate, false
+		}
+		return pathmeta.Rewrite(candidate, from, to)
+	}
+}
+
+func (service *Service) removeMetadata(userID uint, source string) (*favorites.PathMutation, *tags.PathMutation, *recent.PathMutation, error) {
+	mapper := service.metadataMapper(userID, source, source)
+	favoriteMutation, err := service.Favorites.RemovePathPrefix(source, mapper)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	tagMutation, err := service.Tags.RemovePathPrefix(source)
+	tagMutation, err := service.Tags.RemovePathPrefix(source, mapper)
 	if err != nil {
 		return nil, nil, nil, errors.Join(err, service.Favorites.RestorePathMutation(favoriteMutation))
 	}
 	if service.Recent == nil {
 		return favoriteMutation, tagMutation, nil, nil
 	}
-	recentMutation, err := service.Recent.RemovePathPrefix(source)
+	recentMutation, err := service.Recent.RemovePathPrefix(source, mapper)
 	if err != nil {
 		return nil, nil, nil, errors.Join(
 			err,
@@ -385,12 +401,18 @@ func addVersionSuffix(source string, afs afero.Fs) (string, error) {
 	}
 }
 
-func rewriteFavoriteSnapshots(snapshot []favorites.Favorite, from, to string) []favorites.Favorite {
-	rewritten := append([]favorites.Favorite(nil), snapshot...)
-	for index := range rewritten {
-		if next, matched := pathmeta.Rewrite(rewritten[index].Path, from, to); matched {
-			rewritten[index].Path = next
+func rewriteFavoriteSnapshots(snapshot []favorites.Favorite, from, to string, mapper ...pathmeta.Mapper) []favorites.Favorite {
+	rewritten := make([]favorites.Favorite, 0, len(snapshot))
+	for _, favorite := range snapshot {
+		if favorite.PathUnverified {
+			continue
 		}
+		next, matched := pathmeta.RewriteForUser(favorite.UserID, favorite.Path, from, to, mapper...)
+		if !matched || next == "" {
+			continue
+		}
+		favorite.Path = next
+		rewritten = append(rewritten, favorite)
 	}
 	return rewritten
 }

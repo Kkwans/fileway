@@ -196,7 +196,7 @@ func (s *Storage) DeleteByPath(userID uint, path string) error {
 
 // RewritePathPrefix updates matching favorites for every user. The operation
 // is internally compensating: a partial backend failure restores earlier rows.
-func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
+func (s *Storage) RewritePathPrefix(from, to string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
 	all, err := s.back.GetAllForPathMutation()
 	if err != nil {
 		return nil, err
@@ -207,12 +207,19 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 		if favorite.PathUnverified {
 			continue
 		}
-		rewritten, matched := pathmeta.Rewrite(favorite.Path, from, to)
+		rewritten, matched := pathmeta.RewriteForUser(favorite.UserID, favorite.Path, from, to, mapper...)
 		if !matched || rewritten == favorite.Path {
 			continue
 		}
 
 		original := *favorite
+		if rewritten == "" {
+			if err := s.back.Delete(favorite.ID); err != nil {
+				return nil, errors.Join(err, s.RestorePathMutation(mutation))
+			}
+			mutation.deleted = append(mutation.deleted, original)
+			continue
+		}
 		if err := s.back.UpdatePath(favorite.ID, rewritten); err != nil {
 			return nil, errors.Join(err, s.RestorePathMutation(mutation))
 		}
@@ -223,7 +230,7 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 
 // RemovePathPrefix deletes matching favorites for every user and returns a
 // restorable mutation for coordination with the filesystem operation.
-func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
+func (s *Storage) RemovePathPrefix(prefix string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
 	all, err := s.back.GetAllForPathMutation()
 	if err != nil {
 		return nil, err
@@ -231,7 +238,8 @@ func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 
 	mutation := &PathMutation{}
 	for _, favorite := range all {
-		if favorite.PathUnverified || !pathmeta.Contains(favorite.Path, prefix) {
+		_, matched := pathmeta.RewriteForUser(favorite.UserID, favorite.Path, prefix, prefix, mapper...)
+		if favorite.PathUnverified || !matched {
 			continue
 		}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/Kkwans/nas-file-browser/backend/history"
+	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
 	"github.com/Kkwans/nas-file-browser/backend/trash"
 	"github.com/Kkwans/nas-file-browser/backend/users"
@@ -110,10 +111,13 @@ func trashOwner(d *data, item *trash.Item) (*users.User, error) {
 }
 
 func newTrashService(d *data, owner *users.User) *trash.Service {
+	ownerData := *d
+	ownerData.user = owner
 	return &trash.Service{
 		Fs: owner.Fs, Records: d.store.Trash,
 		Favorites: d.store.Favorites, Tags: d.store.Tags, Recent: d.store.Recent,
-		DirMode: d.settings.DirMode,
+		DirMode:        d.settings.DirMode,
+		MetadataMapper: func(from, to string) pathmeta.Mapper { return metadataPathMapper(&ownerData, from, to) },
 		OnMoved: func(item *trash.Item) {
 			if d.taskRuntime == nil {
 				return

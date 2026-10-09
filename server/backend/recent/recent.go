@@ -184,7 +184,7 @@ func (storage *Storage) Remove(userID uint, id string) error {
 	return ErrNotExist
 }
 
-func (storage *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
+func (storage *Storage) RewritePathPrefix(from, to string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
@@ -197,11 +197,18 @@ func (storage *Storage) RewritePathPrefix(from, to string) (*PathMutation, error
 		if entry.PathUnverified {
 			continue
 		}
-		rewritten, matched := pathmeta.Rewrite(entry.Path, from, to)
+		rewritten, matched := pathmeta.RewriteForUser(entry.UserID, entry.Path, from, to, mapper...)
 		if !matched || rewritten == pathmeta.Clean(entry.Path) {
 			continue
 		}
 		original := *entry
+		if rewritten == "" {
+			if err := storage.back.Delete(entry.ID); err != nil {
+				return nil, errors.Join(err, storage.restorePathMutation(mutation))
+			}
+			mutation.deleted = append(mutation.deleted, original)
+			continue
+		}
 		entry.Path = rewritten
 		if entry.Name == path.Base(original.Path) {
 			entry.Name = path.Base(rewritten)
@@ -214,7 +221,7 @@ func (storage *Storage) RewritePathPrefix(from, to string) (*PathMutation, error
 	return mutation, nil
 }
 
-func (storage *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
+func (storage *Storage) RemovePathPrefix(prefix string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 
@@ -224,7 +231,8 @@ func (storage *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 	}
 	mutation := &PathMutation{}
 	for _, entry := range all {
-		if entry.PathUnverified || !pathmeta.Contains(entry.Path, prefix) {
+		_, matched := pathmeta.RewriteForUser(entry.UserID, entry.Path, prefix, prefix, mapper...)
+		if entry.PathUnverified || !matched {
 			continue
 		}
 		original := *entry

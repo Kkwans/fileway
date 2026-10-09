@@ -203,7 +203,7 @@ func (s *Storage) RemovePath(userID uint, id, path string) (*Tag, error) {
 
 // RewritePathPrefix updates matching paths in every user's tags. Duplicate
 // destinations are collapsed while retaining the original path order.
-func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
+func (s *Storage) RewritePathPrefix(from, to string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
 	all, err := s.back.GetAllForPathMutation()
 	if err != nil {
 		return nil, err
@@ -221,10 +221,12 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 				nextFlags = append(nextFlags, true)
 				continue
 			}
-			rewritten, matched := pathmeta.Rewrite(savedPath, from, to)
+			rewritten, matched := pathmeta.RewriteForUser(tag.UserID, savedPath, from, to, mapper...)
 			changed = changed || matched && rewritten != savedPath
+			if matched && rewritten == "" {
+				continue
+			}
 			if _, exists := seen[rewritten]; exists {
-				changed = true
 				continue
 			}
 			seen[rewritten] = struct{}{}
@@ -249,7 +251,7 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 
 // RemovePathPrefix removes matching paths from every user's tags. Empty tags
 // remain valid and are not deleted.
-func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
+func (s *Storage) RemovePathPrefix(prefix string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
 	all, err := s.back.GetAllForPathMutation()
 	if err != nil {
 		return nil, err
@@ -260,10 +262,11 @@ func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 		next := make([]string, 0, len(tag.Paths))
 		nextFlags := make([]bool, 0, len(tag.Paths))
 		for index, savedPath := range tag.Paths {
+			_, matched := pathmeta.RewriteForUser(tag.UserID, savedPath, prefix, prefix, mapper...)
 			if tag.PathIsUnverified(index) {
 				next = append(next, savedPath)
 				nextFlags = append(nextFlags, true)
-			} else if !pathmeta.Contains(savedPath, prefix) {
+			} else if !matched {
 				next = append(next, pathmeta.Clean(savedPath))
 				nextFlags = append(nextFlags, false)
 			}
@@ -327,7 +330,7 @@ func (s *Storage) RestoreUpdatedSnapshot(snapshot []Tag) error {
 // resource. It deliberately preserves unrelated tag edits made while the
 // resource was in the recycle bin and does not recreate a tag the user has
 // since deleted.
-func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string) error {
+func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string, mapper ...pathmeta.Mapper) error {
 	previous := make([]Tag, 0, len(snapshot))
 	for _, saved := range snapshot {
 		current, err := s.back.GetByID(saved.UserID, saved.ID)
@@ -350,8 +353,8 @@ func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string) error 
 			if saved.PathIsUnverified(index) {
 				continue
 			}
-			rewritten, matched := pathmeta.Rewrite(savedPath, from, to)
-			if !matched {
+			rewritten, matched := pathmeta.RewriteForUser(saved.UserID, savedPath, from, to, mapper...)
+			if !matched || rewritten == "" {
 				continue
 			}
 			if _, exists := seen[rewritten]; exists {

@@ -5,6 +5,20 @@ import (
 	"strings"
 )
 
+// Mapper maps an owner's workspace path after a physical resource mutation.
+// matched with an empty result removes a reference moved outside that scope.
+// Unknown owners/filesystems must return matched=false.
+type Mapper func(userID uint, candidate string) (rewritten string, matched bool)
+
+// RewriteForUser preserves the historical standalone storage API while HTTP
+// callers supply a mapper based on the actual authenticated filesystem roots.
+func RewriteForUser(userID uint, candidate, from, to string, mapper ...Mapper) (string, bool) {
+	if len(mapper) > 0 && mapper[0] != nil {
+		return mapper[0](userID, candidate)
+	}
+	return Rewrite(candidate, from, to)
+}
+
 // Clean normalizes an application path without changing Linux case semantics.
 // Backslashes remain untouched because they are valid Linux filename bytes.
 func Clean(value string) string {
