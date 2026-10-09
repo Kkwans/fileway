@@ -120,8 +120,8 @@ func playbackFile(d *data, value string) (*files.FileInfo, string, int, error) {
 			return nil, "", errToStatus(err), err
 		}
 	}
-	if file.Type != "video" {
-		return nil, "", http.StatusBadRequest, fmt.Errorf("播放位置仅适用于视频文件")
+	if file.Type != "video" && file.Type != "audio" {
+		return nil, "", http.StatusBadRequest, fmt.Errorf("播放位置仅适用于音频和视频文件")
 	}
 	identity := "v1:" + strconv.FormatInt(file.Size, 10) + ":" + strconv.FormatInt(file.ModTime.UnixNano(), 10)
 	return file, identity, 0, nil

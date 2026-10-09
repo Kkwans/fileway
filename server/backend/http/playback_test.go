@@ -119,3 +119,43 @@ func TestPlaybackHTTPKnownVideoExtensionDoesNotReadHeaderOrScanParent(t *testing
 		t.Fatalf("known video opened %d times while reading playback identity", counting.openCalls)
 	}
 }
+
+func TestPlaybackHTTPAudioIdentityIsReadOnlyWithoutBodyReadsAndTextRemainsRejected(t *testing.T) {
+	h := newTrashHTTPHarness(t, users.User{Username: "audio-owner", Perm: users.Permissions{Download: true}})
+	owner := firstTrashHTTPUser(h)
+	for _, name := range []string{"/tone.wav", "/tone.mp3", "/tone.flac", "/notes.txt"} {
+		if err := afero.WriteFile(h.fs[owner.ID], name, []byte("owned metadata fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counting := &playbackCountingFs{Fs: h.fs[owner.ID]}
+	h.fs[owner.ID] = counting
+	for _, name := range []string{"/tone.wav", "/tone.mp3", "/tone.flac"} {
+		var identity string
+		for attempt := 0; attempt < 2; attempt++ {
+			response := h.request(t, owner.ID, playbackGetHandler, http.MethodGet, "/media/playback?path="+name, nil, nil)
+			if response.Code != http.StatusOK {
+				t.Fatalf("audio metadata status=%d body=%s", response.Code, response.Body.String())
+			}
+			var result playbackResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Path != name || result.Identity == "" || result.Exists || result.Position != 0 || result.Duration != 0 {
+				t.Fatalf("read-only audio identity = %#v", result)
+			}
+			if attempt == 0 {
+				identity = result.Identity
+			} else if identity != result.Identity {
+				t.Fatal("unchanged audio identity drifted")
+			}
+		}
+	}
+	response := h.request(t, owner.ID, playbackGetHandler, http.MethodGet, "/media/playback?path=/notes.txt", nil, nil)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("text accepted as playable media: %d body=%s", response.Code, response.Body.String())
+	}
+	if counting.openCalls != 0 {
+		t.Fatalf("audio/text identity checks opened file bodies %d times", counting.openCalls)
+	}
+}
