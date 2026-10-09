@@ -283,6 +283,9 @@ user created with the credentials from options "username" and "password".`,
 		if err != nil {
 			return err
 		}
+		if closer, ok := handler.(io.Closer); ok {
+			defer func() { _ = closer.Close() }()
+		}
 		uploadContext, stopUploads := context.WithCancel(context.Background())
 		defer stopUploads()
 		fbhttp.StartUploadCleanup(uploadContext, st.Storage, server)

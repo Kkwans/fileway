@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
 
+	"github.com/Kkwans/nas-file-browser/backend/archivefs"
 	"github.com/gorilla/mux"
 
 	"github.com/Kkwans/nas-file-browser/backend/hls"
@@ -20,6 +22,13 @@ type modifyRequest struct {
 }
 
 const appContentSecurityPolicy = `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self';`
+
+type archiveCacheHandler struct {
+	http.Handler
+	cache *archivefs.EntryCache
+}
+
+func (handler *archiveCacheHandler) Close() error { return handler.cache.Close() }
 
 func NewHandler(
 	imgSvc ImgService,
@@ -120,6 +129,14 @@ func NewHandler(
 	api.Handle("/analysis/storage/{id}", monkey(storageAnalysisResultHandler, "")).Methods("GET")
 	api.Handle("/analysis/{id}", monkey(analysisResultHandler, "")).Methods("GET")
 	api.Handle("/archives/entries", monkey(archiveEntriesHandler, "")).Methods("GET")
+	entryCache, err := archivefs.NewEntryCache(archivefs.EntryCacheConfig{WorkDir: os.TempDir()})
+	if err != nil {
+		return nil, err
+	}
+	api.Handle("/archives/open", monkey(archiveEntryPrepareHandler(entryCache), "")).Methods("POST")
+	api.Handle("/archives/open/{id}/content", monkey(archiveEntryContentHandler(entryCache), "")).Methods("GET", "HEAD")
+	api.Handle("/archives/open/{id}", monkey(archiveEntryStatusHandler(entryCache), "")).Methods("GET")
+	api.Handle("/archives/open/{id}", monkey(archiveEntryCancelHandler(entryCache), "")).Methods("DELETE")
 	api.Handle("/archives/extractions", monkey(archiveExtractStartHandler(taskRuntime), "")).Methods("POST")
 	api.Handle("/archives/extractions/{id}", monkey(archiveExtractResultHandler, "")).Methods("GET")
 	api.Handle("/history", monkey(historyListHandler, "")).Methods("GET")
@@ -190,5 +207,5 @@ func NewHandler(
 	public.PathPrefix("/dl").Handler(monkey(publicDlHandler, "/api/public/dl/")).Methods("GET")
 	public.PathPrefix("/share").Handler(monkey(publicShareHandler, "/api/public/share/")).Methods("GET")
 
-	return stripPrefix(server.BaseURL, r), nil
+	return &archiveCacheHandler{Handler: stripPrefix(server.BaseURL, r), cache: entryCache}, nil
 }
