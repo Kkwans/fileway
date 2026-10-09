@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -245,6 +246,15 @@ func stat(opts *FileOptions) (*FileInfo, error) {
 // Checksum checksums a given File for a given User, using a specific
 // algorithm. The checksums data is saved on File object.
 func (i *FileInfo) Checksum(algo string) (err error) {
+	return i.ChecksumContext(context.Background(), algo)
+}
+
+// ChecksumContext computes only an explicitly requested digest and never
+// publishes a result for an interrupted read or a changed source.
+func (i *FileInfo) ChecksumContext(ctx context.Context, algo string) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if i.IsDir {
 		return fberrors.ErrIsDirectory
 	}
@@ -262,6 +272,14 @@ func (i *FileInfo) Checksum(algo string) (err error) {
 			err = closeErr
 		}
 	}()
+	before, err := reader.Stat()
+	if err != nil {
+		return err
+	}
+	if before.Size() != i.Size || !before.ModTime().Equal(i.ModTime) {
+		return ErrChecksumSourceChanged
+	}
+	beforeSize, beforeModified := before.Size(), before.ModTime()
 
 	var h hash.Hash
 
@@ -278,9 +296,25 @@ func (i *FileInfo) Checksum(algo string) (err error) {
 		return fberrors.ErrInvalidOption
 	}
 
-	_, err = io.Copy(h, reader)
+	count, err := io.Copy(h, checksumReader{ctx: ctx, reader: reader})
 	if err != nil {
 		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	after, err := reader.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := i.Fs.Stat(i.Path)
+	if err != nil {
+		return ErrChecksumSourceChanged
+	}
+	if count != beforeSize || after.Size() != beforeSize || !after.ModTime().Equal(beforeModified) ||
+		current.Size() != beforeSize || !current.ModTime().Equal(beforeModified) ||
+		(before.Sys() != nil && current.Sys() != nil && !os.SameFile(before, current)) {
+		return ErrChecksumSourceChanged
 	}
 
 	i.Checksums[algo] = hex.EncodeToString(h.Sum(nil))
