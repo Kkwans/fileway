@@ -186,7 +186,6 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             try {
                 closing?.join()
                 val profile = store.save(draft)
-                require(profile.backend == BackendKind.NAS) { "Windows 服务适配尚未完成，暂不支持连接" }
                 if (profile.network == ConnectionMode.TAILNET) {
                     var status = if (restored == null) embeddedNetwork.status() else embeddedNetwork.start()
                     if (restored != null) {

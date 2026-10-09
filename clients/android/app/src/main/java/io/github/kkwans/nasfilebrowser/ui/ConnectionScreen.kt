@@ -90,7 +90,7 @@ import io.github.kkwans.nasfilebrowser.data.*
     var optionsOpen by rememberSaveable(state.editorVersion) { mutableStateOf(state.profile?.backend == BackendKind.WINDOWS) }
     val profileName = name.trim().ifBlank { Uri.parse(url).host.orEmpty() }
     val canSave = !state.busy && url.isNotBlank() && profileName.isNotBlank()
-    val canConnect = canSave && backend == BackendKind.NAS && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected)
+    val canConnect = canSave && username.isNotBlank() && password.isNotEmpty() && (mode == "direct" || network.connected)
     val unchanged = state.profile?.let { it.address == url.trim() && it.backend == backend && (it.network == ConnectionMode.TAILNET) == (mode == "tailnet") } == true
     val connect = {
         if (canConnect) {
@@ -115,7 +115,7 @@ import io.github.kkwans.nasfilebrowser.data.*
                         Text(state.stage.ifBlank { "正在加载" }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         TextButton(onClick = model::cancel) { Text("取消") }
                     }
-                    if (backend == BackendKind.NAS) Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(10.dp),
+                    Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("连接服务器", fontSize = 16.sp) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         TextButton(onClick = { focus.clearFocus(); model.saveDraft(profileName, url.trim(), backend, mode) },
@@ -149,7 +149,7 @@ import io.github.kkwans.nasfilebrowser.data.*
                                     profiles.forEach { profile -> DropdownMenuItem(text = {
                                         Column {
                                             Text(profile.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            Text(if (profile.backend == BackendKind.WINDOWS) "Windows · 暂不支持连接" else if (profile.network == ConnectionMode.TAILNET) "Tailscale" else "直连", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text((if (profile.backend == BackendKind.WINDOWS) "Windows · " else "") + if (profile.network == ConnectionMode.TAILNET) "Tailscale" else "直连", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                     }, onClick = { profilesOpen = false; model.selectProfile(profile) }) }
                                 }
@@ -191,14 +191,13 @@ import io.github.kkwans.nasfilebrowser.data.*
                                         catch (_: Exception) { accessMessage = "无法打开设置，请在系统应用设置中允许本地网络访问。" }
                                     }) { Text("打开设置") }
                                 }
-                                if (accessDenied) Text("连接本地 NAS 需要允许访问局域网。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (accessDenied) Text("连接本地服务器需要允许访问局域网。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 accessMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                             }
                         }
                     }
                     ConnectionSection("服务账号") {
-                        if (backend == BackendKind.WINDOWS) Text("可保存档案。Windows 服务暂不支持浏览与播放。", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (backend == BackendKind.NAS && state.accounts.isNotEmpty()) {
+                        if (state.accounts.isNotEmpty()) {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("已保存的账号", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 state.accounts.forEach { account -> TextButton(onClick = {
@@ -208,7 +207,6 @@ import io.github.kkwans.nasfilebrowser.data.*
                                 }, enabled = !state.busy && unchanged && (mode == "direct" || network.connected)) { Text("继续使用 ${account.username}") } }
                             }
                         }
-                        if (backend == BackendKind.NAS) {
                         ConnectionField(username, { username = it }, "账号", R.drawable.ic_person, enabled = !state.busy)
                         ConnectionField(password, { password = it }, "密码", R.drawable.ic_lock, enabled = !state.busy,
                             keyboardType = KeyboardType.Password, imeAction = ImeAction.Done, onDone = connect,
@@ -227,7 +225,6 @@ import io.github.kkwans.nasfilebrowser.data.*
                                 Text("保持登录", style = MaterialTheme.typography.bodyMedium)
                                 Text("在本机加密保存密码，过期后自动恢复", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                        }
                         }
                     }
                     state.error?.let { message ->

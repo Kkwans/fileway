@@ -105,7 +105,36 @@ class NasSessionTest {
         val session = NasSession.restore(profile, token(7), 7) { if (it.getString("op") == "open") "handle" else token(8) }
         assertTrue(runCatching { session.token() }.isFailure)
         assertTrue(runCatching { NasSession.restore(profile, token(7), 8) { error("must not open") } }.isFailure)
-        assertTrue(runCatching { NasSession.login(profile.copy(backend = BackendKind.WINDOWS), "viewer", "test-fixture") { error("must not open") } }.isFailure)
+    }
+
+    @Test fun windowsLoginRestoreAndOpaqueDrivePathsUseTheSharedNativeContract() = runBlocking {
+        val profile = ServerProfile(name = "Windows", address = "https://windows.example.test/base", backend = BackendKind.WINDOWS)
+        val calls = mutableListOf<JSONObject>()
+        var opened = 0
+        val native: suspend (JSONObject) -> Any? = { request ->
+            calls.add(request)
+            when (request.getString("op")) {
+                "open" -> { assertEquals(profile.address, request.getString("baseUrl")); "windows-${++opened}" }
+                "login" -> JSONObject().put("status", 200).put("body", token(7))
+                "token" -> token(7)
+                "request" -> JSONObject().put("status", 200).put("body", "{\"items\":[]}")
+                "lease" -> "http://127.0.0.1:12345/stream/owned-windows"
+                else -> null
+            }
+        }
+        val session = NasSession.login(profile, "viewer", "owned-fixture", native)
+        val endpoint = "/api/resources/C/%E7%94%B5%E5%BD%B1/a%252F%2B.mkv"
+        session.request("GET", endpoint)
+        val wire = "/C/%E7%94%B5%E5%BD%B1/a%252F%2B.mkv"
+        session.lease("/C/电影/a%2F+.mkv", wire)
+        assertEquals(endpoint, calls.single { it.optString("op") == "request" }.getString("endpoint"))
+        assertEquals(wire, calls.single { it.optString("op") == "lease" }.getString("wirePath"))
+        session.close()
+        val restored = NasSession.restore(profile, token(7), 7, native)
+        assertEquals(BackendKind.WINDOWS, restored.profile.backend)
+        assertEquals(7L, restored.identity.id)
+        restored.close()
+        assertEquals(2, calls.count { it.optString("op") == "close_session" })
     }
     @Test fun malformedPrincipalIsNotCoercedIntoAnotherAccount() {
         for (id in listOf("7", 7.5, -1)) {

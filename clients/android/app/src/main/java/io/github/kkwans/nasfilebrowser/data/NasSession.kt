@@ -136,7 +136,6 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         }
         suspend fun login(profile: ServerProfile, username: String, password: String,
             native: suspend (JSONObject) -> Any? = NativeTransport::call): NasSession {
-            require(profile.backend == BackendKind.NAS) { "Windows 服务适配尚未完成，暂不支持连接" }
             val id = native(JSONObject().put("op", "open").put("baseUrl", profile.address).put("network", profile.network.name.lowercase())) as String
             try {
                 val result = native(JSONObject().put("op", "login").put("session", id).put("username", username).put("password", password)) as JSONObject
@@ -152,7 +151,6 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         }
         suspend fun restore(profile: ServerProfile, token: String, expectedUser: Long,
             native: suspend (JSONObject) -> Any? = NativeTransport::call): NasSession {
-            require(profile.backend == BackendKind.NAS) { "Windows 服务适配尚未完成，暂不支持连接" }
             val identity = parseIdentity(token)
             check(identity.id == expectedUser) { "保存的账号不匹配，请重新登录" }
             val id = native(JSONObject().put("op", "open").put("baseUrl", profile.address).put("network", profile.network.name.lowercase()).put("token", token)) as String

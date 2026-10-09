@@ -34,7 +34,7 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
         val key = dao.activeSession()?.accountKey ?: return@withTransaction null
         val account = dao.account(key) ?: return@withTransaction null
         val profile = dao.profile(account.profileId) ?: return@withTransaction null
-        if (profile.backend != BackendKind.NAS || profile.sourceRevision != account.sourceRevision) {
+        if (profile.sourceRevision != account.sourceRevision) {
             dao.clearActiveSession(key)
             return@withTransaction null
         }
@@ -59,7 +59,7 @@ class ProfileStore(private val database: ClientDatabase, private val vault: Cred
     // Call only after the source has authenticated this identity. These fields
     // select local storage; service permissions always remain server-enforced.
     suspend fun saveLogin(profile: ServerProfile, userId: Long, username: String, token: String): AccountRecord = withContext(Dispatchers.IO) {
-        require(profile.backend == BackendKind.NAS && userId >= 0 && username.isNotBlank() && token.isNotBlank()) { "服务器账号信息无效" }
+        require(userId >= 0 && username.isNotBlank() && token.isNotBlank()) { "服务器账号信息无效" }
         var createdRef: String? = null
         try {
             database.withTransaction {

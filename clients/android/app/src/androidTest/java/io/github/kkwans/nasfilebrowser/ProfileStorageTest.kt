@@ -111,11 +111,22 @@ class ProfileStorageTest {
         assertEquals("/b", store.directory(b1)?.path)
     }
 
-    @Test fun unsupportedWindowsProfilesCanBeSavedWithoutPretendingLoginWorks() = runBlocking {
+    @Test fun windowsLoginRestoresAndChangingServerKindStillInvalidatesTheSource() = runBlocking {
         val profile = store.save(ServerProfile(name = "Windows", address = "http://windows.example.test:8080", backend = BackendKind.WINDOWS))
         assertEquals(BackendKind.WINDOWS, store.profile(profile.id)?.backend)
-        assertTrue(runCatching { store.saveLogin(profile, 1, "viewer", "test-token") }.isFailure)
-        assertTrue(store.accounts(profile).isEmpty())
+        val account = store.saveLogin(profile, 1, "viewer", jwt(1, 10))
+        store.saveDirectory(account, "/C/电影", "/C/%E7%94%B5%E5%BD%B1")
+        store.activate(profile, account, "owned-windows")
+        val reopened = ProfileStore(database, vault)
+        assertEquals(profile, reopened.active()?.first)
+        assertEquals(account, reopened.active()?.second)
+        assertEquals(jwt(1, 10), reopened.token(profile, account))
+        assertEquals("/C/%E7%94%B5%E5%BD%B1", reopened.directory(account)?.wirePath)
+        val changed = store.save(profile.copy(backend = BackendKind.NAS))
+        assertTrue(changed.sourceRevision > profile.sourceRevision)
+        assertNull(reopened.active())
+        assertNull(reopened.token(changed, account))
+        assertTrue(runCatching { store.saveLogin(profile, 1, "viewer", jwt(1, 20)) }.isFailure)
         assertTrue(runCatching { store.save(profile.copy(address = "https://user:secret@example.test")) }.isFailure)
     }
 }
