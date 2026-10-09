@@ -1,5 +1,8 @@
+import { encodePath } from "./url";
+
 export interface BatchRenameDraft {
   sourcePath: string;
+  sourceWirePath?: string;
   oldName: string;
   newName: string;
   isDir: boolean;
@@ -20,6 +23,8 @@ export type BatchRenameRule =
 export interface BatchRenameChange {
   from: string;
   to: string;
+  fromWirePath?: string;
+  toWirePath?: string;
 }
 
 export interface BatchRenameValidation {
@@ -41,6 +46,38 @@ function destinationPath(sourcePath: string, name: string) {
   const separator = sourcePath.lastIndexOf("/");
   const directory = separator <= 0 ? "" : sourcePath.slice(0, separator);
   return `${directory}/${name}`;
+}
+
+/** Byte identity only. Never decode opaque filesystem bytes into display text. */
+export function batchRenameWireKey(wirePath: string): string {
+  if (
+    !wirePath.startsWith("/") ||
+    wirePath.startsWith("//") ||
+    /[?#]/.test(wirePath) ||
+    [...wirePath].some(
+      (value) => value.charCodeAt(0) < 0x21 || value.charCodeAt(0) > 0x7e
+    ) ||
+    /%(?![0-9a-f]{2})/i.test(wirePath)
+  )
+    throw new Error("原始路径无效，请刷新后重试");
+  const segments = wirePath
+    .replace(/\/+$/, "")
+    .split("/")
+    .map((segment, index) => {
+      const bytes = segment.replace(/%([0-9a-f]{2})/gi, (_, hex) =>
+        String.fromCharCode(Number.parseInt(hex, 16))
+      );
+      if (
+        (index > 0 && !bytes) ||
+        bytes === "." ||
+        bytes === ".." ||
+        bytes.includes("/") ||
+        bytes.includes("\0")
+      )
+        throw new Error("原始路径包含无效段，请刷新后重试");
+      return bytes;
+    });
+  return segments.join("/") || "/";
 }
 
 export function applyBatchRenameRule(
@@ -85,14 +122,37 @@ export function validateBatchRenameDrafts(
     if (draft.newName === draft.oldName) return;
 
     const destination = destinationPath(draft.sourcePath, draft.newName);
-    const duplicate = destinations.get(destination);
+    const wire = draft.sourceWirePath;
+    let destinationWire: string | undefined;
+    let destinationKey = batchRenameWireKey(encodePath(destination));
+    if (wire) {
+      try {
+        batchRenameWireKey(wire);
+        destinationWire = destinationPath(
+          wire.replace(/\/+$/, ""),
+          encodePath(draft.newName)
+        );
+        destinationKey = batchRenameWireKey(destinationWire);
+      } catch (error) {
+        errors.set(
+          index,
+          error instanceof Error ? error.message : "原始路径无效，请刷新后重试"
+        );
+        return;
+      }
+    }
+    const duplicate = destinations.get(destinationKey);
     if (duplicate !== undefined) {
       errors.set(index, `与第 ${duplicate + 1} 项的目标名称重复`);
       errors.set(duplicate, `与第 ${index + 1} 项的目标名称重复`);
       return;
     }
-    destinations.set(destination, index);
-    changes.push({ from: draft.sourcePath, to: destination });
+    destinations.set(destinationKey, index);
+    changes.push({
+      from: draft.sourcePath,
+      to: destination,
+      ...(wire ? { fromWirePath: wire, toWirePath: destinationWire } : {}),
+    });
   });
 
   return { changes, errors };

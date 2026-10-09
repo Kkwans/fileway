@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBatchRenameRule,
+  batchRenameWireKey,
   validateBatchRenameDrafts,
   type BatchRenameDraft,
 } from "../batchRename";
@@ -93,5 +94,69 @@ describe("batch rename", () => {
       { ...drafts[1], newName: "report.txt" },
     ]);
     expect(caseSensitive.errors.size).toBe(0);
+  });
+
+  it("keeps opaque parent bytes and encodes the new filename exactly once", () => {
+    const validation = validateBatchRenameDrafts([
+      {
+        sourcePath: "/目录/中文%2F.txt",
+        sourceWirePath: "/%C4%BF%C2%BC/%D6%D0%CE%C4%252F.txt",
+        oldName: "中文%2F.txt",
+        newName: "新 +%?#.txt",
+        isDir: false,
+      },
+    ]);
+    expect(validation.errors.size).toBe(0);
+    expect(validation.changes).toEqual([
+      {
+        from: "/目录/中文%2F.txt",
+        to: "/目录/新 +%?#.txt",
+        fromWirePath: "/%C4%BF%C2%BC/%D6%D0%CE%C4%252F.txt",
+        toWirePath: "/%C4%BF%C2%BC/%E6%96%B0%20%2B%25%3F%23.txt",
+      },
+    ]);
+  });
+
+  it("does not merge identical display paths from different opaque parents", () => {
+    const validation = validateBatchRenameDrafts([
+      {
+        sourcePath: "/中文/a",
+        sourceWirePath: "/%D6%D0%CE%C4/a",
+        oldName: "a",
+        newName: "renamed",
+        isDir: false,
+      },
+      {
+        sourcePath: "/中文/a",
+        sourceWirePath: "/%E4%B8%AD%E6%96%87/a",
+        oldName: "a",
+        newName: "renamed",
+        isDir: false,
+      },
+    ]);
+    expect(validation.errors.size).toBe(0);
+    expect(validation.changes).toHaveLength(2);
+    expect(validation.changes[0].toWirePath).not.toBe(
+      validation.changes[1].toWirePath
+    );
+  });
+
+  it("rejects malformed wire identities and preserves literal percent and plus bytes", () => {
+    expect(batchRenameWireKey("/a%252Fb+%23")).toBe("/a%2Fb+#");
+    expect(batchRenameWireKey("/%61%21")).toBe(batchRenameWireKey("/a!"));
+    for (const wire of [
+      "/bad%",
+      "/bad%GG",
+      "/a%2Fb",
+      "/bad%00",
+      "//host/file",
+      "/file?query",
+    ]) {
+      expect(() => batchRenameWireKey(wire)).toThrow("原始路径");
+      const validation = validateBatchRenameDrafts([
+        { ...drafts[0], sourceWirePath: wire, newName: "safe.txt" },
+      ]);
+      expect(validation.errors.get(0)).toContain("原始路径");
+    }
   });
 });

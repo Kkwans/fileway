@@ -24,10 +24,13 @@ import type {
 } from "@/types/file";
 import urlUtils from "@/utils/url";
 import * as transfersApi from "./transfers";
+import { batchRenameWireKey } from "@/utils/batchRename";
 
 export interface BatchRenameItem {
   from: string;
   to: string;
+  fromWirePath?: string;
+  toWirePath?: string;
 }
 
 export interface BatchRenameResultItem extends BatchRenameItem {
@@ -468,19 +471,45 @@ function applyCompletedBatchRename(items: BatchRenameResultItem[]) {
   const staged = completed.map((item, index) => ({
     ...item,
     temp: `/.nas-file-browser-ui-rename-${token}-${index}`,
+    tempWire: urlUtils.encodePath(
+      `/.nas-file-browser-ui-rename-${token}-${index}`
+    ),
+    unicodeMetadata:
+      (!item.fromWirePath ||
+        batchRenameWireKey(item.fromWirePath) ===
+          batchRenameWireKey(urlUtils.encodePath(item.from))) &&
+      (!item.toWirePath ||
+        batchRenameWireKey(item.toWirePath) ===
+          batchRenameWireKey(urlUtils.encodePath(item.to))),
   }));
   const favoritesStore = useFavoritesStore();
   const tagsStore = useTagsStore();
   const recentStore = useRecentStore();
   for (const item of staged) {
-    favoritesStore.applyPathRewrite(item.from, item.temp);
-    tagsStore.applyPathRewrite(item.from, item.temp);
-    recentStore.applyPathRewrite(item.from, item.temp);
+    // These older caches have no wire identity. Avoid changing a same-display
+    // sibling for opaque paths; server metadata has already been rewritten.
+    if (item.unicodeMetadata) {
+      favoritesStore.applyPathRewrite(item.from, item.temp);
+      tagsStore.applyPathRewrite(item.from, item.temp);
+    }
+    recentStore.applyPathRewrite(
+      item.from,
+      item.temp,
+      item.fromWirePath,
+      item.tempWire
+    );
   }
   for (const item of staged) {
-    favoritesStore.applyPathRewrite(item.temp, item.to);
-    tagsStore.applyPathRewrite(item.temp, item.to);
-    recentStore.applyPathRewrite(item.temp, item.to);
+    if (item.unicodeMetadata) {
+      favoritesStore.applyPathRewrite(item.temp, item.to);
+      tagsStore.applyPathRewrite(item.temp, item.to);
+    }
+    recentStore.applyPathRewrite(
+      item.temp,
+      item.to,
+      item.tempWire,
+      item.toWirePath
+    );
   }
 }
 
@@ -494,7 +523,37 @@ export async function batchRename(
     body: JSON.stringify({ items, dryRun }),
   });
   const result = (await response.json()) as BatchRenameResult;
-  if (result.executed) applyCompletedBatchRename(result.items);
+  if (result.valid) {
+    if (result.items.length !== items.length)
+      throw new Error("服务器返回的批量重命名项目数不一致，请刷新文件状态");
+    result.items.forEach((item, index) => {
+      const requested = items[index];
+      if (
+        batchRenameWireKey(
+          item.fromWirePath || urlUtils.encodePath(item.from)
+        ) !==
+          batchRenameWireKey(
+            requested.fromWirePath || urlUtils.encodePath(requested.from)
+          ) ||
+        batchRenameWireKey(item.toWirePath || urlUtils.encodePath(item.to)) !==
+          batchRenameWireKey(
+            requested.toWirePath || urlUtils.encodePath(requested.to)
+          )
+      )
+        throw new Error("服务器返回的批量重命名原始路径不一致，请刷新文件状态");
+      if (item.status !== (result.executed ? "completed" : "ready"))
+        throw new Error("服务器返回的批量重命名项目状态无效，请刷新文件状态");
+    });
+  }
+  if (result.executed) {
+    if (
+      !result.valid ||
+      dryRun ||
+      result.items.some((item) => item.status !== "completed")
+    )
+      throw new Error("服务器返回的批量重命名执行状态无效，请刷新文件状态");
+    applyCompletedBatchRename(result.items);
+  }
   return result;
 }
 

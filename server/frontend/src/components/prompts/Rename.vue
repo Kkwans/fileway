@@ -131,7 +131,7 @@
         <div class="rename-preview-list" role="list">
           <div
             v-for="(draft, index) in drafts"
-            :key="draft.sourcePath"
+            :key="draft.sourceWirePath || draft.sourcePath"
             class="rename-preview-row"
             :class="{
               'rename-preview-row--error': rowError(index),
@@ -263,7 +263,9 @@ const isBatchRename = computed(
 );
 const selectionFingerprint = computed(() =>
   isListing.value
-    ? selectedItems.value.map((item) => `${item.path}\0${item.name}`).join("\0")
+    ? selectedItems.value
+        .map((item) => `${item.wirePath || item.path}\0${item.name}`)
+        .join("\0")
     : `${req.value?.path ?? ""}\0${req.value?.name ?? ""}`
 );
 
@@ -287,6 +289,7 @@ function resetState() {
   name.value = oldName.value;
   drafts.value = selectedItems.value.map((item) => ({
     sourcePath: item.path,
+    sourceWirePath: item.wirePath,
     oldName: item.name,
     newName: item.name,
     isDir: item.isDir,
@@ -339,7 +342,9 @@ function rowError(index: number) {
   const draft = drafts.value[index];
   return (
     validation.value.errors.get(index) ||
-    serverErrors.value.get(`${draft?.sourcePath}\0${draft?.newName}`) ||
+    serverErrors.value.get(
+      `${draft?.sourceWirePath || draft?.sourcePath}\0${draft?.newName}`
+    ) ||
     ""
   );
 }
@@ -432,7 +437,11 @@ async function submitBatch() {
   const changes = validation.value.changes.map((item) => ({ ...item }));
   const risky = changes
     .map((change) =>
-      selectedItems.value.find((item) => item.path === change.from)
+      selectedItems.value.find((item) =>
+        change.fromWirePath
+          ? item.wirePath === change.fromWirePath
+          : !item.wirePath && item.path === change.from
+      )
     )
     .filter((item) => Boolean(item?.path))
     .map((item) => ({
@@ -459,20 +468,28 @@ async function preflightBatch() {
   submitting.value = true;
   batchError.value = "";
   serverErrors.value = new Map();
+  const checkedChanges = validation.value.changes.map((item) => ({ ...item }));
+  const checkedSignature = JSON.stringify(checkedChanges);
   try {
-    const result = await api.batchRename(validation.value.changes, true);
+    const result = await api.batchRename(checkedChanges, true);
+    if (checkedSignature !== changeSignature.value) return;
     const errors = new Map<string, string>();
     result.items.forEach((item) => {
       const targetName = item.to.split("/").at(-1) || "";
-      if (item.error) errors.set(`${item.from}\0${targetName}`, item.error);
+      if (item.error)
+        errors.set(
+          `${item.fromWirePath || item.from}\0${targetName}`,
+          item.error
+        );
     });
     serverErrors.value = errors;
     if (!result.valid) {
       batchError.value = result.error || "存在名称冲突，请调整后重新检查。";
       return;
     }
-    preflightSignature.value = changeSignature.value;
+    preflightSignature.value = checkedSignature;
   } catch (error) {
+    if (checkedSignature !== changeSignature.value) return;
     batchError.value = "无法完成变更检查，请确认网络和权限后重试。";
     $showError(error instanceof Error ? error : String(error));
   } finally {
@@ -482,6 +499,13 @@ async function preflightBatch() {
 
 async function executeBatchRename(changes: BatchRenameChange[]) {
   if (submitting.value) return;
+  if (
+    JSON.stringify(changes) !== preflightSignature.value ||
+    preflightSignature.value !== changeSignature.value
+  ) {
+    batchError.value = "文件选择或名称已变化，请重新检查变更。";
+    return;
+  }
   submitting.value = true;
   batchError.value = "";
   try {

@@ -16,4 +16,18 @@ describe("recent page UI contract", () => {
     expect(source).toContain("getResourceIconName");
     expect(source).not.toContain('class="recent-summary"');
   });
+
+  it("keeps unverified historical paths off resource links", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "src/views/Recent.vue"),
+      "utf8"
+    );
+    expect(source).toContain(
+      ":is=\"entry.pathVerified === false ? 'div' : 'router-link'\""
+    );
+    expect(source).toContain(
+      ':to="entry.pathVerified === false ? undefined : entryRoute(entry)"'
+    );
+    expect(source).toContain("原始路径无法确认，请从文件列表重新访问。");
+  });
 });

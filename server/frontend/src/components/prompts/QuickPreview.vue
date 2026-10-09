@@ -220,11 +220,15 @@ const previewUrl = computed(() => {
 });
 
 const directUrl = computed(() => api.getDownloadURL(item.value, true));
-const recordSuccessfulPreview = async (path = item.value.path || "") => {
-  if (!path || recordedPath.value === path) return;
+const recordSuccessfulPreview = async (
+  path = item.value.path || "",
+  wirePath = item.value.wirePath
+) => {
+  const identity = wirePath || path;
+  if (!path || recordedPath.value === identity) return;
   try {
-    await recentStore.record(path);
-    recordedPath.value = path;
+    await recentStore.record(path, wirePath);
+    recordedPath.value = identity;
   } catch (error) {
     console.warn("无法记录快捷预览", error);
   }
@@ -308,6 +312,7 @@ const loadTextContent = async () => {
   contentController = controller;
   const source = directUrl.value;
   const path = item.value.path || "";
+  const wirePath = item.value.wirePath;
   try {
     const resp = await fetch(source, {
       credentials: "include",
@@ -320,7 +325,7 @@ const loadTextContent = async () => {
       text.length > 51200
         ? text.substring(0, 51200) + "\n\n... " + "文件过大"
         : text;
-    await recordSuccessfulPreview(path);
+    await recordSuccessfulPreview(path, wirePath);
   } catch (error) {
     if (controller.signal.aborted) return;
     textContent.value =
@@ -335,6 +340,7 @@ const loadMarkdownContent = async () => {
   contentController = controller;
   const source = directUrl.value;
   const path = item.value.path || "";
+  const wirePath = item.value.wirePath;
   try {
     const resp = await fetch(source, {
       credentials: "include",
@@ -349,7 +355,7 @@ const loadMarkdownContent = async () => {
         : text;
     await renderMarkdown(truncated, controller.signal);
     if (controller.signal.aborted) return;
-    await recordSuccessfulPreview(path);
+    await recordSuccessfulPreview(path, wirePath);
   } catch (error) {
     if (controller.signal.aborted) return;
     textContent.value =

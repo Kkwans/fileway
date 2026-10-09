@@ -52,32 +52,34 @@
       </section>
 
       <section v-else class="recent-list" aria-label="最近访问列表">
-        <router-link
+        <component
           v-for="entry in recentStore.items"
+          :is="entry.pathVerified === false ? 'div' : 'router-link'"
           :key="entry.id"
-          :to="entryRoute(entry)"
+          :to="entry.pathVerified === false ? undefined : entryRoute(entry)"
+          :aria-disabled="entry.pathVerified === false || undefined"
           class="recent-entry"
         >
           <span class="recent-entry-icon" :class="{ folder: entry.isDir }">
             <app-icon :name="entryIcon(entry)" :size="22" />
           </span>
           <span class="recent-entry-copy">
-            <strong :title="displayPath(entry.name)">{{
-              displayPath(entry.name)
-            }}</strong>
-            <small :title="displayPath(entry.path)">{{
-              displayPath(entry.path)
-            }}</small>
+            <strong :title="entry.name">{{ entry.name }}</strong>
+            <small :title="entry.path">{{ entry.path }}</small>
+            <small v-if="entry.pathVerified === false"
+              >原始路径无法确认，请从文件列表重新访问。</small
+            >
           </span>
           <time :datetime="new Date(entry.accessedAt).toISOString()">
             {{ dayjs(entry.accessedAt).fromNow() }}
           </time>
           <app-icon
+            v-if="entry.pathVerified !== false"
             name="chevron-right"
             :size="20"
             class="recent-entry-arrow"
           />
-        </router-link>
+        </component>
       </section>
     </main>
   </div>
@@ -93,7 +95,6 @@ import dayjs from "@/utils/date";
 import { getResourceIconName } from "@/utils/fileIcons";
 import { encodePath } from "@/utils/url";
 import { resourceOpenRoute } from "@/utils/archivePath";
-import { displayPath } from "@/utils/displayPath";
 
 const recentStore = useRecentStore();
 const $showError = inject<IToastError>("$showError")!;
@@ -108,10 +109,24 @@ async function load() {
 
 function entryRoute(entry: RecentEntry) {
   const suffix = entry.isDir && entry.path !== "/" ? "/" : "";
+  const url = `/files${entry.wirePath || encodePath(entry.path)}${suffix}`;
+  if (entry.wirePath) {
+    // Archive's JSON-path workflow cannot yet represent opaque bytes. Keep
+    // these files on the raw resource route, where preview/download is safe.
+    try {
+      const decoded = entry.wirePath
+        .split("/")
+        .map((part) => decodeURIComponent(part))
+        .join("/");
+      if (decoded !== entry.path) return { path: url };
+    } catch {
+      return { path: url };
+    }
+  }
   return resourceOpenRoute({
     isDir: entry.isDir,
     path: entry.path,
-    url: `/files${encodePath(entry.path)}${suffix}`,
+    url,
   });
 }
 

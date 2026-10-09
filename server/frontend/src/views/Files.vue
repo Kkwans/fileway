@@ -190,9 +190,9 @@ const fetchData = async () => {
     document.title = `${res.name || "我的文件"} - 文件 - ${name}`;
     layoutStore.loading = false;
 
-    if (lastRecordedPath !== res.path) {
-      lastRecordedPath = res.path;
-      recentStore.record(res.path).catch((recordError) => {
+    if (lastRecordedPath !== (res.wirePath || res.path)) {
+      lastRecordedPath = res.wirePath || res.path;
+      recentStore.record(res.path, res.wirePath).catch((recordError) => {
         console.warn("无法记录最近访问", recordError);
       });
     }
