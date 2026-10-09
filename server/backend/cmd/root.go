@@ -224,6 +224,7 @@ user created with the credentials from options "username" and "password".`,
 		if err != nil {
 			return fmt.Errorf("failed to initialize upload cache: %w", err)
 		}
+		defer uploadCache.Close()
 
 		server, err := getServerSettings(v, st.Storage)
 		if err != nil {
@@ -282,6 +283,9 @@ user created with the credentials from options "username" and "password".`,
 		if err != nil {
 			return err
 		}
+		uploadContext, stopUploads := context.WithCancel(context.Background())
+		defer stopUploads()
+		fbhttp.StartUploadCleanup(uploadContext, st.Storage, server)
 
 		defer func() { _ = listener.Close() }()
 

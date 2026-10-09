@@ -1,16 +1,13 @@
 package fbhttp
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
 )
 
-const uploadCacheTTL = 3 * time.Minute
+const uploadCacheTTL = 7 * 24 * time.Hour
 
 // UploadCache is an interface for tracking active uploads.
 // Allows for different backends (e.g. in-memory or redis)
@@ -39,14 +36,6 @@ type memoryUploadCache struct {
 
 func newMemoryUploadCache() *memoryUploadCache {
 	cache := ttlcache.New[string, int64]()
-	cache.OnEviction(func(_ context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[string, int64]) {
-		if reason == ttlcache.EvictionReasonExpired {
-			fmt.Printf("deleting incomplete upload file: \"%s\"\n", item.Key())
-			if err := os.Remove(item.Key()); err != nil && !errors.Is(err, os.ErrNotExist) {
-				fmt.Printf("failed to delete incomplete upload file %q: %v\n", item.Key(), err)
-			}
-		}
-	})
 	go cache.Start()
 
 	return &memoryUploadCache{cache: cache}

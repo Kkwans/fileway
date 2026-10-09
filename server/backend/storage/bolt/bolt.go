@@ -17,6 +17,7 @@ import (
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
 	"github.com/Kkwans/nas-file-browser/backend/transfers"
 	"github.com/Kkwans/nas-file-browser/backend/trash"
+	"github.com/Kkwans/nas-file-browser/backend/uploads"
 	"github.com/Kkwans/nas-file-browser/backend/users"
 )
 
@@ -42,6 +43,7 @@ func NewStorage(db *storm.DB) (*storage.Storage, error) {
 	taskStore := tasks.NewStorage(taskBackend{db: db})
 	transferStore := transfers.NewStorage(transferBackend{db: db})
 	trashStore := trash.NewStorage(trashBackend{db: db})
+	uploadStore := uploads.NewStorage(uploadBackend{db: db})
 
 	err := save(db, "version", 9)
 	if err != nil {
@@ -61,6 +63,7 @@ func NewStorage(db *storm.DB) (*storage.Storage, error) {
 		Tasks:     taskStore,
 		Transfers: transferStore,
 		Trash:     trashStore,
+		Uploads:   uploadStore,
 	}, nil
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/tomasen/realip"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/runner"
 	"github.com/Kkwans/nas-file-browser/backend/settings"
 	"github.com/Kkwans/nas-file-browser/backend/storage"
@@ -30,7 +31,7 @@ type data struct {
 
 // Check implements rules.Checker.
 func (d *data) Check(path string) bool {
-	if trash.IsInternalPath(path) {
+	if trash.IsInternalPath(path) || files.IsUploadPartPath(path) {
 		return false
 	}
 	allow := true

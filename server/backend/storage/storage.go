@@ -12,6 +12,7 @@ import (
 	"github.com/Kkwans/nas-file-browser/backend/tasks"
 	"github.com/Kkwans/nas-file-browser/backend/transfers"
 	"github.com/Kkwans/nas-file-browser/backend/trash"
+	"github.com/Kkwans/nas-file-browser/backend/uploads"
 	"github.com/Kkwans/nas-file-browser/backend/users"
 )
 
@@ -30,4 +31,5 @@ type Storage struct {
 	Tasks     *tasks.Storage
 	Transfers *transfers.Storage
 	Trash     *trash.Storage
+	Uploads   *uploads.Storage
 }

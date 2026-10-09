@@ -38,7 +38,7 @@ export async function upload(
     return false;
   }
   return new Promise<void | string>((resolve, reject) => {
-    let transferId = uploadTransferId(filePath, content);
+    let transferId = newUploadTransferId(filePath, content);
     const contentSize =
       typeof Blob !== "undefined" && content instanceof Blob
         ? content.size
@@ -117,10 +117,18 @@ export async function upload(
             "发现匹配的未完成上传。点击“确定”继续上传，点击“取消”重新上传。"
           );
         if (resume) {
+          const savedId = resumedTransferId(previous.uploadUrl, resourcePath);
+          if (savedId) {
+            transferId = savedId;
+            upload.options.headers = {
+              ...(upload.options.headers || {}),
+              "X-Transfer-ID": transferId,
+            };
+          }
           upload.resumeFromPreviousUpload(previous);
         } else {
           await removePreviousFingerprint(upload, previous);
-          transferId = `${transferId}-${randomAttemptSuffix()}`;
+          transferId = newUploadTransferId(filePath, content);
           upload.options.headers = {
             ...(upload.options.headers || {}),
             "X-Transfer-ID": transferId,
@@ -171,9 +179,35 @@ async function removePreviousFingerprint(
 
 function randomAttemptSuffix() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID().slice(0, 8);
+    return crypto.randomUUID();
   }
   return Math.random().toString(16).slice(2, 10);
+}
+
+function newUploadTransferId(
+  filePath: string,
+  content: Exclude<ApiContent, "">
+) {
+  // A new explicit attempt has its own durable session. The deterministic
+  // fingerprint still finds previous uploads; it is not a mutation nonce.
+  const suffix = randomAttemptSuffix();
+  return `${uploadTransferId(filePath, content).slice(0, 219 - suffix.length)}-${suffix}`;
+}
+
+function resumedTransferId(
+  value: string | null,
+  resourcePath: string
+): string | null {
+  if (!value) return null;
+  const saved = new URL(value, origin);
+  const expected = new URL(`${origin}${baseURL}${resourcePath}`);
+  if (
+    saved.origin !== expected.origin ||
+    saved.pathname !== expected.pathname
+  ) {
+    throw new Error("原上传位置与当前服务器或文件不一致，未发送请求");
+  }
+  return saved.searchParams.get("transfer");
 }
 
 export function uploadTransferId(
