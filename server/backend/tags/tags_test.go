@@ -5,6 +5,61 @@ import (
 	"testing"
 )
 
+func TestUnverifiedTagReferenceAndFreshUnicodeSiblingRemainSeparate(t *testing.T) {
+	path := "/lost�.txt"
+	backend := &memoryBackend{tags: []*Tag{{ID: "legacy", UserID: 7, Name: "old", Paths: []string{path}, UnverifiedPaths: []bool{true}}}}
+	storage := NewStorage(backend)
+	name, color := "edited legacy tag", "#1677ff"
+	if _, err := storage.UpdateFields(7, "legacy", &name, &color); err != nil {
+		t.Fatal(err)
+	}
+	if !backend.tags[0].PathIsUnverified(0) {
+		t.Fatal("non-path edit certified a legacy reference")
+	}
+	tag, err := storage.AddPath(7, "legacy", path)
+	if err != nil || len(tag.Paths) != 2 || !tag.PathIsUnverified(0) || tag.PathIsUnverified(1) {
+		t.Fatalf("fresh same-display path swallowed legacy reference: %#v %v", tag, err)
+	}
+	if tag, err = storage.AddPath(7, "legacy", path); err != nil || len(tag.Paths) != 2 {
+		t.Fatalf("fresh trusted duplicate was not deduplicated: %#v %v", tag, err)
+	}
+	if _, err := storage.RewritePathPrefix(path, "/renamed�.txt"); err != nil {
+		t.Fatal(err)
+	}
+	assertTagPaths(t, backend.tags, "legacy", []string{path, "/renamed�.txt"})
+	if _, err := storage.RemovePathPrefix(path); err != nil {
+		t.Fatal(err)
+	}
+	assertTagPaths(t, backend.tags, "legacy", []string{path, "/renamed�.txt"})
+	mutation, err := storage.RemovePathPrefix("/renamed�.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTagPaths(t, backend.tags, "legacy", []string{path})
+	if !backend.tags[0].PathIsUnverified(0) {
+		t.Fatal("removal promoted unknown reference")
+	}
+	snapshot := mutation.UpdatedSnapshot()
+	snapshot[0].UnverifiedPaths[0] = false
+	if !mutation.UpdatedSnapshot()[0].PathIsUnverified(0) {
+		t.Fatal("snapshot provenance shares mutable storage")
+	}
+	if err := storage.RestorePathMutation(mutation); err != nil {
+		t.Fatal(err)
+	}
+	assertTagPaths(t, backend.tags, "legacy", []string{path, "/renamed�.txt"})
+	if !backend.tags[0].PathIsUnverified(0) || backend.tags[0].PathIsUnverified(1) {
+		t.Fatal("rollback lost reference provenance")
+	}
+	if _, err := storage.AddPath(7, "legacy", path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.RemovePath(7, "legacy", path); err != nil {
+		t.Fatal(err)
+	}
+	assertTagPaths(t, backend.tags, "legacy", []string{path, "/renamed�.txt"})
+}
+
 func TestStorageKeepsTagsIsolatedByUser(t *testing.T) {
 	backend := &memoryBackend{tags: []*Tag{
 		{ID: "admin", UserID: 1, Name: "工作"},

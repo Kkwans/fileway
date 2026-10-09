@@ -5,6 +5,43 @@ import (
 	"testing"
 )
 
+func TestUnverifiedFavoriteDoesNotClaimFreshUnicodeSibling(t *testing.T) {
+	path := "/lost�.txt"
+	backend := &memoryBackend{favorites: []*Favorite{{ID: "legacy", UserID: 7, Path: path, Name: "old", PathUnverified: true}}}
+	storage := NewStorage(backend)
+	name := "edited legacy label"
+	if _, err := storage.UpdateFields(7, "legacy", &name, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !backend.favorites[0].PathUnverified {
+		t.Fatal("non-path edit certified a legacy path")
+	}
+	fresh, err := storage.Add(7, path, "real Unicode file", 1)
+	if err != nil || fresh.ID == "legacy" || fresh.PathUnverified {
+		t.Fatalf("fresh sibling was merged or rejected: %#v %v", fresh, err)
+	}
+	if _, err := storage.Add(7, path, "duplicate trusted file", 2); !errors.Is(err, ErrExist) {
+		t.Fatalf("trusted duplicate not rejected: %v", err)
+	}
+	if _, err := storage.RewritePathPrefix(path, "/renamed�.txt"); err != nil {
+		t.Fatal(err)
+	}
+	legacy, _ := storage.GetByID(7, "legacy")
+	actual, _ := storage.GetByID(7, fresh.ID)
+	if legacy.Path != path || !legacy.PathUnverified || actual.Path != "/renamed�.txt" || actual.PathUnverified {
+		t.Fatalf("identity crossed during rename: legacy=%#v fresh=%#v", legacy, actual)
+	}
+	if _, err := storage.RemovePathPrefix(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storage.GetByID(7, "legacy"); err != nil {
+		t.Fatal("path removal erased unknown legacy identity")
+	}
+	if err := storage.DeleteByPath(7, path); !errors.Is(err, ErrNotExist) {
+		t.Fatalf("unknown path was treated as a real file: %v", err)
+	}
+}
+
 func TestStorageKeepsFavoritesIsolatedByUser(t *testing.T) {
 	backend := &memoryBackend{favorites: []*Favorite{
 		{ID: "admin", UserID: 1, Path: "/documents", Name: "文档"},
@@ -202,7 +239,7 @@ func (m *memoryBackend) GetByID(userID uint, id string) (*Favorite, error) {
 }
 func (m *memoryBackend) GetByPath(userID uint, path string) (*Favorite, error) {
 	for _, favorite := range m.favorites {
-		if favorite.Path == path && favorite.UserID == userID {
+		if !favorite.PathUnverified && favorite.Path == path && favorite.UserID == userID {
 			return favorite, nil
 		}
 	}

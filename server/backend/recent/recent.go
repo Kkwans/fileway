@@ -3,12 +3,14 @@ package recent
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"path"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 )
 
@@ -25,6 +27,28 @@ type Entry struct {
 	Name       string `json:"name"`
 	IsDir      bool   `json:"isDir"`
 	AccessedAt int64  `json:"accessedAt" storm:"index"`
+	// A pre-byte-field row containing U+FFFD may have lost its original path.
+	// Keep it for history, but never infer the identity of a Unicode sibling.
+	PathUnverified bool `json:"-"`
+}
+
+// MarshalJSON mirrors resource metadata: path/name are display text while
+// wirePath retains the original filesystem bytes, including non-UTF-8 names.
+// Persistence continues to use the unmodified Entry fields.
+func (entry *Entry) MarshalJSON() ([]byte, error) {
+	type entryAlias Entry
+	wirePath := ""
+	if !entry.PathUnverified {
+		wirePath = files.EncodeWirePath(entry.Path)
+	}
+	return json.Marshal(&struct {
+		*entryAlias
+		Path         string `json:"path"`
+		Name         string `json:"name"`
+		WirePath     string `json:"wirePath,omitempty"`
+		PathVerified bool   `json:"pathVerified"`
+	}{entryAlias: (*entryAlias)(entry), Path: files.DisplayPath(entry.Path),
+		Name: files.DisplayName(entry.Name), WirePath: wirePath, PathVerified: !entry.PathUnverified})
 }
 
 func (entry *Entry) Clone() *Entry {
@@ -81,7 +105,7 @@ func (storage *Storage) Record(userID uint, value string, name string, isDir boo
 	var current *Entry
 	duplicates := make([]*Entry, 0)
 	for _, entry := range all {
-		if entry.UserID != userID || pathmeta.Clean(entry.Path) != value {
+		if entry.PathUnverified || entry.UserID != userID || pathmeta.Clean(entry.Path) != value {
 			continue
 		}
 		if current == nil || entry.AccessedAt > current.AccessedAt {
@@ -170,6 +194,9 @@ func (storage *Storage) RewritePathPrefix(from, to string) (*PathMutation, error
 	}
 	mutation := &PathMutation{}
 	for _, entry := range all {
+		if entry.PathUnverified {
+			continue
+		}
 		rewritten, matched := pathmeta.Rewrite(entry.Path, from, to)
 		if !matched || rewritten == pathmeta.Clean(entry.Path) {
 			continue
@@ -197,7 +224,7 @@ func (storage *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 	}
 	mutation := &PathMutation{}
 	for _, entry := range all {
-		if !pathmeta.Contains(entry.Path, prefix) {
+		if entry.PathUnverified || !pathmeta.Contains(entry.Path, prefix) {
 			continue
 		}
 		original := *entry

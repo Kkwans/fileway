@@ -107,6 +107,7 @@ func (item *Item) Clone() *Item {
 	for index, tag := range item.TagSnapshots {
 		clone.TagSnapshots[index] = tag
 		clone.TagSnapshots[index].Paths = append([]string(nil), tag.Paths...)
+		clone.TagSnapshots[index].UnverifiedPaths = append([]bool(nil), tag.UnverifiedPaths...)
 	}
 	return &clone
 }

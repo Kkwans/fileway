@@ -1,7 +1,9 @@
 package bolt
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/asdine/storm/v3"
 
@@ -13,13 +15,27 @@ import (
 // Storm's default JSON codec otherwise drops UserID because the HTTP models
 // mark that field json:"-".
 type Favorite struct {
-	ID      string `json:"id" storm:"id"`
-	UserID  uint   `json:"userId" storm:"index"`
-	Path    string `json:"path" storm:"index"`
-	Name    string `json:"name"`
-	GroupID string `json:"groupId,omitempty"`
-	AddedAt int64  `json:"addedAt"`
-	Order   int    `json:"order"`
+	ID        string `json:"id" storm:"id"`
+	UserID    uint   `json:"userId" storm:"index"`
+	Path      string `json:"path" storm:"index"`
+	Name      string `json:"name"`
+	GroupID   string `json:"groupId,omitempty"`
+	AddedAt   int64  `json:"addedAt"`
+	Order     int    `json:"order"`
+	PathBytes []byte `json:"pathBytes,omitempty"`
+	NameBytes []byte `json:"nameBytes,omitempty"`
+}
+
+func (favorite *Favorite) UnmarshalJSON(data []byte) error {
+	type recordAlias Favorite
+	var decoded recordAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*favorite = Favorite(decoded)
+	favorite.Path = metadataText(favorite.Path, favorite.PathBytes)
+	favorite.Name = metadataText(favorite.Name, favorite.NameBytes)
+	return nil
 }
 
 type FavoriteGroup struct {
@@ -152,7 +168,7 @@ func (f favoritesBackend) GetByPath(userID uint, path string) (*favorites.Favori
 		return nil, err
 	}
 	for _, favorite := range all {
-		if favorite.Path == path {
+		if !favorite.PathUnverified && favorite.Path == path {
 			return favorite, nil
 		}
 	}
@@ -164,11 +180,23 @@ func (f favoritesBackend) Save(favorite *favorites.Favorite) error {
 }
 
 func (f favoritesBackend) Update(favorite *favorites.Favorite) error {
-	return f.db.Update(newFavoriteRecord(favorite))
+	return mutateMetadataRecord[Favorite](f.db, favorite.ID, func(record *Favorite) { *record = *newFavoriteRecord(favorite) })
 }
 
 func (f favoritesBackend) UpdatePath(id string, path string) error {
-	return f.db.UpdateField(&Favorite{ID: id}, "Path", path)
+	unverified := false
+	err := mutateMetadataRecord[Favorite](f.db, id, func(record *Favorite) {
+		if record.domain().PathUnverified {
+			unverified = true
+			return
+		}
+		record.Path = path
+		record.PathBytes = []byte(path)
+	})
+	if err == nil && unverified {
+		return favorites.ErrNotExist
+	}
+	return err
 }
 
 func (f favoritesBackend) UpdateGroupID(id string, groupID string) error {
@@ -281,7 +309,7 @@ func (f favoritesBackend) DeleteByPath(path string) error {
 		return err
 	}
 	for _, favorite := range records {
-		if favorite.Path == path {
+		if !favorite.domain().PathUnverified && favorite.Path == path {
 			return f.db.DeleteStruct(favorite)
 		}
 	}
@@ -289,11 +317,16 @@ func (f favoritesBackend) DeleteByPath(path string) error {
 }
 
 func newFavoriteRecord(favorite *favorites.Favorite) *Favorite {
-	return &Favorite{
+	record := &Favorite{
 		ID: favorite.ID, UserID: favorite.UserID, Path: favorite.Path,
 		Name: favorite.Name, GroupID: favorite.GroupID,
 		AddedAt: favorite.AddedAt, Order: favorite.Order,
+		NameBytes: []byte(favorite.Name),
 	}
+	if !favorite.PathUnverified {
+		record.PathBytes = []byte(favorite.Path)
+	}
+	return record
 }
 
 func (favorite *Favorite) domain() *favorites.Favorite {
@@ -301,6 +334,7 @@ func (favorite *Favorite) domain() *favorites.Favorite {
 		ID: favorite.ID, UserID: favorite.UserID, Path: favorite.Path,
 		Name: favorite.Name, GroupID: favorite.GroupID,
 		AddedAt: favorite.AddedAt, Order: favorite.Order,
+		PathUnverified: favorite.PathBytes == nil && strings.ContainsRune(favorite.Path, '\uFFFD'),
 	}
 }
 

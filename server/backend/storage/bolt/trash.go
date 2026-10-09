@@ -3,6 +3,7 @@ package bolt
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/asdine/storm/v3"
 
@@ -40,13 +41,15 @@ type trashMetadata struct {
 // representations of favorites and tags hide it. Recycle-bin restoration
 // must retain the original owner across process restarts.
 type favoriteSnapshotRecord struct {
-	ID      string `json:"id"`
-	UserID  uint   `json:"userId"`
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	GroupID string `json:"groupId,omitempty"`
-	AddedAt int64  `json:"addedAt"`
-	Order   int    `json:"order"`
+	ID        string `json:"id"`
+	UserID    uint   `json:"userId"`
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	GroupID   string `json:"groupId,omitempty"`
+	AddedAt   int64  `json:"addedAt"`
+	Order     int    `json:"order"`
+	PathBytes []byte `json:"pathBytes,omitempty"`
+	NameBytes []byte `json:"nameBytes,omitempty"`
 }
 
 type tagSnapshotRecord struct {
@@ -56,6 +59,8 @@ type tagSnapshotRecord struct {
 	Color     string   `json:"color"`
 	Paths     []string `json:"paths"`
 	CreatedAt int64    `json:"createdAt"`
+	PathBytes [][]byte `json:"pathBytes,omitempty"`
+	NameBytes []byte   `json:"nameBytes,omitempty"`
 }
 
 type trashBackend struct {
@@ -166,6 +171,11 @@ func (record *trashRecord) item() (*trash.Item, error) {
 			return nil, err
 		}
 	}
+	for _, tag := range metadata.Tags {
+		if tag.PathBytes != nil && len(tag.PathBytes) != len(tag.Paths) {
+			return nil, fmt.Errorf("回收站标签路径与原始字节数量不一致")
+		}
+	}
 	return &trash.Item{
 		SizeState: record.SizeState, SizeTaskID: record.SizeTaskID,
 		ID:                record.ID,
@@ -187,10 +197,12 @@ func (record *trashRecord) item() (*trash.Item, error) {
 func favoriteSnapshotRecords(snapshot []favorites.Favorite) []favoriteSnapshotRecord {
 	records := make([]favoriteSnapshotRecord, len(snapshot))
 	for index, favorite := range snapshot {
+		raw := newFavoriteRecord(&favorite)
 		records[index] = favoriteSnapshotRecord{
 			ID: favorite.ID, UserID: favorite.UserID, Path: favorite.Path,
 			Name: favorite.Name, GroupID: favorite.GroupID,
 			AddedAt: favorite.AddedAt, Order: favorite.Order,
+			PathBytes: raw.PathBytes, NameBytes: raw.NameBytes,
 		}
 	}
 	return records
@@ -199,11 +211,15 @@ func favoriteSnapshotRecords(snapshot []favorites.Favorite) []favoriteSnapshotRe
 func favoriteSnapshots(records []favoriteSnapshotRecord) []favorites.Favorite {
 	snapshot := make([]favorites.Favorite, len(records))
 	for index, record := range records {
-		snapshot[index] = favorites.Favorite{
+		raw := &Favorite{
 			ID: record.ID, UserID: record.UserID, Path: record.Path,
 			Name: record.Name, GroupID: record.GroupID,
 			AddedAt: record.AddedAt, Order: record.Order,
+			PathBytes: record.PathBytes, NameBytes: record.NameBytes,
 		}
+		raw.Path = metadataText(raw.Path, raw.PathBytes)
+		raw.Name = metadataText(raw.Name, raw.NameBytes)
+		snapshot[index] = *raw.domain()
 	}
 	return snapshot
 }
@@ -211,9 +227,11 @@ func favoriteSnapshots(records []favoriteSnapshotRecord) []favorites.Favorite {
 func tagSnapshotRecords(snapshot []tags.Tag) []tagSnapshotRecord {
 	records := make([]tagSnapshotRecord, len(snapshot))
 	for index, tag := range snapshot {
+		raw := newTagRecord(&tag)
 		records[index] = tagSnapshotRecord{
 			ID: tag.ID, UserID: tag.UserID, Name: tag.Name, Color: tag.Color,
 			Paths: append([]string(nil), tag.Paths...), CreatedAt: tag.CreatedAt,
+			PathBytes: raw.PathBytes, NameBytes: raw.NameBytes,
 		}
 	}
 	return records
@@ -222,11 +240,19 @@ func tagSnapshotRecords(snapshot []tags.Tag) []tagSnapshotRecord {
 func tagSnapshots(records []tagSnapshotRecord) []tags.Tag {
 	snapshot := make([]tags.Tag, len(records))
 	for index, record := range records {
-		snapshot[index] = tags.Tag{
+		raw := &Tag{
 			ID: record.ID, UserID: record.UserID, Name: record.Name,
 			Color: record.Color, Paths: append([]string(nil), record.Paths...),
 			CreatedAt: record.CreatedAt,
+			PathBytes: record.PathBytes, NameBytes: record.NameBytes,
 		}
+		raw.Name = metadataText(raw.Name, raw.NameBytes)
+		for pathIndex, bytes := range raw.PathBytes {
+			if bytes != nil {
+				raw.Paths[pathIndex] = string(bytes)
+			}
+		}
+		snapshot[index] = *raw.domain()
 	}
 	return snapshot
 }

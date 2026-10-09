@@ -4,8 +4,34 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"testing"
 )
+
+func TestRecentJSONPreservesRawWireIdentityWithoutChangingStoredPaths(t *testing.T) {
+	path := "/\xd6\xd0\xce\xc4/100% +?#.mkv"
+	entry := &Entry{ID: "owned-entry", UserID: 7, Path: path, Name: "100% +?#.mkv", AccessedAt: 123}
+	payload, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row struct {
+		ID         string `json:"id"`
+		Path       string `json:"path"`
+		Name       string `json:"name"`
+		WirePath   string `json:"wirePath"`
+		AccessedAt int64  `json:"accessedAt"`
+	}
+	if err := json.Unmarshal(payload, &row); err != nil {
+		t.Fatal(err)
+	}
+	if row.ID != entry.ID || row.Path != files.DisplayPath(path) || row.WirePath != files.EncodeWirePath(path) || row.Name != entry.Name || row.AccessedAt != 123 {
+		t.Fatalf("public representation = %#v", row)
+	}
+	if entry.Path != path {
+		t.Fatal("serialization changed stored path bytes")
+	}
+}
 
 func TestRecentIsPrivateDeduplicatedBoundedAndHidesOwner(t *testing.T) {
 	backend := newMemoryBackend()

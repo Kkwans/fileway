@@ -21,6 +21,8 @@ type Tag struct {
 	Color     string   `json:"color"`
 	Paths     []string `json:"paths"`
 	CreatedAt int64    `json:"createdAt"`
+	// Position-aligned provenance; public display strings alone are not identity.
+	UnverifiedPaths []bool `json:"-"`
 }
 
 // StorageBackend is the interface to implement for a tags storage.
@@ -33,6 +35,35 @@ type StorageBackend interface {
 	UpdatePaths(id string, paths []string) error
 	Delete(id string) error
 	ClaimLegacy(userID uint) error
+}
+
+// PathIdentityStorageBackend preserves per-reference provenance while updating
+// paths without overwriting concurrently edited names/colors.
+type PathIdentityStorageBackend interface {
+	UpdatePathReferences(id string, paths []string, unverified []bool) error
+}
+
+func (tag *Tag) PathIsUnverified(index int) bool {
+	return index >= 0 && index < len(tag.UnverifiedPaths) && tag.UnverifiedPaths[index]
+}
+
+func pathFlags(tag *Tag) []bool {
+	flags := make([]bool, len(tag.Paths))
+	copy(flags, tag.UnverifiedPaths)
+	return flags
+}
+
+func (s *Storage) updatePaths(tag *Tag) error {
+	for _, unverified := range tag.UnverifiedPaths {
+		if !unverified {
+			continue
+		}
+		if backend, ok := s.back.(PathIdentityStorageBackend); ok {
+			return backend.UpdatePathReferences(tag.ID, tag.Paths, pathFlags(tag))
+		}
+		return s.back.Update(tag)
+	}
+	return s.back.UpdatePaths(tag.ID, tag.Paths)
 }
 
 // PathMutation captures the complete path lists changed by a filesystem path
@@ -132,12 +163,13 @@ func (s *Storage) AddPath(userID uint, id, path string) (*Tag, error) {
 		return nil, err
 	}
 
-	for _, p := range tag.Paths {
-		if p == path {
+	for index, p := range tag.Paths {
+		if !tag.PathIsUnverified(index) && p == path {
 			return tag, nil // already exists
 		}
 	}
 
+	tag.UnverifiedPaths = append(pathFlags(tag), false)
 	tag.Paths = append(tag.Paths, path)
 	if err := s.back.Update(tag); err != nil {
 		return nil, err
@@ -153,12 +185,15 @@ func (s *Storage) RemovePath(userID uint, id, path string) (*Tag, error) {
 	}
 
 	newPaths := make([]string, 0, len(tag.Paths))
-	for _, p := range tag.Paths {
-		if p != path {
+	newFlags := make([]bool, 0, len(tag.Paths))
+	for index, p := range tag.Paths {
+		if tag.PathIsUnverified(index) || p != path {
 			newPaths = append(newPaths, p)
+			newFlags = append(newFlags, tag.PathIsUnverified(index))
 		}
 	}
 	tag.Paths = newPaths
+	tag.UnverifiedPaths = newFlags
 
 	if err := s.back.Update(tag); err != nil {
 		return nil, err
@@ -179,7 +214,13 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 		changed := false
 		seen := make(map[string]struct{}, len(tag.Paths))
 		next := make([]string, 0, len(tag.Paths))
-		for _, savedPath := range tag.Paths {
+		nextFlags := make([]bool, 0, len(tag.Paths))
+		for index, savedPath := range tag.Paths {
+			if tag.PathIsUnverified(index) {
+				next = append(next, savedPath)
+				nextFlags = append(nextFlags, true)
+				continue
+			}
 			rewritten, matched := pathmeta.Rewrite(savedPath, from, to)
 			changed = changed || matched && rewritten != savedPath
 			if _, exists := seen[rewritten]; exists {
@@ -188,13 +229,17 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 			}
 			seen[rewritten] = struct{}{}
 			next = append(next, rewritten)
+			nextFlags = append(nextFlags, false)
 		}
 		if !changed {
 			continue
 		}
 
 		original := cloneTag(*tag)
-		if err := s.back.UpdatePaths(tag.ID, next); err != nil {
+		updated := cloneTag(*tag)
+		updated.Paths = next
+		updated.UnverifiedPaths = nextFlags
+		if err := s.updatePaths(&updated); err != nil {
 			return nil, errors.Join(err, s.RestorePathMutation(mutation))
 		}
 		mutation.updated = append(mutation.updated, original)
@@ -213,9 +258,14 @@ func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 	mutation := &PathMutation{}
 	for _, tag := range all {
 		next := make([]string, 0, len(tag.Paths))
-		for _, savedPath := range tag.Paths {
-			if !pathmeta.Contains(savedPath, prefix) {
+		nextFlags := make([]bool, 0, len(tag.Paths))
+		for index, savedPath := range tag.Paths {
+			if tag.PathIsUnverified(index) {
+				next = append(next, savedPath)
+				nextFlags = append(nextFlags, true)
+			} else if !pathmeta.Contains(savedPath, prefix) {
 				next = append(next, pathmeta.Clean(savedPath))
+				nextFlags = append(nextFlags, false)
 			}
 		}
 		if len(next) == len(tag.Paths) {
@@ -223,7 +273,10 @@ func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 		}
 
 		original := cloneTag(*tag)
-		if err := s.back.UpdatePaths(tag.ID, next); err != nil {
+		updated := cloneTag(*tag)
+		updated.Paths = next
+		updated.UnverifiedPaths = nextFlags
+		if err := s.updatePaths(&updated); err != nil {
 			return nil, errors.Join(err, s.RestorePathMutation(mutation))
 		}
 		mutation.updated = append(mutation.updated, original)
@@ -244,7 +297,7 @@ func (s *Storage) RestorePathMutation(mutation *PathMutation) error {
 			return errors.Join(err, s.restoreUpdatedTags(previous))
 		}
 		previousTag := cloneTag(*current)
-		if err := s.back.UpdatePaths(tag.ID, tag.Paths); err != nil {
+		if err := s.updatePaths(&tag); err != nil {
 			return errors.Join(err, s.restoreUpdatedTags(previous))
 		}
 		previous = append(previous, previousTag)
@@ -255,7 +308,7 @@ func (s *Storage) RestorePathMutation(mutation *PathMutation) error {
 func (s *Storage) restoreUpdatedTags(snapshot []Tag) error {
 	var restoreErr error
 	for _, tag := range snapshot {
-		restoreErr = errors.Join(restoreErr, s.back.UpdatePaths(tag.ID, tag.Paths))
+		restoreErr = errors.Join(restoreErr, s.updatePaths(&tag))
 	}
 	return restoreErr
 }
@@ -286,11 +339,17 @@ func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string) error 
 		}
 
 		next := append([]string(nil), current.Paths...)
+		nextFlags := pathFlags(current)
 		seen := make(map[string]struct{}, len(next))
-		for _, currentPath := range next {
-			seen[pathmeta.Clean(currentPath)] = struct{}{}
+		for index, currentPath := range next {
+			if !current.PathIsUnverified(index) {
+				seen[pathmeta.Clean(currentPath)] = struct{}{}
+			}
 		}
-		for _, savedPath := range saved.Paths {
+		for index, savedPath := range saved.Paths {
+			if saved.PathIsUnverified(index) {
+				continue
+			}
 			rewritten, matched := pathmeta.Rewrite(savedPath, from, to)
 			if !matched {
 				continue
@@ -300,13 +359,17 @@ func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string) error 
 			}
 			seen[rewritten] = struct{}{}
 			next = append(next, rewritten)
+			nextFlags = append(nextFlags, false)
 		}
 		if len(next) == len(current.Paths) {
 			continue
 		}
 
 		previousTag := cloneTag(*current)
-		if err := s.back.UpdatePaths(saved.ID, next); err != nil {
+		updated := cloneTag(*current)
+		updated.Paths = next
+		updated.UnverifiedPaths = nextFlags
+		if err := s.updatePaths(&updated); err != nil {
 			return errors.Join(err, s.restoreUpdatedTags(previous))
 		}
 		previous = append(previous, previousTag)
@@ -316,6 +379,7 @@ func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string) error 
 
 func cloneTag(tag Tag) Tag {
 	tag.Paths = append([]string(nil), tag.Paths...)
+	tag.UnverifiedPaths = append([]bool(nil), tag.UnverifiedPaths...)
 	return tag
 }
 

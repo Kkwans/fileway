@@ -26,13 +26,14 @@ type FavoriteGroup struct {
 
 // Favorite represents a bookmarked file/folder path.
 type Favorite struct {
-	ID      string `json:"id" storm:"id"`
-	UserID  uint   `json:"-" storm:"index"`
-	Path    string `json:"path" storm:"index"`
-	Name    string `json:"name"`
-	GroupID string `json:"groupId,omitempty"`
-	AddedAt int64  `json:"addedAt"`
-	Order   int    `json:"order"`
+	ID             string `json:"id" storm:"id"`
+	UserID         uint   `json:"-" storm:"index"`
+	Path           string `json:"path" storm:"index"`
+	Name           string `json:"name"`
+	GroupID        string `json:"groupId,omitempty"`
+	AddedAt        int64  `json:"addedAt"`
+	Order          int    `json:"order"`
+	PathUnverified bool   `json:"-"`
 }
 
 // GroupStorageBackend is the interface for favorite group storage.
@@ -118,11 +119,11 @@ func (s *Storage) Add(userID uint, path, name string, currentCount int) (*Favori
 
 // AddToGroup creates a new favorite in a specific group.
 func (s *Storage) AddToGroup(userID uint, path, name, groupID string, currentCount int) (*Favorite, error) {
-	_, err := s.back.GetByPath(userID, path)
-	if err == nil {
+	existing, err := s.back.GetByPath(userID, path)
+	if err == nil && !existing.PathUnverified {
 		return nil, ErrExist
 	}
-	if !errors.Is(err, ErrNotExist) {
+	if err != nil && !errors.Is(err, ErrNotExist) {
 		return nil, err
 	}
 
@@ -203,6 +204,9 @@ func (s *Storage) RewritePathPrefix(from, to string) (*PathMutation, error) {
 
 	mutation := &PathMutation{}
 	for _, favorite := range all {
+		if favorite.PathUnverified {
+			continue
+		}
 		rewritten, matched := pathmeta.Rewrite(favorite.Path, from, to)
 		if !matched || rewritten == favorite.Path {
 			continue
@@ -227,7 +231,7 @@ func (s *Storage) RemovePathPrefix(prefix string) (*PathMutation, error) {
 
 	mutation := &PathMutation{}
 	for _, favorite := range all {
-		if !pathmeta.Contains(favorite.Path, prefix) {
+		if favorite.PathUnverified || !pathmeta.Contains(favorite.Path, prefix) {
 			continue
 		}
 
@@ -279,7 +283,12 @@ func (s *Storage) RestoreDeletedSnapshot(snapshot []Favorite) error {
 func (s *Storage) RestoreStagedSnapshot(snapshot []Favorite) ([]Favorite, error) {
 	restored := make([]Favorite, 0, len(snapshot))
 	for _, favorite := range snapshot {
-		_, err := s.back.GetByPath(favorite.UserID, favorite.Path)
+		var err error
+		if favorite.PathUnverified {
+			_, err = s.back.GetByID(favorite.UserID, favorite.ID)
+		} else {
+			_, err = s.back.GetByPath(favorite.UserID, favorite.Path)
+		}
 		if err == nil {
 			continue
 		}

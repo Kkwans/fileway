@@ -1,7 +1,10 @@
 package bolt
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/asdine/storm/v3"
 
@@ -17,6 +20,29 @@ type Tag struct {
 	Color     string   `json:"color"`
 	Paths     []string `json:"paths"`
 	CreatedAt int64    `json:"createdAt"`
+	PathBytes [][]byte `json:"pathBytes,omitempty"`
+	NameBytes []byte   `json:"nameBytes,omitempty"`
+}
+
+func (tag *Tag) UnmarshalJSON(data []byte) error {
+	type recordAlias Tag
+	var decoded recordAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*tag = Tag(decoded)
+	tag.Name = metadataText(tag.Name, tag.NameBytes)
+	if tag.PathBytes != nil {
+		if len(tag.PathBytes) != len(tag.Paths) {
+			return fmt.Errorf("标签原始路径数量与旧字段不一致")
+		}
+		for index, raw := range tag.PathBytes {
+			if raw != nil {
+				tag.Paths[index] = string(raw)
+			}
+		}
+	}
+	return nil
 }
 
 type tagsBackend struct {
@@ -109,11 +135,58 @@ func (t tagsBackend) Save(tag *tags.Tag) error {
 }
 
 func (t tagsBackend) Update(tag *tags.Tag) error {
-	return t.db.Update(newTagRecord(tag))
+	return mutateMetadataRecord[Tag](t.db, tag.ID, func(record *Tag) { *record = *newTagRecord(tag) })
 }
 
 func (t tagsBackend) UpdatePaths(id string, paths []string) error {
-	return t.db.UpdateField(&Tag{ID: id}, "Paths", append([]string(nil), paths...))
+	return mutateMetadataRecord[Tag](t.db, id, func(record *Tag) {
+		// Legacy callers have no provenance argument. Keep any unchanged old
+		// unknown occurrence unknown rather than certifying it during a rewrite.
+		current := record.domain()
+		unknown := make(map[string]int)
+		for index, path := range current.Paths {
+			if current.PathIsUnverified(index) {
+				unknown[path]++
+			}
+		}
+		flags := make([]bool, len(paths))
+		for index, path := range paths {
+			if unknown[path] > 0 {
+				flags[index] = true
+				unknown[path]--
+			}
+		}
+		next := append([]string(nil), paths...)
+		for index, path := range current.Paths {
+			if current.PathIsUnverified(index) && unknown[path] > 0 {
+				next = append(next, path)
+				flags = append(flags, true)
+				unknown[path]--
+			}
+		}
+		record.Paths = next
+		record.PathBytes = tagPathBytes(next, flags)
+	})
+}
+
+func (t tagsBackend) UpdatePathReferences(id string, paths []string, unverified []bool) error {
+	if len(paths) != len(unverified) {
+		return fmt.Errorf("标签路径与来源数量不一致")
+	}
+	return mutateMetadataRecord[Tag](t.db, id, func(record *Tag) {
+		record.Paths = append([]string(nil), paths...)
+		record.PathBytes = tagPathBytes(paths, unverified)
+	})
+}
+
+func tagPathBytes(paths []string, unverified []bool) [][]byte {
+	raw := metadataPathBytes(paths)
+	for index := range raw {
+		if index < len(unverified) && unverified[index] {
+			raw[index] = nil
+		}
+	}
+	return raw
 }
 
 func (t tagsBackend) Delete(id string) error {
@@ -124,14 +197,21 @@ func newTagRecord(tag *tags.Tag) *Tag {
 	return &Tag{
 		ID: tag.ID, UserID: tag.UserID, Name: tag.Name, Color: tag.Color,
 		Paths: append([]string(nil), tag.Paths...), CreatedAt: tag.CreatedAt,
+		PathBytes: tagPathBytes(tag.Paths, tag.UnverifiedPaths), NameBytes: []byte(tag.Name),
 	}
 }
 
 func (tag *Tag) domain() *tags.Tag {
-	return &tags.Tag{
+	domain := &tags.Tag{
 		ID: tag.ID, UserID: tag.UserID, Name: tag.Name, Color: tag.Color,
 		Paths: append([]string(nil), tag.Paths...), CreatedAt: tag.CreatedAt,
+		UnverifiedPaths: make([]bool, len(tag.Paths)),
 	}
+	for index, path := range domain.Paths {
+		domain.UnverifiedPaths[index] = (tag.PathBytes != nil && tag.PathBytes[index] == nil) ||
+			(tag.PathBytes == nil && strings.ContainsRune(path, '\uFFFD'))
+	}
+	return domain
 }
 
 func tagDomains(records []*Tag) []*tags.Tag {
