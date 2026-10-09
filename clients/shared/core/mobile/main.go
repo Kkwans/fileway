@@ -19,7 +19,7 @@ func nfb_call(data *C.char, length C.int) (output *C.char) {
 			output = C.CString(`{"ok":false,"error":"native bridge failure"}`)
 		}
 	}()
-	if data == nil || length < 0 || length > 1<<20 {
+	if data == nil || length < 0 || length > 15<<20 {
 		return C.CString(`{"ok":false,"error":"invalid command size"}`)
 	}
 	return C.CString(string(engine.Call(C.GoBytes(unsafe.Pointer(data), length))))

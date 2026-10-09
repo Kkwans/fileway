@@ -10,7 +10,9 @@ Java_io_github_kkwans_nasfilebrowser_core_NativeTransport_nativeCall(
     JNIEnv* env, jobject, jbyteArray command) {
     if (command == nullptr) return nullptr;
     const jsize length = env->GetArrayLength(command);
-    if (length > (1 << 20)) return nullptr;
+    // The Go bridge retains a 1 MiB control limit and accepts a larger envelope
+    // only for bounded, explicit raw resource writes (10 MiB before base64).
+    if (length > (15 << 20)) return nullptr;
     std::vector<char> bytes(length);
     env->GetByteArrayRegion(command, 0, length, reinterpret_cast<jbyte*>(bytes.data()));
     if (env->ExceptionCheck()) return nullptr;

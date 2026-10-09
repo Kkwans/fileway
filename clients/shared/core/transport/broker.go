@@ -146,7 +146,7 @@ func (s *Session) do(ctx context.Context, method, endpoint string, body []byte, 
 			req.Header.Add(k, v)
 		}
 	}
-	if len(body) > 0 {
+	if len(body) > 0 && req.Header.Get("Content-Type") == "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if token := s.currentToken(); token != "" {
@@ -228,6 +228,18 @@ func (s *Session) renew(ctx context.Context, previous string) error {
 }
 
 func (b *Broker) Request(ctx context.Context, id, method, endpoint string, body []byte) (Response, error) {
+	return b.request(ctx, id, method, endpoint, body, nil)
+}
+
+// RequestRaw uses the existing selected/authenticated transport for file bytes.
+func (b *Broker) RequestRaw(ctx context.Context, id, method, endpoint string, body []byte) (Response, error) {
+	if method != http.MethodPut && method != http.MethodPost || !strings.HasPrefix(endpoint, "/api/resources/") {
+		return Response{}, errors.New("invalid raw resource write")
+	}
+	return b.request(ctx, id, method, endpoint, body, http.Header{"Content-Type": {"application/octet-stream"}})
+}
+
+func (b *Broker) request(ctx context.Context, id, method, endpoint string, body []byte, headers http.Header) (Response, error) {
 	if method != "GET" && method != "PUT" && method != "POST" && method != "DELETE" && method != "PATCH" {
 		return Response{}, errors.New("unsupported method")
 	}
@@ -238,7 +250,7 @@ func (b *Broker) Request(ctx context.Context, id, method, endpoint string, body 
 	ctx, done := combined(ctx, s.ctx)
 	defer done()
 	previous := s.currentToken()
-	res, err := s.do(ctx, method, endpoint, body, nil)
+	res, err := s.do(ctx, method, endpoint, body, headers)
 	if err != nil {
 		return Response{}, err
 	}

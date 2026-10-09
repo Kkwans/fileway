@@ -28,6 +28,7 @@ type Command struct {
 	Method          string                  `json:"method"`
 	Endpoint        string                  `json:"endpoint"`
 	Body            json.RawMessage         `json:"body"`
+	BodyBase64      *string                 `json:"bodyBase64,omitempty"`
 	Path            string                  `json:"path"`
 	WirePath        string                  `json:"wirePath"`
 	URL             string                  `json:"url"`
@@ -87,7 +88,7 @@ func (e *Engine) ready() (*transport.Broker, error) {
 
 func (e *Engine) Call(data []byte) []byte {
 	var c Command
-	if len(data) > 1<<20 || json.Unmarshal(data, &c) != nil {
+	if len(data) > maxRawResourceEnvelope || json.Unmarshal(data, &c) != nil || (len(data) > 1<<20 && (c.Op != "request" || c.BodyBase64 == nil)) {
 		return encode(Envelope{Error: "invalid native command"})
 	}
 	result, err := e.execute(c)
@@ -234,6 +235,13 @@ func (e *Engine) execute(c Command) (any, error) {
 	case "login":
 		return b.Login(ctx, c.Session, c.Username, c.Password)
 	case "request":
+		if c.BodyBase64 != nil {
+			body, err := rawResourceBody(c)
+			if err != nil {
+				return nil, err
+			}
+			return b.RequestRaw(ctx, c.Session, c.Method, c.Endpoint, body)
+		}
 		return b.Request(ctx, c.Session, c.Method, c.Endpoint, c.Body)
 	case "search_start":
 		id, err := b.StartSearch(ctx, c.Session, c.Path, c.WirePath, c.Query, c.Scope)
