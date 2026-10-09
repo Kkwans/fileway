@@ -104,18 +104,21 @@ import kotlinx.coroutines.withContext
                         }
                     }
                     val fraction = if (item.expectedSize > 0) (item.downloaded.toDouble() / item.expectedSize).toFloat().coerceIn(0f, 1f) else 0f
-                    val status = when (item.status) { "completed" -> "已完成"; "queued" -> "等待下载"; "running" -> "正在下载"; "paused" -> "已暂停"; "interrupted" -> "下载中断"; else -> "下载失败" }
+                    val unknownZip = item.zipExport && !item.complete
+                    val status = when (item.status) { "completed" -> "已完成"; "queued" -> if (unknownZip) "等待打包" else "等待下载"; "running" -> if (unknownZip) "正在打包下载" else "正在下载"; "paused" -> "已暂停"; "interrupted" -> "下载中断"; else -> "下载失败" }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(status, style = MaterialTheme.typography.labelMedium, color = if (item.status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(if (item.complete) readableSize(item.expectedSize) else "${(fraction * 100).toInt().coerceAtMost(99)}% · ${readableSize(item.downloaded)} / ${readableSize(item.expectedSize)}", style = MaterialTheme.typography.labelMedium)
+                        Text(if (item.complete) readableSize(item.expectedSize) else if (unknownZip) "已接收 ${readableSize(item.downloaded)}" else "${(fraction * 100).toInt().coerceAtMost(99)}% · ${readableSize(item.downloaded)} / ${readableSize(item.expectedSize)}", style = MaterialTheme.typography.labelMedium)
                     }
-                    if (!item.complete) LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(3.dp), gapSize = 0.dp, drawStopIndicator = {})
+                    if (!item.complete && !unknownZip) LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(3.dp), gapSize = 0.dp, drawStopIndicator = {})
+                    if (unknownZip && item.active) LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
+                    if (unknownZip) Text("ZIP总大小生成中；恢复时从零重新打包，旧的未完成输出会被截断。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (item.active) Text(state.speeds[item.id]?.let { readableSize(it) + "/s" } ?: "正在获取下载速度", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, Modifier.semantics { contentDescription = "打开下载：${item.name}" }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
                         if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) },
-                            Modifier.semantics { contentDescription = "${if (item.active) "暂停下载" else "继续下载"}：${item.name}" }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
+                            Modifier.semantics { contentDescription = "${if (item.active) "暂停下载" else if (item.zipExport) "重新打包" else "继续下载"}：${item.name}" }, enabled = !state.busy) { Text(if (item.active) "暂停" else if (item.zipExport) "重新打包" else "继续下载") }
                         var more by remember(item.id) { mutableStateOf(false) }
                         Box {
                             TextButton({ more = true }, enabled = !state.busy) { Text("更多") }
@@ -135,6 +138,23 @@ import kotlinx.coroutines.withContext
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
+    }
+    state.zipPlan?.let { plan ->
+        var name by remember(plan) { mutableStateOf(plan.suggestedName) }
+        val error = zipExportNameError(name)
+        AlertDialog(onDismissRequest = model.downloads::cancelZipExport, title = { Text("ZIP打包下载") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${plan.files.size} 个所选项目 · ${plan.parentPath}", style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("ZIP文件名") }, singleLine = true,
+                    enabled = !state.busy, isError = error != null, supportingText = { Text(error ?: "保留 .zip 扩展名") })
+                Text("保存到：${downloadDirectoryLabel(state.tree)}", style = MaterialTheme.typography.bodySmall)
+                TextButton({ try { folder.launch(model.downloads.target.directoryUri(state.tree)) } catch (_: Exception) { model.downloads.reportError("无法打开下载目录选择器") } }, enabled = !state.busy) { Text("更改下载目录") }
+                Text("即时生成ZIP；暂停、断网或进程恢复后会从零重新打包，不支持断点追加。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            }
+        }, confirmButton = { TextButton({ model.downloads.confirmZipExport(name) }, enabled = !state.busy && error == null) { Text("开始打包下载") } },
+            dismissButton = { TextButton(model.downloads::cancelZipExport, enabled = !state.busy) { Text("取消") } })
     }
     if (settings) ModalBottomSheet(onDismissRequest = { settings = false }) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

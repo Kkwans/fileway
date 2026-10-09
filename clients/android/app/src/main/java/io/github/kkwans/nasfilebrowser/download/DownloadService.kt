@@ -16,14 +16,14 @@ import kotlinx.coroutines.*
 
 internal object DownloadNotice {
     const val CHANNEL = "fileway-downloads"
-    fun notification(context: Context, record: DownloadRecord?, jobId: Int = record?.jobId ?: 0): Notification {
+    fun notification(context: Context, record: DownloadRecord?, jobId: Int = record?.jobId ?: 0, unknownZip: Boolean = false): Notification {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "文件下载", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(context, jobId, Intent(context, MainActivity::class.java).putExtra("open_downloads", true)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val active = record == null || record.active
         val percent = record?.let { if (it.expectedSize > 0) (it.downloaded.toDouble() / it.expectedSize * 100).toInt().coerceIn(0, if (it.complete) 100 else 99) else 0 } ?: 0
-        val text = when (record?.status) { "completed" -> "下载完成"; "paused" -> "已暂停"; "failed" -> "下载失败，可在应用中重试"; "interrupted" -> "下载中断，已保存部分保留"; else -> "$percent% · 文件下载" }
+        val text = when (record?.status) { "completed" -> "下载完成"; "paused" -> if (record?.zipExport == true) "ZIP已暂停，恢复时从零重新打包" else "已暂停"; "failed" -> "下载失败，可在应用中重试"; "interrupted" -> if (record?.zipExport == true) "ZIP中断，恢复时从零重新打包" else "下载中断，已保存部分保留"; else -> if (record == null && unknownZip) "正在准备ZIP打包下载" else if (record?.zipExport == true && record.expectedSize < 0) "已接收 ${record.downloaded} 字节 · ZIP打包下载" else "$percent% · 文件下载" }
         return Notification.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_folder).setContentTitle(record?.name ?: "正在准备下载")
             .setContentText(text).setContentIntent(open).setOnlyAlertOnce(true).setOngoing(active)
             .apply {
@@ -41,10 +41,10 @@ object DownloadScheduler {
         if (Build.VERSION.SDK_INT >= 34) {
             val request = NetworkRequest.Builder().removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build()
             val info = JobInfo.Builder(record.jobId, ComponentName(context, DownloadJobService::class.java)).setUserInitiated(true)
-                .setRequiredNetwork(request).setEstimatedNetworkBytes((record.expectedSize - record.downloaded).coerceAtLeast(1), 0)
-                .setExtras(PersistableBundle().apply { putString("id", record.id) }).build()
+                .setRequiredNetwork(request).setEstimatedNetworkBytes(if (record.zipExport && record.expectedSize < 0) JobInfo.NETWORK_BYTES_UNKNOWN.toLong() else (record.expectedSize - record.downloaded).coerceAtLeast(1), 0)
+                .setExtras(PersistableBundle().apply { putString("id", record.id); putBoolean("zip-export", record.zipExport) }).build()
             check(context.getSystemService(JobScheduler::class.java).schedule(info) == JobScheduler.RESULT_SUCCESS) { "系统暂时无法启动下载，请保持应用可见后重试" }
-        } else context.startForegroundService(Intent(context, DownloadForegroundService::class.java).putExtra("id", record.id))
+        } else context.startForegroundService(Intent(context, DownloadForegroundService::class.java).putExtra("id", record.id).putExtra("zip-export", record.zipExport))
     }
     suspend fun pause(context: Context, id: String) {
         val dao = ClientDatabase.get(context).downloads(); val record = dao.get(id) ?: return
@@ -63,7 +63,7 @@ class DownloadJobService : JobService() {
         val id = params.extras.getString("id") ?: return false
         val run = Run(params); runs[params.jobId] = run
         // UIDT requires a notification promptly, before suspended database IO.
-        if (Build.VERSION.SDK_INT >= 34) setNotification(params, params.jobId, DownloadNotice.notification(applicationContext, null, params.jobId), JOB_END_NOTIFICATION_POLICY_REMOVE)
+        if (Build.VERSION.SDK_INT >= 34) setNotification(params, params.jobId, DownloadNotice.notification(applicationContext, null, params.jobId, params.extras.getBoolean("zip-export")), JOB_END_NOTIFICATION_POLICY_REMOVE)
         scope.launch {
             try {
                 val dao = ClientDatabase.get(applicationContext).downloads(); val record = dao.get(id)
@@ -109,7 +109,7 @@ class DownloadForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getStringExtra("id") ?: return START_NOT_STICKY
-        startForeground(7300000, DownloadNotice.notification(applicationContext, null, 7300000), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        startForeground(7300000, DownloadNotice.notification(applicationContext, null, 7300000, intent?.getBooleanExtra("zip-export", false) == true), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         if (!ids.add(id)) return START_NOT_STICKY
         scope.launch {
             try {

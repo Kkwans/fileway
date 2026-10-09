@@ -18,8 +18,8 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
-internal class DownloadSource(val api: NasSession, val url: String, private val released: () -> Unit) {
-    suspend fun close() { try { NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)) } finally { try { api.close() } finally { released() } } }
+internal class DownloadSource(val api: NasSession, val url: String, private val released: () -> Unit, private val asset: PreviewLease? = null) {
+    suspend fun close() { try { if (asset != null) asset.release() else NativeTransport.call(JSONObject().put("op", "revoke").put("url", url)) } finally { try { api.close() } finally { released() } } }
 }
 data class DownloadTransfer(val key: String, val bytes: Long, val elapsedMillis: Long)
 
@@ -52,6 +52,13 @@ class DownloadRuntime private constructor(private val context: Context) {
         try {
             api.persistTokens { renewed -> store.refreshToken(profile, account, renewed); Unit }
             val meta = saved.verification
+            if (record.zipExport) {
+                check(meta.getBoolean("isDir") && resourceWireBytes(meta.optString("wirePath")).contentEquals(resourceWireBytes(wire))) { "ZIP原父目录已变化，请重新创建打包任务" }
+                check(api.permissions().download) { "原账号没有下载权限" }
+                val lease = api.assetLease(zipExportEndpoint(record))
+                val key = java.util.UUID.randomUUID().toString()
+                return DownloadSource(api, lease.url, { sources.remove(key) }, lease).also { sources[key] = record.id to it }
+            }
             check(!meta.getBoolean("isDir") && meta.getLong("size") == record.expectedSize && meta.optString("modified") == record.modified) {
                 "源文件已变化，已下载部分保留，请新建下载"
             }
@@ -59,7 +66,7 @@ class DownloadRuntime private constructor(private val context: Context) {
             if (record.downloaded > 0) check(record.modified.isNotEmpty()) { "源服务未提供修改标识，无法安全追加，请新建下载" }
             val url = api.lease(record.path, record.wirePath, record.accountKey + "/download/" + record.identity)
             val key = java.util.UUID.randomUUID().toString()
-            return DownloadSource(api, url) { sources.remove(key) }.also { sources[key] = record.id to it }
+            return DownloadSource(api, url, { sources.remove(key) }).also { sources[key] = record.id to it }
         } catch (failure: Throwable) { withContext(NonCancellable) { api.close() }; throw failure }
     }
     fun launch(id: String, finished: () -> Unit): Boolean = synchronized(running) {
@@ -99,6 +106,7 @@ class DownloadRuntime private constructor(private val context: Context) {
             if (dao.claim(id, System.currentTimeMillis()) != 1) return@withTransaction null
             dao.get(id)
         } ?: return
+        if (record.zipExport) { writeZip(record); return }
         var input: androidx.media3.datasource.HttpDataSource? = null
         var access: DownloadSource? = null
         var target = record
@@ -174,6 +182,80 @@ class DownloadRuntime private constructor(private val context: Context) {
                 if (cancelled) "interrupted" else "failed", failure.message ?: "下载失败，已保存的部分保留", System.currentTimeMillis()) }
         } finally {
             inputs.remove(id)
+            try { runCatching { input?.close() } } finally { withContext(NonCancellable) { runCatching { access?.close() } } }
+        }
+    }
+    private suspend fun writeZip(record: DownloadRecord) {
+        var input: androidx.media3.datasource.HttpDataSource? = null
+        var access: DownloadSource? = null
+        var target = record
+        try {
+            val destinations = DownloadTarget(context)
+            access = source(record)
+            if (target.localUri.isEmpty()) {
+                val uri = destinations.allocate(target)
+                if (dao.allocated(record.id, record.generation, uri.toString(), System.currentTimeMillis()) != 1) {
+                    destinations.delete(target.copy(localUri = uri.toString())); throw CancellationException()
+                }
+                target = target.copy(localUri = uri.toString())
+            }
+            val descriptor = context.contentResolver.openFileDescriptor(Uri.parse(target.localUri), "rw") ?: throw IOException("无法写入ZIP，请检查下载目录授权")
+            var total = 0L
+            android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
+                // ZIP is generated anew each time. Never append another archive
+                // onto the partial bytes left by pause/process interruption.
+                output.channel.truncate(0); output.channel.position(0)
+                check(dao.progress(record.id, record.generation, 0, System.currentTimeMillis()) == 1) { "ZIP下载已被替换" }
+                val prefix = AtomicLong(0); prefixes[record.id] = prefix
+                input = DefaultHttpDataSource.Factory().setConnectTimeoutMs(15_000).setReadTimeoutMs(30_000).createDataSource()
+                inputs[record.id] = input!!
+                input!!.open(DataSpec.Builder().setUri(access!!.url).build())
+                val contentType = input!!.responseHeaders.entries.firstOrNull { it.key.equals("Content-Type", true) }?.value?.joinToString(";").orEmpty()
+                check(input!!.responseCode == 200 && contentType.contains("application/zip", true) && contentType.contains("fileway-selection=wire-v1", true)) {
+                    "服务器未确认所选项目的ZIP导出协议，请更新服务器后重试"
+                }
+                val buffer = ByteArray(128 * 1024); var checkpoint = 0L
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = input!!.read(buffer, 0, buffer.size)
+                    if (count == C.RESULT_END_OF_INPUT) break
+                    check(count >= 0 && total <= Long.MAX_VALUE - count) { "ZIP接收长度无效" }
+                    output.write(buffer, 0, count); total += count; prefix.set(total)
+                    val now = System.currentTimeMillis()
+                    if (now - checkpoint >= 1000) {
+                        output.fd.sync(); check(dao.progress(record.id, record.generation, total, now) == 1) { "ZIP下载已被替换" }
+                        access!!.api.token(); checkpoint = now
+                    }
+                }
+                output.fd.sync()
+                check(dao.progress(record.id, record.generation, total, System.currentTimeMillis()) == 1) { "ZIP下载已被替换" }
+            }
+            currentCoroutineContext().ensureActive()
+            val verified = context.contentResolver.openFileDescriptor(Uri.parse(target.localUri), "r") ?: error("ZIP无法重新读取验证，请检查下载目录")
+            val verificationContext = currentCoroutineContext()
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(verified).use { stream ->
+                val channel = stream.channel
+                check(channel.size() == total) { "ZIP本机文件长度不一致" }
+                verifyZipExport(total) { offset, count ->
+                    verificationContext.ensureActive()
+                    val bytes = ByteArray(count); val buffer = java.nio.ByteBuffer.wrap(bytes)
+                    channel.position(offset)
+                    while (buffer.hasRemaining()) check(channel.read(buffer) > 0) { "ZIP结构读取不完整" }
+                    bytes
+                }
+            }
+            access!!.api.token(); currentCoroutineContext().ensureActive()
+            check(dao.finalExport(record.id, record.generation, total, System.currentTimeMillis()) == 1) { "ZIP下载已被替换" }
+            target = target.copy(expectedSize = total, downloaded = total)
+            destinations.complete(target)
+            check(dao.finish(record.id, record.generation, "completed", "", System.currentTimeMillis()) == 1) { "ZIP下载已被替换" }
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) { dao.finish(record.id, record.generation, "interrupted", "ZIP已中断，恢复时会从零重新打包", System.currentTimeMillis()) }
+            throw cancelled
+        } catch (failure: Exception) {
+            withContext(NonCancellable) { dao.finish(record.id, record.generation, "failed", failure.message ?: "ZIP下载失败，请从零重新打包", System.currentTimeMillis()) }
+        } finally {
+            inputs.remove(record.id)
             try { runCatching { input?.close() } } finally { withContext(NonCancellable) { runCatching { access?.close() } } }
         }
     }

@@ -10,7 +10,8 @@ import kotlinx.coroutines.flow.*
 import java.util.UUID
 
 data class DownloadsState(val items: List<DownloadRecord> = emptyList(), val tree: String = "", val busy: Boolean = false, val error: String? = null, val notice: String? = null,
-    val speeds: Map<String, Long?> = emptyMap(), val folderRequest: Boolean = false, val preparing: Boolean = false, val scannedFiles: Int = 0, val folderPlan: FolderDownloadPlan? = null)
+    val speeds: Map<String, Long?> = emptyMap(), val folderRequest: Boolean = false, val preparing: Boolean = false, val scannedFiles: Int = 0, val folderPlan: FolderDownloadPlan? = null,
+    val zipPlan: ZipExportPlan? = null)
 
 private data class PreparedFolderDownloads(val binding: SessionContext, val current: () -> Boolean,
     val created: (ResourceRef) -> Unit, val tree: String, var plan: FolderDownloadPlan)
@@ -23,6 +24,45 @@ class DownloadController(private val context: Context, private val scope: Corout
     private var sampling: Job? = null
     private var actionJob: Job? = null
     private var prepared: PreparedFolderDownloads? = null
+    private var zipBinding: SessionContext? = null
+    private var zipCurrent: (() -> Boolean)? = null
+    fun enqueueZip(binding: SessionContext, files: List<ResourceRef>, current: () -> Boolean) = perform {
+        check(prepared == null && mutable.value.zipPlan == null) { "请先完成或取消当前下载计划" }
+        check(current()) { "ZIP下载来源已切换" }
+        check(binding.api.permissions().download) { "当前账号没有下载权限" }
+        val plan = withContext(Dispatchers.Default) { zipExportPlan(files.toList()) }
+        check(current()) { "ZIP下载来源已切换" }
+        val row = binding.api.request("GET", "/api/resources${plan.parentWire}?metadata=1")
+        check(row.getBoolean("isDir") && resourceWireBytes(row.optString("wirePath")).contentEquals(resourceWireBytes(plan.parentWire))) { "ZIP父目录已变化，请重新选择项目" }
+        check(current()) { "ZIP下载来源已切换" }
+        zipBinding = binding; zipCurrent = current
+        mutable.value = mutable.value.copy(zipPlan = plan)
+        "请确认ZIP文件名和下载目录；暂停后会从零重新打包"
+    }
+    fun cancelZipExport() {
+        if (mutable.value.busy) return
+        zipBinding = null; zipCurrent = null
+        mutable.value = mutable.value.copy(zipPlan = null)
+    }
+    fun confirmZipExport(name: String) = perform {
+        val plan = mutable.value.zipPlan ?: error("ZIP下载计划已关闭")
+        val binding = zipBinding ?: error("ZIP来源已关闭"); val current = zipCurrent ?: error("ZIP来源已关闭")
+        require(zipExportNameError(name) == null) { zipExportNameError(name).orEmpty() }
+        check(current()) { "ZIP下载来源已切换，请取消后重新选择" }
+        check(binding.api.permissions().download) { "当前账号没有下载权限" }
+        check(withContext(Dispatchers.IO) { target.hasAccess(target.selectedTree()) }) { "下载目录授权已失效，请重新选择目录" }
+        val now = System.currentTimeMillis()
+        val record = database.withTransaction {
+            check(current()) { "ZIP下载来源已切换" }
+            val next = dao.lastJobId() + 1; check(next in 7300001..7900000) { "下载任务编号已用完，请整理历史记录" }
+            DownloadRecord(UUID.randomUUID().toString(), next, binding.account.key, binding.profile.id, binding.profile.sourceRevision,
+                plan.parentPath, plan.parentWire, name, ZIP_EXPORT_TYPE, -1, "", plan.identity(), binding.profile.name + " · " + binding.account.username,
+                target.selectedTree(), createdAt = now, updatedAt = now).also { dao.insert(it) }
+        }
+        zipBinding = null; zipCurrent = null; mutable.value = mutable.value.copy(zipPlan = null)
+        try { DownloadScheduler.start(context, record) } catch (failure: Exception) { dao.command(record.id, "failed", now); throw failure }
+        "ZIP打包下载已加入任务；恢复时从零重新打包"
+    }
     fun visible(active: Boolean) {
         if (active == (sampling?.isActive == true)) return
         sampling?.cancel(); sampling = null
@@ -75,7 +115,7 @@ class DownloadController(private val context: Context, private val scope: Corout
     }
     fun enqueue(binding: SessionContext, file: ResourceRef, current: () -> Boolean) = enqueueAll(binding, listOf(file), current)
     fun enqueueAll(binding: SessionContext, files: List<ResourceRef>, current: () -> Boolean, onCreated: (ResourceRef) -> Unit = {}) = perform {
-        check(prepared == null) { "请先完成或取消当前下载计划" }
+        check(prepared == null && mutable.value.zipPlan == null) { "请先完成或取消当前下载计划" }
         val snapshot = files.distinctBy { it.wirePath.ifEmpty { it.path } }
         require(snapshot.isNotEmpty() && snapshot.all { it.downloadId.isEmpty() }) { "请选择服务器上的文件或文件夹" }
         check(current()) { "下载来源已切换" }
@@ -176,9 +216,9 @@ class DownloadController(private val context: Context, private val scope: Corout
         check(dao.command(record.id, "queued", System.currentTimeMillis()) == 1)
         try { DownloadScheduler.start(context, dao.get(record.id) ?: error("下载记录不存在")) }
         catch (failure: Exception) { dao.command(record.id, "failed", System.currentTimeMillis()); throw failure }
-        "正在继续下载"
+        if (current.zipExport) "ZIP正在从零重新打包；不完整的本机输出将被截断" else "正在继续下载"
     }
-    fun pause(record: DownloadRecord) = perform { DownloadScheduler.pause(context, record.id); "下载已暂停，已保存的部分保留" }
+    fun pause(record: DownloadRecord) = perform { DownloadScheduler.pause(context, record.id); if (record.zipExport) "ZIP已暂停，恢复时会从零重新打包" else "下载已暂停，已保存的部分保留" }
     fun remove(record: DownloadRecord, file: Boolean) = perform {
         val current = dao.get(record.id) ?: error("下载记录不存在")
         check(!current.active) { "请先暂停下载" }

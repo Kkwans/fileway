@@ -13,6 +13,7 @@ data class DownloadRecord(@PrimaryKey val id: String, val jobId: Int, val accoun
     @ColumnInfo(defaultValue = "''") val relativeDirectory: String = "") {
     val complete get() = status == "completed"
     val active get() = status in setOf("queued", "running")
+    val zipExport get() = type == ZIP_EXPORT_TYPE
 }
 
 @Dao interface DownloadDao {
@@ -20,7 +21,7 @@ data class DownloadRecord(@PrimaryKey val id: String, val jobId: Int, val accoun
     @Query("SELECT * FROM downloads WHERE id = :id") suspend fun get(id: String): DownloadRecord?
     @Query("SELECT COALESCE(MAX(jobId), 7300000) FROM downloads") suspend fun lastJobId(): Int
     @Insert suspend fun insert(record: DownloadRecord)
-    @Query("UPDATE downloads SET status = 'running', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status IN ('queued', 'interrupted', 'running')")
+    @Query("UPDATE downloads SET status = 'running', generation = generation + 1, error = '', expectedSize = CASE WHEN type = 'fileway.zip-export' THEN -1 ELSE expectedSize END, downloaded = CASE WHEN type = 'fileway.zip-export' THEN 0 ELSE downloaded END, updatedAt = :now WHERE id = :id AND status IN ('queued', 'interrupted', 'running')")
     suspend fun claim(id: String, now: Long): Int
     @Query("UPDATE downloads SET localUri = :uri, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'running'")
     suspend fun allocated(id: String, generation: Long, uri: String, now: Long): Int
@@ -28,6 +29,8 @@ data class DownloadRecord(@PrimaryKey val id: String, val jobId: Int, val accoun
     suspend fun progress(id: String, generation: Long, bytes: Long, now: Long): Int
     @Query("UPDATE downloads SET status = :status, error = :error, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'running'")
     suspend fun finish(id: String, generation: Long, status: String, error: String, now: Long): Int
+    @Query("UPDATE downloads SET expectedSize = :bytes, downloaded = :bytes, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'running' AND type = 'fileway.zip-export'")
+    suspend fun finalExport(id: String, generation: Long, bytes: Long, now: Long): Int
     @Query("UPDATE downloads SET status = :status, generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status != 'completed'")
     suspend fun command(id: String, status: String, now: Long): Int
     @Query("UPDATE downloads SET positionMs = :position, durationMs = :duration WHERE id = :id") suspend fun playback(id: String, position: Long, duration: Long)
