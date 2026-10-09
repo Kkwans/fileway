@@ -250,7 +250,9 @@ func tusPatchHandler(_ UploadCache) handleFunc {
 		if err != nil {
 			return errToStatus(err), err
 		}
-		defer file.Close()
+		// Error paths have already preserved the confirmed offset; final
+		// publication explicitly checks Sync and Close below.
+		defer func() { _ = file.Close() }()
 		if _, err := file.Seek(row.Offset, io.SeekStart); err != nil {
 			return 500, err
 		}

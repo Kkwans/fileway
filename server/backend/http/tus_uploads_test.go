@@ -171,9 +171,15 @@ func TestTusCrashIntentReconcilesActualPartAndExpiresOnlyOwnedPart(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Write([]byte("ef"))
-	f.Sync()
-	f.Close()
+	if _, err := f.Write([]byte("ef")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 	head := tusRequest(t, h, 1, "HEAD", target, id, 8, 0, nil)
 	expectTus(t, head, 200)
 	if head.Header().Get("Upload-Offset") != "6" {
@@ -192,7 +198,9 @@ func TestTusCrashIntentReconcilesActualPartAndExpiresOnlyOwnedPart(t *testing.T)
 		row = ownedTusRow(t, h, name, session)
 		part = mustUploadPath(row.PartWire)
 		if replace {
-			h.fs[1].Remove(part)
+			if err := h.fs[1].Remove(part); err != nil {
+				t.Fatal(err)
+			}
 			if err := afero.WriteFile(h.fs[1], part, []byte("replacement normal file"), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -234,11 +242,12 @@ func TestTusBoundsConcurrentRequestsAndFinalTargetConflict(t *testing.T) {
 	close(statuses)
 	ok, conflict := 0, 0
 	for status := range statuses {
-		if status == 204 {
+		switch status {
+		case 204:
 			ok++
-		} else if status == 409 {
+		case 409:
 			conflict++
-		} else {
+		default:
 			t.Fatal(status)
 		}
 	}
@@ -274,11 +283,12 @@ func TestTusConcurrentCreationReservesOnePhysicalTarget(t *testing.T) {
 	close(codes)
 	created, conflicts := 0, 0
 	for code := range codes {
-		if code == 201 {
+		switch code {
+		case 201:
 			created++
-		} else if code == 409 {
+		case 409:
 			conflicts++
-		} else {
+		default:
 			t.Fatal(code)
 		}
 	}

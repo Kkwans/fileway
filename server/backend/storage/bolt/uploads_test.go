@@ -37,7 +37,11 @@ func TestUploadSessionSurvivesDatabaseReopenWithOpaquePathAndZeroCheckpoint(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	store, err = NewStorage(db)
 	if err != nil {
 		t.Fatal(err)

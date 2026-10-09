@@ -18,7 +18,7 @@ func IsUploadPartPath(value string) bool {
 		part = strings.ToLower(part)
 		if strings.HasPrefix(part, UploadPartPrefix) && strings.HasSuffix(part, ".part") {
 			nonce := strings.TrimSuffix(strings.TrimPrefix(part, UploadPartPrefix), ".part")
-			if len(nonce) == 32 && strings.IndexFunc(nonce, func(r rune) bool { return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') }) < 0 {
+			if len(nonce) == 32 && strings.IndexFunc(nonce, func(r rune) bool { return (r < '0' || r > '9') && (r < 'a' || r > 'f') }) < 0 {
 				return true
 			}
 		}
