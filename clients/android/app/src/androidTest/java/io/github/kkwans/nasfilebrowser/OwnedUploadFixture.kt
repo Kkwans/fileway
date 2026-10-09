@@ -20,6 +20,11 @@ internal class OwnedUploadFixture : Closeable {
     val files = ConcurrentHashMap<String, ByteArray>()
     val lengths = ConcurrentHashMap<String, Long>()
     val uploads = ConcurrentHashMap<String, String>()
+    val published = ConcurrentHashMap<String, ByteArray>()
+    val deletes = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile var durableCancellation = false
+    @Volatile var includeTusVersion = true
+    @Volatile var deleteStatus = 0
     @Volatile var holdSecondChunk = false
     val held = CountDownLatch(1); val release = CountDownLatch(1); val lateAccepted = CountDownLatch(1)
     val url = "http://127.0.0.1:${server.localPort}"
@@ -52,13 +57,15 @@ internal class OwnedUploadFixture : Closeable {
         if (uri.path == "/api/resources/" && uri.rawQuery == null) { reply(200, JSONObject().put("items", JSONArray()).toString()); return }
         if (uri.path.startsWith("/api/resources") && method == "GET") {
             val path = uri.path.removePrefix("/api/resources")
-            val bytes = files[path]
+            val bytes = if (durableCancellation) published[path] ?: files[path]?.takeIf { it.size.toLong() == lengths[path] } else files[path]
             if (path != "/" && bytes == null) { reply(404, "{}"); return }
             reply(200, JSONObject().put("path", path).put("wirePath", SearchResult.encodePath(path)).put("name", path.substringAfterLast('/'))
                 .put("isDir", path == "/").put("size", bytes?.size ?: 0).put("modified", "owned-upload-v1").put("type", "blob").toString()); return
         }
         if (uri.path.startsWith("/api/tus/")) {
             val path = uri.path.removePrefix("/api/tus")
+            if (durableCancellation && method != "POST" && uploads[path] != headers["x-transfer-id"]) { reply(404, extra = mapOf("Tus-Resumable" to "1.0.0")); return }
+            val tus = if (includeTusVersion) mapOf("Tus-Resumable" to "1.0.0") else emptyMap()
             when (method) {
                 "POST" -> {
                     if (files.containsKey(path) && !uri.rawQuery.orEmpty().contains("override=true")) { reply(409, "{}"); return }
@@ -67,7 +74,16 @@ internal class OwnedUploadFixture : Closeable {
                 }
                 "HEAD" -> {
                     val saved = files[path]; if (saved == null) { reply(404); return }
-                    reply(200, extra = mapOf("Upload-Offset" to saved.size.toString(), "Upload-Length" to lengths.getValue(path).toString())); return
+                    reply(200, extra = tus + mapOf("Upload-Offset" to saved.size.toString(), "Upload-Length" to lengths.getValue(path).toString())); return
+                }
+                "DELETE" -> {
+                    deletes.incrementAndGet()
+                    if (deleteStatus != 0) { reply(deleteStatus, extra = tus); return }
+                    val saved = files[path]
+                    if (saved == null) { reply(404, extra = tus); return }
+                    if (saved.size.toLong() == lengths[path]) { reply(409, extra = tus); return }
+                    files.remove(path); uploads.remove(path); lengths.remove(path)
+                    reply(204, extra = tus); return
                 }
                 "PATCH" -> {
                     val old = files[path] ?: run { reply(404); return }

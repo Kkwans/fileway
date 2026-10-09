@@ -16,6 +16,32 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class UploadStorageTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    @Test fun cancellationFencesOldWritesPauseAndCleanupAcknowledgements(): Unit = runBlocking {
+        val room = Room.inMemoryDatabaseBuilder(context, ClientDatabase::class.java).build()
+        try {
+            val dao = room.uploads()
+            val row = UploadRecord("owned-cancel", 7900001, "owned", "owned", 0, "content://fixture.invalid/missing", "owned.bin", "blob", 8, 1,
+                "/owned.bin", "/owned.bin", "/", "Owned", createdAt = 1, updatedAt = 1)
+            dao.insert(row); assertEquals(1, dao.claim(row.id, 2))
+            val old = dao.get(row.id)!!.generation
+            assertEquals(1, dao.progress(row.id, old, 4, 3))
+            assertEquals(1, dao.beginCancel(row.id, 4))
+            val cancellation = dao.get(row.id)!!.generation
+            assertEquals(0, dao.progress(row.id, old, 8, 5))
+            assertEquals(0, dao.finish(row.id, old, "completed", "", 5))
+            assertEquals(0, dao.pause(row.id, 5))
+            assertEquals(0, dao.command(row.id, "queued", 5))
+            assertEquals(1, dao.canceled(row.id, cancellation, "cancel_failed", 4, "owned retry", 6))
+            assertEquals(1, dao.beginCancel(row.id, 7))
+            assertEquals(0, dao.canceled(row.id, cancellation, "canceled", 4, "", 8))
+            val latest = dao.get(row.id)!!.generation
+            assertEquals(1, dao.canceled(row.id, latest, "canceled", 4, "", 9))
+            assertEquals(0, dao.beginCancel(row.id, 10))
+            assertEquals(0, dao.command(row.id, "queued", 10))
+            assertFalse(dao.get(row.id)!!.canResume)
+            assertEquals(4L, dao.get(row.id)!!.uploaded)
+        } finally { room.close() }
+    }
     @Test fun migrationAddsUploadLedgerWithoutChangingExistingDownloadBytesOrDirectory(): Unit = runBlocking {
         val name = "fileway-owned-upload-migration-${UUID.randomUUID()}.db"
         var room: ClientDatabase? = null

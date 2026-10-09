@@ -23,7 +23,8 @@ internal object UploadNotice {
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val active = record == null || record.active
         val percent = record?.let { if (it.expectedSize > 0) (it.uploaded.toDouble() / it.expectedSize * 100).toInt().coerceIn(0, if (it.complete) 100 else 99) else 0 } ?: 0
-        val text = when (record?.status) { "completed" -> "上传完成"; "paused" -> "已暂停"; "failed" -> "上传失败，可在应用中重试"; "interrupted" -> "上传中断，已保存部分保留"; else -> "$percent% · 文件上传" }
+        val text = when (record?.status) { "completed" -> "上传完成"; "paused" -> "已暂停"; "failed" -> "上传失败，可在应用中重试"; "interrupted" -> "上传中断，已保存部分保留";
+            "canceling" -> "正在清理未完成片段"; "cancel_failed" -> "已停止，清理待重试"; "canceled" -> "已取消上传"; else -> "$percent% · 文件上传" }
         return Notification.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_folder).setContentTitle(record?.name ?: "正在准备上传")
             .setContentText(text).setContentIntent(open).setOnlyAlertOnce(true).setOngoing(active)
             .apply {
@@ -48,8 +49,11 @@ object UploadScheduler {
     }
     suspend fun pause(context: Context, id: String) {
         val dao = ClientDatabase.get(context).uploads(); val record = dao.get(id) ?: return
-        dao.command(id, "paused", System.currentTimeMillis())
-        UploadRuntime.get(context).cancel(id)
+        if (dao.pause(id, System.currentTimeMillis()) != 1) return
+        stop(context, record)
+    }
+    internal fun stop(context: Context, record: UploadRecord) {
+        UploadRuntime.get(context).cancel(record.id)
         context.getSystemService(JobScheduler::class.java).cancel(record.jobId)
         context.getSystemService(NotificationManager::class.java).cancel(record.jobId)
     }

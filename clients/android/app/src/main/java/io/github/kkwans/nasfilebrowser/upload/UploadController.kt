@@ -29,6 +29,9 @@ class UploadController(private val context: Context, private val scope: Coroutin
         dao.observe().first().filter { it.active }.forEach { row ->
             if (!UploadRuntime.get(context).isRunning(row.id) && scheduler.getPendingJob(row.jobId) == null) dao.command(row.id, "interrupted", System.currentTimeMillis())
         }
+        dao.observe().first().filter { it.status == "canceling" && !UploadRuntime.get(context).isCanceling(it.id) }.forEach { row ->
+            dao.canceled(row.id, row.generation, "cancel_failed", row.uploaded, "上次清理未得到确认，请重试核对原服务器", System.currentTimeMillis())
+        }
         var completed = emptySet<String>()
         dao.observe().collect { rows ->
             val done = rows.filter { it.complete }.map { it.id }.toSet()
@@ -187,7 +190,7 @@ class UploadController(private val context: Context, private val scope: Coroutin
     fun pause(row: UploadRecord) = change { UploadScheduler.pause(context, row.id); "上传已暂停，本机原文件保留" }
     fun resume(row: UploadRecord) = change {
         val item = dao.get(row.id) ?: error("上传记录不存在")
-        check(!item.complete && !item.active) { "上传正在进行或已经完成" }
+        check(item.canResume && !item.active) { "上传正在进行、已经结束或正在清理" }
         withTimeout(30_000) { UploadRuntime.get(context).awaitStopped(item.id) }
         check(dao.command(item.id, "queued", System.currentTimeMillis()) == 1)
         try { UploadScheduler.start(context, dao.get(item.id)!!) }
@@ -196,10 +199,11 @@ class UploadController(private val context: Context, private val scope: Coroutin
     }
     fun remove(row: UploadRecord) = change {
         val item = dao.get(row.id) ?: error("上传记录不存在")
-        check(!item.active && item.complete) { "未完成上传请先保留记录并核对服务器片段" }
+        check(!item.active && (item.complete || item.status == "canceled")) { "未完成清理请先保留记录并核对服务器片段" }
         check(dao.removeRecord(item.id) == 1)
         "上传记录已移除，本机原文件和服务器文件保留"
     }
+    fun cancel(row: UploadRecord) = change { UploadRuntime.get(context).cancelTask(row.id) }
     private fun change(block: suspend () -> String) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, error = null, notice = null)

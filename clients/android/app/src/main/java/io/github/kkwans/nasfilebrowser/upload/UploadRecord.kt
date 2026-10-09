@@ -14,6 +14,7 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
     val batchBytes: Long = 0, val folderUpload: Boolean = false) {
     val complete get() = status == "completed"
     val active get() = status in setOf("queued", "running")
+    val canResume get() = !complete && status !in setOf("canceled", "canceling", "cancel_failed")
 }
 
 @Dao interface UploadDao {
@@ -29,7 +30,13 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
     suspend fun progress(id: String, generation: Long, bytes: Long, now: Long): Int
     @Query("UPDATE uploads SET status = :status, error = :error, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'running'")
     suspend fun finish(id: String, generation: Long, status: String, error: String, now: Long): Int
-    @Query("UPDATE uploads SET status = :status, generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status != 'completed'")
+    @Query("UPDATE uploads SET status = :status, generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status NOT IN ('completed', 'canceled', 'canceling', 'cancel_failed')")
     suspend fun command(id: String, status: String, now: Long): Int
+    @Query("UPDATE uploads SET status = 'paused', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status IN ('queued', 'running', 'interrupted')")
+    suspend fun pause(id: String, now: Long): Int
+    @Query("UPDATE uploads SET status = 'canceling', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status NOT IN ('completed', 'canceled', 'canceling')")
+    suspend fun beginCancel(id: String, now: Long): Int
+    @Query("UPDATE uploads SET status = :status, uploaded = :bytes, error = :error, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'canceling'")
+    suspend fun canceled(id: String, generation: Long, status: String, bytes: Long, error: String, now: Long): Int
     @Query("DELETE FROM uploads WHERE id = :id AND status NOT IN ('queued', 'running')") suspend fun removeRecord(id: String): Int
 }

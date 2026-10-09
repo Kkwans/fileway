@@ -21,6 +21,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 data class UploadTransfer(val id: String, val bytes: Long, val accepted: Long, val progress: Long, val elapsedMillis: Long)
+internal data class UploadCancellation(val completed: Boolean, val notice: String)
 private data class UploadReply(val status: Int, val headers: Headers)
 
 /** Stream through the original Go network/account. The existing OkHttp stack
@@ -33,6 +34,7 @@ class UploadRuntime private constructor(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val streams = Semaphore(2)
     private val running = ConcurrentHashMap<String, Job>()
+    private val cleaning = ConcurrentHashMap<String, Job>()
     private val calls = ConcurrentHashMap<String, Call>()
     private val inputs = ConcurrentHashMap<String, InputStream>()
     private val active = ConcurrentHashMap<String, Pair<NasSession, PreviewLease>>()
@@ -61,6 +63,77 @@ class UploadRuntime private constructor(private val context: Context) {
     }
     fun isRunning(id: String) = running[id]?.isCompleted == false
     suspend fun awaitStopped(id: String) { running[id]?.join() }
+    internal fun isCanceling(id: String) = cleaning[id]?.isActive == true
+    internal suspend fun cancelTask(id: String): String {
+        val owner = currentCoroutineContext()[Job] ?: error("取消请求不可用")
+        check(cleaning.putIfAbsent(id, owner) == null) { "此上传正在清理，请稍候" }
+        try {
+            check(dao.beginCancel(id, System.currentTimeMillis()) == 1) { "上传已完成、已取消或正在清理，请刷新记录" }
+            val item = dao.get(id) ?: error("上传记录不存在")
+            UploadScheduler.stop(context, item)
+            try {
+                withTimeout(30_000) { awaitStopped(item.id) }
+                val result = cancelRemote(item)
+                check(dao.canceled(item.id, item.generation, if (result.completed) "completed" else "canceled",
+                    if (result.completed) item.expectedSize else item.uploaded, "", System.currentTimeMillis()) == 1) { "上传记录已变化，请重新核对" }
+                return result.notice
+            } catch (failure: Exception) {
+                withContext(NonCancellable) { dao.canceled(item.id, item.generation, "cancel_failed", item.uploaded,
+                    "本机上传已停止；${failure.message ?: "服务器清理未确认"}。可重试清理，原文件保留。", System.currentTimeMillis()) }
+                throw failure
+            }
+        } finally { cleaning.remove(id, owner) }
+    }
+    /** Cleanup uses only the durable original destination, never a local source
+     * URI or the server currently selected in the browser. */
+    internal suspend fun cancelRemote(record: UploadRecord): UploadCancellation {
+        if (record.protocol != "tus") return UploadCancellation(false, "本机上传已取消，服务器若已收到完整文件会保留")
+        val profile = store.profile(record.profileId) ?: error("原服务器档案已移除，未删除服务器文件")
+        check(profile.sourceRevision == record.sourceRevision) { "原服务器来源已变化，未向其他服务器发送清理请求" }
+        val account = store.account(record.accountKey) ?: error("原账号已移除，未删除服务器文件")
+        check(account.profileId == profile.id && account.sourceRevision == record.sourceRevision) { "原账号与服务器来源不匹配" }
+        if (profile.network == ConnectionMode.TAILNET) check(network.start().connected) { "请先连接原内嵌网络，再重试清理" }
+        val api = restoreSavedSession(store, profile, account, "/api/resources/").api
+        var lease: PreviewLease? = null
+        val operation = "cleanup-${record.id}-${java.util.UUID.randomUUID()}"
+        try {
+            api.persistTokens { token -> store.refreshToken(profile, account, token); Unit }
+            check(api.permissions().delete) { "原账号没有清理权限；本机上传已停止，可在权限恢复后重试" }
+            val capability = api.upload(record.targetWire, record.expectedSize, "fileway-" + record.id, "tus", record.overwrite, true)
+            lease = capability
+            val headers = mapOf("Tus-Resumable" to "1.0.0")
+            suspend fun inspect(): UploadReply {
+                val reply = send(operation, capability, "HEAD", headers = headers)
+                // Legacy Fileway tracked only paths and could delete a later
+                // replacement. Never issue DELETE without its modern protocol
+                // acknowledgement and the original transfer-id capability.
+                check(reply.headers["Tus-Resumable"] == "1.0.0") { "服务器不提供可验证的会话清理；已停止上传，服务器文件保留" }
+                if (reply.status in setOf(404, 410)) return reply
+                checkReply(reply, setOf(200))
+                val offset = reply.headers["Upload-Offset"]?.toLongOrNull()
+                check(reply.headers["Upload-Length"]?.toLongOrNull() == record.expectedSize &&
+                    offset != null && offset in 0..record.expectedSize) { "原上传身份或长度已变化，未删除服务器文件" }
+                return reply
+            }
+            suspend fun completed(reply: UploadReply): Boolean {
+                if (reply.status != 200 || reply.headers["Upload-Offset"]?.toLongOrNull() != record.expectedSize) return false
+                verifyCompleted(api, record)
+                return true
+            }
+            val before = inspect()
+            if (before.status in setOf(404, 410)) return UploadCancellation(false, "上传已取消，原未完成片段已不存在")
+            if (completed(before)) return UploadCancellation(true, "服务器已收到完整文件，已确认完成并保留")
+            val result = send(operation, capability, "DELETE", headers = headers)
+            check(result.headers["Tus-Resumable"] == "1.0.0") { "服务器未确认会话清理，原文件保留，请重试核对" }
+            if (result.status in setOf(204, 404, 410)) return UploadCancellation(false, "上传已取消，仅清理本次未完成片段，本机原文件保留")
+            if (result.status == 409 && completed(inspect())) return UploadCancellation(true, "服务器刚完成上传，完整文件已保留")
+            checkReply(result, setOf(204))
+            error("服务器未确认取消，请重试核对")
+        } finally { withContext(NonCancellable) {
+            calls.remove(operation)?.cancel()
+            runCatching { lease?.release() }; runCatching { api.close() }
+        } }
+    }
     suspend fun transfer(id: String): UploadTransfer? {
         val (api, lease) = active[id] ?: return null
         val stats = api.uploadStatistics(lease)
