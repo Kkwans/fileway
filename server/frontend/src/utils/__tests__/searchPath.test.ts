@@ -32,6 +32,17 @@ describe("normalizeSearchBase", () => {
 });
 
 describe("search route helpers", () => {
+  it("keeps a byte-identified parent across tag scope changes", () => {
+    expect(buildTagSearchQuery("/中文", "global", "/%D6%D0%CE%C4")).toEqual({
+      base: "/中文/",
+      scope: "global",
+      baseWirePath: "/%D6%D0%CE%C4",
+    });
+    expect(buildFilesRouteFromSearchBase("/中文/", "/%D6%D0%CE%C4")).toBe(
+      "/files/%D6%D0%CE%C4/"
+    );
+    expect(normalizeSearchBase("/folder/  ")).toBe("/folder/  /");
+  });
   it("returns to the exact file directory represented by the search base", () => {
     expect(buildFilesRouteFromSearchBase("/")).toBe("/files/");
     expect(buildFilesRouteFromSearchBase("/home/Kkwans/电影")).toBe(

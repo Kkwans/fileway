@@ -58,3 +58,57 @@ The root server workflow and the Linux multi-stage Dockerfile perform this step.
 Linux packaging is centralized in `deploy/linux/Dockerfile` and `compose.yml`.
 `profiles/rockchip.yml` and `profiles/ugreen.yml` add only optional hardware/vendor
 capabilities; there are no separate `custom` or RK3588 server build trees.
+
+## Resource identity across clients
+
+`path` and `name` in public responses are display text. `wirePath` encodes the
+original filesystem bytes, segment by segment, and is the resource identity
+within the authenticated server/account workspace. Equal display names need
+not identify the same file. Clients must retain the original wire path through
+selection, queues, navigation, media URLs and metadata refreshes.
+
+Decode a wire path exactly once. For example, a filename containing the literal
+text `%2F` uses `%252F` in its wire representation; it is not a directory
+separator. JSON `path` in the older protocol remains literal UTF-8 text and must
+not be URI-decoded. Traversal, encoded separators and NUL are rejected by the
+shared request validators. Windows drive/scoped-path validation remains at the
+filesystem boundary.
+
+- Favorites expose `wirePath` and `pathVerified`. Creating a favorite accepts
+  `wirePath`; an optional display `path` must agree with it. Older UTF-8 callers
+  can still send `path`. A client supporting older servers sends both fields
+  in its first UTF-8 request, rather than retrying a write after an error.
+- Tags retain the compatible `paths` display list and add ordered
+  `pathRefs: [{path, wirePath?, pathVerified}]`. References with equal display
+  text remain distinct. Adding or removing an association accepts `wirePath`
+  with the same UTF-8 compatibility rule. Addition checks current resource
+  access/existence; removing an owned association does not require the file
+  still to exist, so stale associations can be cleaned up.
+- `pathVerified: false` marks a historical reference whose original identity
+  cannot be recovered. Its display text must not be used to choose a similarly
+  named resource. Clients preserve these rows and explain the unavailable
+  action rather than guessing bytes or silently discarding the data.
+- `POST /api/resources/batch` is a read-only metadata lookup. It accepts
+  `wirePaths`, optionally with position-aligned compatible `paths`; the older
+  `paths`-only request remains supported. Requests contain 1–500 paths and at
+  most 1 MiB of JSON. Results preserve input order and include `path`,
+  `wirePath`, `status`, and either `item` or `error` for each input. An error for
+  one resource must not hide usable results for others. The endpoint does not
+  read contents, expand directories or generate previews. Clients split
+  requests to their transport budgets and match acknowledgements by wire
+  identity, including failed entries.
+
+Raw/preview URLs and media query parameters must preserve the encoded bytes
+through the server's one URI/query decode. Re-encoding an already encoded wire
+path selects a different literal filename. The legacy playback PUT and HLS
+POST contracts still require JSON UTF-8 paths; clients must reject an opaque
+source for these operations until an explicit wire contract is supported,
+rather than submitting its display-name sibling.
+
+Metadata synchronization after rename, move, deletion or restore resolves each
+known owner's relative references in that owner's current filesystem workspace.
+Different workspaces' equal relative paths are independent; references to one
+shared resource are translated to each workspace's own relative path. Moving
+out removes existing references without creating new references in another
+workspace. Unknown owners or unverifiable historical bytes are not inferred.
+Public display DTOs are separate from byte-preserving persistence records.

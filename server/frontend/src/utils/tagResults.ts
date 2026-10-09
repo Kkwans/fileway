@@ -1,16 +1,21 @@
-import { normalizeTagPath } from "./tagPath";
-import { encodePath } from "./url";
+import { normalizeFileKey } from "./fileListing";
+import { favoriteWirePath } from "./favoritePersistence";
 
 /** 将标签中保存的 NAS 路径转换成可直接跳转的文件路由。 */
-export function buildTaggedPathUrl(path: string, isDir: boolean): string {
-  const normalized = normalizeTagPath(path);
+export function buildTaggedPathUrl(
+  path: string,
+  isDir: boolean,
+  wirePath?: string
+): string {
+  const wire = favoriteWirePath({ path, wirePath });
+  if (!wire) throw new Error("标签原始路径无法确认，请重新选择");
   const suffix = isDir ? "/" : "";
-  return `/files${encodePath(normalized)}${suffix}`;
+  return `/files${wire}${suffix}`;
 }
 
 /** 取标签路径最后一段作为结果标题，同时兼容历史编码路径。 */
 export function getTaggedPathName(path: string): string {
-  const normalized = normalizeTagPath(path);
+  const normalized = normalizeFileKey(path);
   return normalized.split("/").filter(Boolean).pop() || "/";
 }
 
@@ -19,8 +24,8 @@ export function getTaggedPathName(path: string): string {
  * 同时始终移除结果本身的文件名，避免标题和路径重复。
  */
 export function getResultParentPath(path: string, base = "/"): string {
-  const normalizedPath = normalizeTagPath(path);
-  const basePath = normalizeTagPath(base);
+  const normalizedPath = normalizeFileKey(path);
+  const basePath = normalizeFileKey(base);
   const normalizedBase = basePath.endsWith("/") ? basePath : `${basePath}/`;
 
   let relativePath = normalizedPath;
@@ -36,9 +41,14 @@ export function getResultParentPath(path: string, base = "/"): string {
 }
 
 /** 构建“打开文件所在位置”使用的父目录文件路由。 */
-export function buildResultParentRoute(path: string): string {
-  const normalized = normalizeTagPath(path).replace(/\/+$/, "");
+export function buildResultParentRoute(
+  path: string,
+  wirePath?: string
+): string {
+  const wire = favoriteWirePath({ path, wirePath });
+  if (!wire) throw new Error("标签原始路径无法确认，不能按显示名称打开位置");
+  const normalized = wire.replace(/\/+$/, "");
   const separator = normalized.lastIndexOf("/");
   const parent = separator > 0 ? normalized.slice(0, separator) : "/";
-  return parent === "/" ? "/files/" : `/files${encodePath(parent)}/`;
+  return parent === "/" ? "/files/" : `/files${parent}/`;
 }

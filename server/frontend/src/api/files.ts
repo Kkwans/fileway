@@ -26,6 +26,8 @@ import urlUtils from "@/utils/url";
 import * as transfersApi from "./transfers";
 import { batchRenameWireKey } from "@/utils/batchRename";
 import { mediaResourceURL } from "@/utils/mediaResource";
+import { favoriteIdentity } from "@/utils/favoritePersistence";
+import { tagAssociationBody } from "@/utils/tagPersistence";
 
 export interface BatchRenameItem {
   from: string;
@@ -117,18 +119,66 @@ export async function fetchAll(url: string): Promise<RecursiveEntry[]> {
 
 export async function fetchBatch(
   paths: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  wirePaths?: string[]
 ): Promise<BatchResourceResult[]> {
+  if (
+    !paths.length ||
+    paths.length > 500 ||
+    (wirePaths && wirePaths.length !== paths.length)
+  )
+    throw new Error("批量资源最多500项，路径数量必须一致");
+  const refs = wirePaths?.map((wirePath, index) => ({
+    path: paths[index],
+    wirePath,
+  }));
+  const targets = refs?.map(tagAssociationBody);
+  const body = targets
+    ? {
+        wirePaths: targets.map((target) => target.wirePath),
+        ...(targets.every((target) => target.path !== undefined)
+          ? { paths }
+          : {}),
+      }
+    : { paths };
+  if (new TextEncoder().encode(JSON.stringify(body)).length > 768 * 1024) {
+    if (paths.length < 2) throw new Error("资源路径过长，无法读取元数据");
+    const middle = Math.floor(paths.length / 2);
+    const left = await fetchBatch(
+      paths.slice(0, middle),
+      signal,
+      wirePaths?.slice(0, middle)
+    );
+    const right = await fetchBatch(
+      paths.slice(middle),
+      signal,
+      wirePaths?.slice(middle)
+    );
+    return [...left, ...right].map((row, index) => {
+      if (row.item) row.item.index = index;
+      return row;
+    });
+  }
   const res = await fetchURL("/api/resources/batch", {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ paths }),
+    body: JSON.stringify(body),
   });
   const results = (await res.json()) as BatchResourceResult[];
+  if (!Array.isArray(results) || results.length !== paths.length)
+    throw new Error("批量资源响应数量不匹配");
   return results.map((result, index) => {
+    if (
+      refs &&
+      (favoriteIdentity(result) === null ||
+        favoriteIdentity(result) !== favoriteIdentity(refs[index]))
+    )
+      throw new Error("批量资源返回的原始路径顺序不匹配");
     if (!result.item) return result;
     const item = result.item;
+    if (refs && favoriteIdentity(item) !== favoriteIdentity(refs[index]))
+      throw new Error("标签资源原始路径不匹配");
     item.index = index;
     item.url = `/files${item.wirePath ?? urlUtils.encodePath(item.path)}${item.isDir ? "/" : ""}`;
     return { ...result, item };

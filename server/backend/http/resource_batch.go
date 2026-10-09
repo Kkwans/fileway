@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
@@ -12,7 +13,8 @@ import (
 const maxBatchResourcePaths = 500
 
 type batchResourceRequest struct {
-	Paths []string `json:"paths"`
+	Paths     []string `json:"paths"`
+	WirePaths []string `json:"wirePaths,omitempty"`
 }
 
 type batchResourceResult struct {
@@ -20,6 +22,47 @@ type batchResourceResult struct {
 	Status int             `json:"status"`
 	Item   *files.FileInfo `json:"item,omitempty"`
 	Error  string          `json:"error,omitempty"`
+}
+
+func (result batchResourceResult) MarshalJSON() ([]byte, error) {
+	type resultAlias batchResourceResult
+	return json.Marshal(struct {
+		resultAlias
+		Path     string `json:"path"`
+		WirePath string `json:"wirePath"`
+	}{resultAlias(result), files.DisplayPath(result.Path), files.EncodeWirePath(result.Path)})
+}
+
+func batchResourcePaths(request batchResourceRequest) ([]string, error) {
+	if request.WirePaths == nil {
+		if err := validateBatchResourcePaths(request.Paths); err != nil {
+			return nil, err
+		}
+		for _, path := range request.Paths {
+			if path == "" || strings.ContainsRune(path, '\x00') {
+				return nil, fmt.Errorf("批量资源路径无效")
+			}
+		}
+		return request.Paths, nil
+	}
+	if err := validateBatchResourcePaths(request.WirePaths); err != nil {
+		return nil, err
+	}
+	if request.Paths != nil && len(request.Paths) != len(request.WirePaths) {
+		return nil, fmt.Errorf("批量显示路径与原始路径数量不一致")
+	}
+	paths := make([]string, len(request.WirePaths))
+	for index, wire := range request.WirePaths {
+		path, err := decodeResourceWirePath(wire)
+		if err != nil {
+			return nil, err
+		}
+		if request.Paths != nil && pathmeta.Clean(request.Paths[index]) != files.DisplayPath(path) {
+			return nil, fmt.Errorf("批量显示路径与原始路径不一致")
+		}
+		paths[index] = path
+	}
+	return paths, nil
 }
 
 type batchResourceResolver func(normalizedPath string) (*files.FileInfo, error)
@@ -60,11 +103,12 @@ var resourceBatchHandler = withUser(func(w http.ResponseWriter, r *http.Request,
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		return http.StatusBadRequest, fmt.Errorf("批量资源请求格式无效: %w", err)
 	}
-	if err := validateBatchResourcePaths(request.Paths); err != nil {
+	paths, err := batchResourcePaths(request)
+	if err != nil {
 		return http.StatusBadRequest, err
 	}
 
-	results := resolveBatchResources(request.Paths, func(normalizedPath string) (*files.FileInfo, error) {
+	results := resolveBatchResources(paths, func(normalizedPath string) (*files.FileInfo, error) {
 		return files.NewFileInfo(&files.FileOptions{
 			Fs:         d.user.Fs,
 			Path:       normalizedPath,

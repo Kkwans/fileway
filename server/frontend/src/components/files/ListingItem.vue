@@ -159,6 +159,7 @@
       >
         <TagPicker
           :path="path || ''"
+          :wire-path="wirePath"
           @manage="openTagManager"
           @close="closeTagPicker"
         />
@@ -399,7 +400,7 @@ const showMobileActionSheet = ref(false);
 
 const pathTags = computed(() => {
   if (!props.path) return [];
-  return tagsStore.getTagsForPath(props.path);
+  return tagsStore.getTagsForPath(props.path, props.wirePath);
 });
 const renderTagSlot = computed(() =>
   shouldRenderListingTagSlot(props.viewMode, pathTags.value.length)

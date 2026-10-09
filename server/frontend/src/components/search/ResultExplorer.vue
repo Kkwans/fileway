@@ -79,7 +79,7 @@
         <div v-else class="result-explorer-list">
           <component
             v-for="result in results"
-            :key="result.path"
+            :key="result.key || result.wirePath || result.path"
             :is="result.error ? 'div' : RouterLink"
             :to="result.error ? undefined : resultRoute(result)"
             class="result-explorer-item"
@@ -167,6 +167,9 @@ import { resourceOpenRoute } from "@/utils/archivePath";
 
 export type ExplorerResult = {
   path: string;
+  wirePath?: string;
+  pathVerified?: boolean;
+  key?: string;
   name: string;
   dir: boolean;
   size: number | null;
@@ -228,6 +231,7 @@ function resultRoute(result: ExplorerResult) {
     isDir: result.dir,
     path: result.path,
     url: result.url,
+    wirePath: result.wirePath,
   });
 }
 

@@ -52,8 +52,10 @@
 <script setup lang="ts">
 import AppIcon from "@/components/ui/AppIcon.vue";
 import { useTagsStore } from "@/stores/tags";
+import { inject } from "vue";
 const props = defineProps<{
   path: string;
+  wirePath?: string;
 }>();
 
 const emit = defineEmits<{
@@ -62,15 +64,28 @@ const emit = defineEmits<{
 }>();
 
 const tagsStore = useTagsStore();
+const sourceScope = tagsStore.sourceScope;
+const $showError = inject<IToastError>("$showError");
 
 function isAssigned(tagId: string): boolean {
-  const cleaned = props.path.replace(/\/+$/, "");
-  const tag = tagsStore.tags.find((t) => t.id === tagId);
-  return tag ? tag.paths.includes(cleaned) : false;
+  return tagsStore
+    .getTagsForPath(props.path, props.wirePath)
+    .some((tag) => tag.id === tagId);
 }
 
-function toggle(tagId: string) {
-  tagsStore.togglePathInTag(tagId, props.path);
+async function toggle(tagId: string) {
+  if (tagsStore.sourceScope !== sourceScope) {
+    $showError?.(new Error("文件来源已切换，请重新选择文件"));
+    return;
+  }
+  const saved = await tagsStore.togglePathInTag(
+    tagId,
+    props.path,
+    props.wirePath,
+    sourceScope
+  );
+  if (!saved && tagsStore.sourceScope === sourceScope)
+    $showError?.(new Error("标签关联未获确认，请刷新核对"));
 }
 
 function openManager() {

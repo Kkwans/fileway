@@ -43,7 +43,7 @@ internal fun metadataColor(value: String, fallback: Color): Color = try { Color(
     val enabled = !state.loading && !state.changing && !client.busy
     LaunchedEffect(state.scope) { model.tags.refresh() }
     LaunchedEffect(state.items) { if (state.items.none { it.id == chosen }) chosen = state.items.firstOrNull()?.id }
-    LaunchedEffect(tag, currentOnly, client.path) { tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null) } }
+    LaunchedEffect(tag, currentOnly, client.path, client.wirePath) { tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null, parentWire = if (currentOnly) client.wirePath else null) } }
     LibraryScaffold(model, LibrarySection.TAGS, actions = {
         TextButton({ creating = true }, enabled = enabled && state.loaded) { Text("新建标签") }
         IconButton(model.tags::refresh, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新标签") }
@@ -72,25 +72,26 @@ internal fun metadataColor(value: String, fallback: Color): Color = try { Color(
                 Text("${state.paths.size} / ${state.pathTotal} 个关联", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton({ model.tags.filter(selected.id, currentOnly.not()); model.tab("files") }, enabled = enabled) { Text("筛选文件页") }
             } }
-            LibraryMessage(state.pathsError, null, state.pathsLoading) { tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null) } }
+            LibraryMessage(state.pathsError, null, state.pathsLoading) { tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null, parentWire = if (currentOnly) client.wirePath else null) } }
             val candidates = state.paths.mapNotNull { it.file }
+            val sourceScope = state.scope
             LazyColumn(Modifier.weight(1f).semantics { contentDescription = "标签关联路径" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.paths.isEmpty() && !state.pathsLoading && state.pathsError == null) item { Text(if (currentOnly) "这个目录还没有直接标记的文件。" else "还没有关联路径。从文件详情中添加标记。", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                items(state.paths, key = { it.path }) { row ->
+                items(state.paths, key = { it.key }) { row ->
                     val file = row.file
                     if (file != null) FileEntry(model, file, FileLayout.LIST, enabled, {
                         if (file.directory) { model.tags.filter(tag?.id, true); model.tab("files") }
-                        model.openTagged(file, candidates)
+                        model.openTagged(file, candidates, sourceScope)
                     }, { details = file }, location = file.path.substringBeforeLast('/').ifEmpty { "/" })
                     else Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(row.path, maxLines = 3, overflow = TextOverflow.Ellipsis)
                             Text(row.error.orEmpty(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                            tag?.let { value -> TextButton({ model.tags.removePath(value, row.path) }, enabled = enabled) { Text("取消此关联") } }
+                            tag?.let { value -> TextButton({ model.tags.removePath(value, row.ref, sourceScope) }, enabled = enabled) { Text("取消此关联") } }
                         }
                     }
                 }
-                if (state.paths.size < state.pathTotal) item { TextButton({ tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null, true) } }, enabled = !state.pathsLoading && enabled,
+                if (state.paths.size < state.pathTotal) item { TextButton({ tag?.let { model.tags.loadPaths(it.id, if (currentOnly) client.path else null, true, if (currentOnly) client.wirePath else null) } }, enabled = !state.pathsLoading && enabled,
                     modifier = Modifier.fillMaxWidth()) { Text("加载更多关联") } }
             }
         }

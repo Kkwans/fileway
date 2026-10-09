@@ -2,8 +2,21 @@ package io.github.kkwans.nasfilebrowser.data
 
 import org.junit.Assert.*
 import org.junit.Test
+import io.github.kkwans.nasfilebrowser.app.ResourceRef
 
 class TagPathsTest {
+    @Test fun sameDisplayReferencesAndOpaqueParentPrefixesAreIndependent() {
+        val opaque = tagPathRef("/中文/中.txt", "/%D6%D0%CE%C4/%D6%D0.txt", true)
+        val utf8 = tagPathRef("/中文/中.txt", "/%E4%B8%AD%E6%96%87/%E4%B8%AD.txt", true)
+        val file = ResourceRef(opaque.path, opaque.wirePath, "中.txt", false, "", 0)
+        assertTrue(taggedResourceMatches(file, listOf(opaque)))
+        assertFalse(taggedResourceMatches(file, listOf(utf8)))
+        assertTrue(taggedResourceMatches(ResourceRef("/中文", "/%D6%D0%CE%C4", "中文", true, "", 0), listOf(opaque), true))
+        assertFalse(taggedResourceMatches(ResourceRef("/中文", "/%E4%B8%AD%E6%96%87", "中文", true, "", 0), listOf(opaque), true))
+        assertFalse(tagPathRef("/lost�").openable)
+        assertTrue(tagPathRef("/lost�", "/lost%EF%BF%BD", true).openable)
+        assertFalse(tagPathRef("/lost�", "/lost%EF%BF%BD", false).openable)
+    }
     @Test fun globalTagNavigationIncludesAncestorsAndChildrenButNotSimilarPrefixes() {
         val paths = listOf("/films/中文.mkv", "/photos/album")
         assertTrue(taggedPathMatches("/films", paths, true))

@@ -625,7 +625,7 @@
             >
               <item
                 v-for="item in section.items"
-                :key="base64(item.path)"
+                :key="base64(item.wirePath || item.path)"
                 v-bind="item"
                 :view-mode="currentViewMode"
                 :visible-keys="visibleItemKeys"
@@ -709,7 +709,7 @@
               </button>
               <Item
                 v-for="item in section.items"
-                :key="base64(item.path)"
+                :key="base64(item.wirePath || item.path)"
                 v-bind="item"
                 view-mode="details"
                 :visible-keys="visibleItemKeys"
@@ -849,7 +849,7 @@
                   </tr>
                   <DetailedTableRow
                     v-for="item in section.items"
-                    :key="base64(item.path)"
+                    :key="base64(item.wirePath || item.path)"
                     v-bind="item"
                     :visible-keys="visibleItemKeys"
                     :register-item="registerItem"
@@ -1351,7 +1351,7 @@ const items = computed(() => {
         : "/" + item.name);
 
     // Apply tag filter (files and directories)
-    if (!tagsStore.matchesFilter(fullPath)) {
+    if (!tagsStore.matchesFilter(fullPath, item.wirePath)) {
       return; // skip this item
     }
 

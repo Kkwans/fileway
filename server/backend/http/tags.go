@@ -3,11 +3,15 @@ package fbhttp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 
 	fberrors "github.com/Kkwans/nas-file-browser/backend/errors"
+	"github.com/Kkwans/nas-file-browser/backend/files"
+	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 	"github.com/Kkwans/nas-file-browser/backend/tags"
 )
 
@@ -22,7 +26,25 @@ type tagUpdateRequest struct {
 }
 
 type tagPathRequest struct {
-	Path string `json:"path"`
+	Path     string `json:"path"`
+	WirePath string `json:"wirePath,omitempty"`
+}
+
+func tagResourcePath(request tagPathRequest) (string, error) {
+	if request.WirePath == "" {
+		if request.Path == "" || strings.ContainsRune(request.Path, '\x00') {
+			return "", fberrors.ErrInvalidRequestParams
+		}
+		return pathmeta.Clean(request.Path), nil
+	}
+	path, err := decodeResourceWirePath(request.WirePath)
+	if err != nil {
+		return "", err
+	}
+	if request.Path != "" && pathmeta.Clean(request.Path) != files.DisplayPath(path) {
+		return "", fmt.Errorf("标签显示路径与原始路径不一致")
+	}
+	return path, nil
 }
 
 var tagsGetHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
@@ -116,11 +138,17 @@ var tagAddPathHandler = withUser(func(w http.ResponseWriter, r *http.Request, d 
 		return http.StatusBadRequest, err
 	}
 
-	if req.Path == "" {
-		return http.StatusBadRequest, fberrors.ErrInvalidRequestParams
+	path, err := tagResourcePath(req)
+	if err != nil {
+		return http.StatusBadRequest, err
 	}
-
-	tag, err := d.store.Tags.AddPath(d.user.ID, id, req.Path)
+	if !d.Check(path) {
+		return http.StatusForbidden, fmt.Errorf("没有访问标签路径的权限")
+	}
+	if _, err := d.user.Fs.Stat(path); err != nil {
+		return errToStatus(err), err
+	}
+	tag, err := d.store.Tags.AddPath(d.user.ID, id, path)
 	if err != nil {
 		if errors.Is(err, tags.ErrNotExist) {
 			return http.StatusNotFound, fberrors.ErrNotExist
@@ -144,11 +172,13 @@ var tagRemovePathHandler = withUser(func(w http.ResponseWriter, r *http.Request,
 		return http.StatusBadRequest, err
 	}
 
-	if req.Path == "" {
-		return http.StatusBadRequest, fberrors.ErrInvalidRequestParams
+	path, err := tagResourcePath(req)
+	if err != nil {
+		return http.StatusBadRequest, err
 	}
-
-	tag, err := d.store.Tags.RemovePath(d.user.ID, id, req.Path)
+	// Unlinking owned metadata must still work after the file was moved,
+	// deleted, or its access rule changed. It never reads or deletes the file.
+	tag, err := d.store.Tags.RemovePath(d.user.ID, id, path)
 	if err != nil {
 		if errors.Is(err, tags.ErrNotExist) {
 			return http.StatusNotFound, fberrors.ErrNotExist

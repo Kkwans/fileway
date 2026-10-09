@@ -1,11 +1,17 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useAuthStore } from "@/stores/auth";
 import { fetchURL, StatusError } from "@/api/utils";
-import { replaceTagByName } from "@/utils/tagPersistence";
+import {
+  replaceTagByName,
+  tagReferences,
+  tagAssociationBody,
+  type TagPathRef,
+} from "@/utils/tagPersistence";
 import {
   resolvePersistenceState,
   userStorageKey,
+  favoriteIdentity,
 } from "@/utils/favoritePersistence";
 import {
   isDescendantPath,
@@ -21,6 +27,7 @@ export interface Tag {
   name: string;
   color: string;
   paths: string[];
+  pathRefs?: TagPathRef[];
   createdAt: number;
 }
 
@@ -30,10 +37,12 @@ const STORAGE_KEY = "nas-file-browser-tags";
 const API_BASE = "/api/tags";
 
 function normalizeTag(tag: Tag): Tag {
+  const refs = tag.pathRefs ? tagReferences(tag) : undefined;
   return {
     ...tag,
     color: normalizeTagColor(tag.color),
-    paths: (tag.paths || []).map(normalizeTagPath),
+    paths: [...(tag.paths || [])],
+    ...(refs ? { pathRefs: refs, paths: refs.map((ref) => ref.path) } : {}),
   };
 }
 
@@ -43,21 +52,49 @@ export const useTagsStore = defineStore("tags", () => {
   const loaded = ref(false);
   const activeFilter = ref<string | null>(null); // tag id for filtering
   const filterMode = ref<TagFilterMode>("global");
+  const owner = () =>
+    `${authStore.user?.id ?? "anonymous"}/${authStore.user?.scope ?? ""}`;
+  const sourceScope = computed(owner);
+  watch(
+    owner,
+    () => {
+      tags.value = [];
+      loaded.value = false;
+      activeFilter.value = null;
+    },
+    { flush: "sync" }
+  );
 
-  const snapshotTags = () =>
-    tags.value.map((tag) => ({ ...tag, paths: [...tag.paths] }));
+  const snapshotTags = () => ({
+    owner: owner(),
+    rows: tags.value.map((tag) => ({
+      ...tag,
+      paths: [...tag.paths],
+      ...(tag.pathRefs
+        ? { pathRefs: tag.pathRefs.map((ref) => ({ ...ref })) }
+        : {}),
+    })),
+  });
 
-  function restoreTags(snapshot: Tag[]) {
-    tags.value = snapshot.map((tag) => ({ ...tag, paths: [...tag.paths] }));
+  function restoreTags(snapshot: ReturnType<typeof snapshotTags>) {
+    if (owner() !== snapshot.owner) return;
+    tags.value = snapshot.rows.map((tag) => ({
+      ...tag,
+      paths: [...tag.paths],
+      ...(tag.pathRefs
+        ? { pathRefs: tag.pathRefs.map((ref) => ({ ...ref })) }
+        : {}),
+    }));
     saveToLocalStorage();
   }
 
   // --- API helpers ---
 
-  async function apiGet(): Promise<Tag[] | null> {
+  async function apiGet(expectedOwner = owner()): Promise<Tag[] | null> {
     try {
       const res = await fetchURL(API_BASE, {});
       const data = (await res.json()) as Tag[];
+      if (owner() !== expectedOwner) return null;
       return data.map(normalizeTag);
     } catch {
       return null;
@@ -65,13 +102,15 @@ export const useTagsStore = defineStore("tags", () => {
   }
 
   async function apiCreate(tag: Tag): Promise<Tag | null> {
+    const expectedOwner = owner();
     try {
       const res = await fetchURL(API_BASE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(tag),
       });
-      return normalizeTag(await res.json());
+      const result = await res.json();
+      return owner() === expectedOwner ? normalizeTag(result) : null;
     } catch {
       return null;
     }
@@ -112,14 +151,22 @@ export const useTagsStore = defineStore("tags", () => {
 
   async function apiAddPath(
     tagId: string,
-    path: string
+    path: string,
+    wirePath?: string
   ): Promise<{ ok: boolean; status?: number }> {
     try {
-      await fetchURL(`${API_BASE}/${tagId}/paths`, {
+      const response = await fetchURL(`${API_BASE}/${tagId}/paths`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify(tagAssociationBody({ path, wirePath })),
       });
+      const saved = normalizeTag(await response.json());
+      const identity = favoriteIdentity({ path, wirePath });
+      if (
+        saved.id !== tagId ||
+        !tagReferences(saved).some((ref) => favoriteIdentity(ref) === identity)
+      )
+        return { ok: false };
       return { ok: true };
     } catch (error) {
       return {
@@ -131,14 +178,22 @@ export const useTagsStore = defineStore("tags", () => {
 
   async function apiRemovePath(
     tagId: string,
-    path: string
+    path: string,
+    wirePath?: string
   ): Promise<{ ok: boolean; status?: number }> {
     try {
-      await fetchURL(`${API_BASE}/${tagId}/paths`, {
+      const response = await fetchURL(`${API_BASE}/${tagId}/paths`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify(tagAssociationBody({ path, wirePath })),
       });
+      const saved = normalizeTag(await response.json());
+      const identity = favoriteIdentity({ path, wirePath });
+      if (
+        saved.id !== tagId ||
+        tagReferences(saved).some((ref) => favoriteIdentity(ref) === identity)
+      )
+        return { ok: false };
       return { ok: true };
     } catch (error) {
       return {
@@ -151,7 +206,9 @@ export const useTagsStore = defineStore("tags", () => {
   // --- localStorage helpers ---
 
   function scopedStorageKey(): string {
-    return userStorageKey(STORAGE_KEY, authStore.user?.id ?? "anonymous");
+    // Relative references belong to the current workspace. An older user-only
+    // cache has no scope provenance and must not be imported into a new scope.
+    return userStorageKey(STORAGE_KEY, owner());
   }
 
   function saveToLocalStorage() {
@@ -176,13 +233,15 @@ export const useTagsStore = defineStore("tags", () => {
 
   // Load tags: API first, fallback to localStorage
   async function loadTags() {
+    const expectedOwner = owner();
     const cachedTags = loadFromLocalStorage();
     const apiData = await apiGet();
+    if (owner() !== expectedOwner) return;
     const state = resolvePersistenceState(apiData ?? [], cachedTags);
     tags.value = apiData === null ? cachedTags : state.data;
     saveToLocalStorage();
     if (state.shouldSync) await syncTags();
-    loaded.value = true;
+    if (owner() === expectedOwner) loaded.value = true;
   }
 
   /**
@@ -190,10 +249,11 @@ export const useTagsStore = defineStore("tags", () => {
    * 返回 404 后界面仍保留错误状态。变更失败时重新同步一次，以服务端
    * 返回的用户记录为准，并让遗留的本地记录重新走创建流程。
    */
-  async function refreshAfterMutation() {
+  async function refreshAfterMutation(preferRemote = false) {
+    const expectedOwner = owner();
     const remote = await apiGet();
-    if (remote === null) return;
-    if (remote.length === 0 && tags.value.length > 0) {
+    if (remote === null || owner() !== expectedOwner) return;
+    if (!preferRemote && remote.length === 0 && tags.value.length > 0) {
       await syncTags();
       return;
     }
@@ -221,6 +281,7 @@ export const useTagsStore = defineStore("tags", () => {
     tags.value.push(tag);
     saveToLocalStorage();
     const savedTag = await apiCreate(tag);
+    if (owner() !== snapshot.owner) return null;
     if (savedTag) {
       tags.value = replaceTagByName(tags.value, savedTag);
       saveToLocalStorage();
@@ -251,6 +312,7 @@ export const useTagsStore = defineStore("tags", () => {
     }
     saveToLocalStorage();
     const result = await apiUpdate(id, updates);
+    if (owner() !== snapshot.owner) return false;
     if (!result.ok) {
       restoreTags(snapshot);
       if (result.status === 404) await refreshAfterMutation();
@@ -266,6 +328,7 @@ export const useTagsStore = defineStore("tags", () => {
     if (activeFilter.value === id) activeFilter.value = null;
     saveToLocalStorage();
     const result = await apiDelete(id);
+    if (owner() !== snapshot.owner) return;
     if (!result.ok) {
       restoreTags(snapshot);
       activeFilter.value = previousFilter;
@@ -274,86 +337,90 @@ export const useTagsStore = defineStore("tags", () => {
   }
 
   // Add a path to a tag
-  async function addPathToTag(tagId: string, path: string) {
+  async function changePath(
+    tagId: string,
+    path: string,
+    wirePath: string | undefined,
+    adding: boolean
+  ) {
     const tag = tags.value.find((t) => t.id === tagId);
-    if (!tag) return;
-    const cleaned = normalizeTagPath(path);
-    if (
-      !tag.paths.some((savedPath) => normalizeTagPath(savedPath) === cleaned)
-    ) {
-      const snapshot = snapshotTags();
-      tag.paths.push(cleaned);
-      saveToLocalStorage();
-      const result = await apiAddPath(tagId, cleaned);
-      if (!result.ok) {
-        restoreTags(snapshot);
-        if (result.status === 404) await refreshAfterMutation();
-      }
+    const identity = favoriteIdentity({ path, wirePath });
+    if (!tag || identity === null) return false;
+    const refs = tagReferences(tag);
+    const existing = refs.some((ref) => favoriteIdentity(ref) === identity);
+    if (existing === adding) return true;
+    const snapshot = snapshotTags();
+    const next = adding
+      ? [
+          ...refs,
+          {
+            path,
+            wirePath: tagAssociationBody({ path, wirePath }).wirePath,
+            pathVerified: true,
+          },
+        ]
+      : refs.filter((ref) => favoriteIdentity(ref) !== identity);
+    tag.paths = next.map((ref) => ref.path);
+    tag.pathRefs = next;
+    saveToLocalStorage();
+    const result = adding
+      ? await apiAddPath(tagId, path, wirePath)
+      : await apiRemovePath(tagId, path, wirePath);
+    if (owner() !== snapshot.owner) return false;
+    if (!result.ok) {
+      restoreTags(snapshot);
+      await refreshAfterMutation(true);
     }
+    return result.ok;
+  }
+  async function addPathToTag(tagId: string, path: string, wirePath?: string) {
+    return changePath(tagId, path, wirePath, true);
   }
 
   // Remove a path from a tag
-  async function removePathFromTag(tagId: string, path: string) {
-    const tag = tags.value.find((t) => t.id === tagId);
-    if (!tag) return;
-    const cleaned = normalizeTagPath(path);
-    const snapshot = snapshotTags();
-    tag.paths = tag.paths.filter(
-      (savedPath) => normalizeTagPath(savedPath) !== cleaned
-    );
-    saveToLocalStorage();
-    const result = await apiRemovePath(tagId, cleaned);
-    if (!result.ok) {
-      restoreTags(snapshot);
-      if (result.status === 404) await refreshAfterMutation();
-    }
+  async function removePathFromTag(
+    tagId: string,
+    path: string,
+    wirePath?: string
+  ) {
+    return changePath(tagId, path, wirePath, false);
   }
 
   // Toggle a path in a tag (add if not present, remove if present)
-  async function togglePathInTag(tagId: string, path: string) {
-    const tag = tags.value.find((t) => t.id === tagId);
-    if (!tag) return;
-    const cleaned = normalizeTagPath(path);
-    const idx = tag.paths.findIndex(
-      (savedPath) => normalizeTagPath(savedPath) === cleaned
+  async function togglePathInTag(
+    tagId: string,
+    path: string,
+    wirePath?: string,
+    expectedOwner = owner()
+  ) {
+    if (expectedOwner !== owner()) return false;
+    return changePath(
+      tagId,
+      path,
+      wirePath,
+      !getTagsForPath(path, wirePath).some((tag) => tag.id === tagId)
     );
-    const snapshot = snapshotTags();
-    if (idx >= 0) {
-      tag.paths.splice(idx, 1);
-      saveToLocalStorage();
-      const result = await apiRemovePath(tagId, cleaned);
-      if (!result.ok) {
-        restoreTags(snapshot);
-        if (result.status === 404) await refreshAfterMutation();
-      }
-    } else {
-      tag.paths.push(cleaned);
-      saveToLocalStorage();
-      const result = await apiAddPath(tagId, cleaned);
-      if (!result.ok) {
-        restoreTags(snapshot);
-        if (result.status === 404) await refreshAfterMutation();
-      }
-    }
   }
 
   // Get all tags for a specific path
-  function getTagsForPath(path: string): Tag[] {
-    const cleaned = normalizeTagPath(path);
+  function getTagsForPath(path: string, wirePath?: string): Tag[] {
+    const identity = favoriteIdentity({ path, wirePath });
+    if (identity === null) return [];
     return tags.value.filter((tag) =>
-      tag.paths.some((savedPath) => normalizeTagPath(savedPath) === cleaned)
+      tagReferences(tag).some((ref) => favoriteIdentity(ref) === identity)
     );
   }
 
   // Check if a path has any tags
-  function hasTags(path: string): boolean {
-    const cleaned = normalizeTagPath(path);
-    return tags.value.some((tag) =>
-      tag.paths.some((savedPath) => normalizeTagPath(savedPath) === cleaned)
-    );
+  function hasTags(path: string, wirePath?: string): boolean {
+    return getTagsForPath(path, wirePath).length > 0;
   }
 
   function applyPathRewrite(from: string, to: string) {
+    if (tags.value.some((tag) => tag.pathRefs !== undefined)) {
+      void refreshAfterMutation(true);
+      return;
+    }
     let changed = false;
     tags.value = tags.value.map((tag) => {
       const seen = new Set<string>();
@@ -378,6 +445,10 @@ export const useTagsStore = defineStore("tags", () => {
   }
 
   function applyPathRemoval(prefix: string) {
+    if (tags.value.some((tag) => tag.pathRefs !== undefined)) {
+      void refreshAfterMutation(true);
+      return;
+    }
     const normalizedPrefix = normalizeTagPath(prefix);
     let changed = false;
     tags.value = tags.value.map((tag) => {
@@ -408,7 +479,13 @@ export const useTagsStore = defineStore("tags", () => {
   const filteredPaths = computed(() => {
     if (!activeFilter.value) return null; // null means no filter active
     const tag = tags.value.find((t) => t.id === activeFilter.value);
-    return tag ? new Set(tag.paths.map(normalizeTagPath)) : null;
+    return tag
+      ? new Set(
+          tagReferences(tag)
+            .map(favoriteIdentity)
+            .filter((value): value is string => value !== null)
+        )
+      : null;
   });
 
   // Active filter tag object
@@ -418,9 +495,10 @@ export const useTagsStore = defineStore("tags", () => {
   });
 
   // Check if a path matches the current filter
-  function matchesFilter(path: string): boolean {
+  function matchesFilter(path: string, wirePath?: string): boolean {
     if (!filteredPaths.value) return true; // no filter = show all
-    const cleaned = normalizeTagPath(path);
+    const cleaned = favoriteIdentity({ path, wirePath });
+    if (cleaned === null) return false;
     if (filterMode.value === "current") {
       return filteredPaths.value.has(cleaned);
     }
@@ -441,30 +519,35 @@ export const useTagsStore = defineStore("tags", () => {
 
   // Sync local data to API (e.g. after recovering from offline)
   async function syncTags() {
+    const expectedOwner = owner();
     const apiData = await apiGet();
-    if (apiData) {
+    if (apiData && owner() === expectedOwner) {
       for (const localTag of [...tags.value]) {
+        if (owner() !== expectedOwner) return;
         let remoteTag = apiData.find((tag) => tag.name === localTag.name);
         if (!remoteTag) {
           const created = await apiCreate(localTag);
+          if (owner() !== expectedOwner) return;
           if (created) remoteTag = created;
         }
         if (!remoteTag) continue;
 
-        for (const path of localTag.paths) {
-          const normalizedPath = normalizeTagPath(path);
+        for (const ref of tagReferences(localTag)) {
+          if (owner() !== expectedOwner) return;
+          const identity = favoriteIdentity(ref);
+          if (identity === null) continue;
           if (
-            !remoteTag.paths.some(
-              (savedPath) => normalizeTagPath(savedPath) === normalizedPath
+            !tagReferences(remoteTag).some(
+              (saved) => favoriteIdentity(saved) === identity
             )
           ) {
-            await apiAddPath(remoteTag.id, normalizedPath);
+            await apiAddPath(remoteTag.id, ref.path, ref.wirePath);
           }
         }
       }
 
       const merged = await apiGet();
-      if (merged) {
+      if (merged && owner() === expectedOwner) {
         tags.value = merged;
         saveToLocalStorage();
       }
@@ -478,6 +561,7 @@ export const useTagsStore = defineStore("tags", () => {
 
   return {
     tags,
+    sourceScope,
     sortedTags,
     loaded,
     activeFilter,

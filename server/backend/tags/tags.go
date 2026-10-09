@@ -1,11 +1,14 @@
 package tags
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 )
 
@@ -23,6 +26,36 @@ type Tag struct {
 	CreatedAt int64    `json:"createdAt"`
 	// Position-aligned provenance; public display strings alone are not identity.
 	UnverifiedPaths []bool `json:"-"`
+}
+
+type PathReference struct {
+	Path         string `json:"path"`
+	WirePath     string `json:"wirePath,omitempty"`
+	PathVerified bool   `json:"pathVerified"`
+}
+
+// Keep the compatible display list, but never use it as resource identity.
+// References remain ordered, including unknown/trusted same-display entries.
+func (tag *Tag) MarshalJSON() ([]byte, error) {
+	type tagAlias Tag
+	paths := make([]string, len(tag.Paths))
+	refs := make([]PathReference, len(tag.Paths))
+	for index, raw := range tag.Paths {
+		if !tag.PathIsUnverified(index) {
+			raw = pathmeta.Clean(raw)
+		}
+		paths[index] = files.DisplayPath(raw)
+		refs[index] = PathReference{Path: paths[index], PathVerified: !tag.PathIsUnverified(index)}
+		if refs[index].PathVerified {
+			refs[index].WirePath = files.EncodeWirePath(raw)
+		}
+	}
+	return json.Marshal(struct {
+		*tagAlias
+		Name     string          `json:"name"`
+		Paths    []string        `json:"paths"`
+		PathRefs []PathReference `json:"pathRefs"`
+	}{(*tagAlias)(tag), files.DisplayName(tag.Name), paths, refs})
 }
 
 // StorageBackend is the interface to implement for a tags storage.
@@ -88,6 +121,7 @@ func (m *PathMutation) UpdatedSnapshot() []Tag {
 // Storage is the high-level storage for tags.
 type Storage struct {
 	back StorageBackend
+	mu   sync.Mutex
 }
 
 // NewStorage creates a tags storage from a backend.
@@ -103,6 +137,8 @@ func (s *Storage) GetAll(userID uint) ([]*Tag, error) {
 // ClaimLegacy assigns records created before per-user ownership to the first
 // administrator that opens the corresponding workspace.
 func (s *Storage) ClaimLegacy(userID uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.back.ClaimLegacy(userID)
 }
 
@@ -129,6 +165,8 @@ func (s *Storage) Create(userID uint, name, color string) (*Tag, error) {
 
 // UpdateFields updates name and/or color of a tag.
 func (s *Storage) UpdateFields(userID uint, id string, name *string, color *string) (*Tag, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tag, err := s.back.GetByID(userID, id)
 	if err != nil {
 		return nil, err
@@ -150,6 +188,8 @@ func (s *Storage) UpdateFields(userID uint, id string, name *string, color *stri
 // Delete removes a tag by ID.
 
 func (s *Storage) Delete(userID uint, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, err := s.back.GetByID(userID, id); err != nil {
 		return err
 	}
@@ -158,13 +198,15 @@ func (s *Storage) Delete(userID uint, id string) error {
 
 // AddPath adds a path to a tag (no-op if already present).
 func (s *Storage) AddPath(userID uint, id, path string) (*Tag, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tag, err := s.back.GetByID(userID, id)
 	if err != nil {
 		return nil, err
 	}
 
 	for index, p := range tag.Paths {
-		if !tag.PathIsUnverified(index) && p == path {
+		if !tag.PathIsUnverified(index) && pathmeta.Clean(p) == pathmeta.Clean(path) {
 			return tag, nil // already exists
 		}
 	}
@@ -179,6 +221,8 @@ func (s *Storage) AddPath(userID uint, id, path string) (*Tag, error) {
 
 // RemovePath removes a path from a tag.
 func (s *Storage) RemovePath(userID uint, id, path string) (*Tag, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tag, err := s.back.GetByID(userID, id)
 	if err != nil {
 		return nil, err
@@ -187,7 +231,7 @@ func (s *Storage) RemovePath(userID uint, id, path string) (*Tag, error) {
 	newPaths := make([]string, 0, len(tag.Paths))
 	newFlags := make([]bool, 0, len(tag.Paths))
 	for index, p := range tag.Paths {
-		if tag.PathIsUnverified(index) || p != path {
+		if tag.PathIsUnverified(index) || pathmeta.Clean(p) != pathmeta.Clean(path) {
 			newPaths = append(newPaths, p)
 			newFlags = append(newFlags, tag.PathIsUnverified(index))
 		}
@@ -204,6 +248,8 @@ func (s *Storage) RemovePath(userID uint, id, path string) (*Tag, error) {
 // RewritePathPrefix updates matching paths in every user's tags. Duplicate
 // destinations are collapsed while retaining the original path order.
 func (s *Storage) RewritePathPrefix(from, to string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	all, err := s.back.GetAllForPathMutation()
 	if err != nil {
 		return nil, err
@@ -242,7 +288,7 @@ func (s *Storage) RewritePathPrefix(from, to string, mapper ...pathmeta.Mapper) 
 		updated.Paths = next
 		updated.UnverifiedPaths = nextFlags
 		if err := s.updatePaths(&updated); err != nil {
-			return nil, errors.Join(err, s.RestorePathMutation(mutation))
+			return nil, errors.Join(err, s.restorePathMutation(mutation))
 		}
 		mutation.updated = append(mutation.updated, original)
 	}
@@ -252,6 +298,8 @@ func (s *Storage) RewritePathPrefix(from, to string, mapper ...pathmeta.Mapper) 
 // RemovePathPrefix removes matching paths from every user's tags. Empty tags
 // remain valid and are not deleted.
 func (s *Storage) RemovePathPrefix(prefix string, mapper ...pathmeta.Mapper) (*PathMutation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	all, err := s.back.GetAllForPathMutation()
 	if err != nil {
 		return nil, err
@@ -280,7 +328,7 @@ func (s *Storage) RemovePathPrefix(prefix string, mapper ...pathmeta.Mapper) (*P
 		updated.Paths = next
 		updated.UnverifiedPaths = nextFlags
 		if err := s.updatePaths(&updated); err != nil {
-			return nil, errors.Join(err, s.RestorePathMutation(mutation))
+			return nil, errors.Join(err, s.restorePathMutation(mutation))
 		}
 		mutation.updated = append(mutation.updated, original)
 	}
@@ -289,6 +337,12 @@ func (s *Storage) RemovePathPrefix(prefix string, mapper ...pathmeta.Mapper) (*P
 
 // RestorePathMutation restores only path lists captured by a prior mutation.
 func (s *Storage) RestorePathMutation(mutation *PathMutation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.restorePathMutation(mutation)
+}
+
+func (s *Storage) restorePathMutation(mutation *PathMutation) error {
 	if mutation == nil {
 		return nil
 	}
@@ -331,6 +385,8 @@ func (s *Storage) RestoreUpdatedSnapshot(snapshot []Tag) error {
 // resource was in the recycle bin and does not recreate a tag the user has
 // since deleted.
 func (s *Storage) RestoreRemovedSnapshot(snapshot []Tag, from, to string, mapper ...pathmeta.Mapper) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	previous := make([]Tag, 0, len(snapshot))
 	for _, saved := range snapshot {
 		current, err := s.back.GetByID(saved.UserID, saved.ID)

@@ -139,6 +139,7 @@
       >
         <TagPicker
           :path="path || ''"
+          :wire-path="wirePath"
           @manage="openTagManager"
           @close="closeTagPicker"
         />
@@ -251,7 +252,7 @@ const isFavorited = computed(() =>
   props.path ? favoritesStore.isFavorite(props.path, props.wirePath) : false
 );
 const pathTags = computed(() =>
-  props.path ? tagsStore.getTagsForPath(props.path) : []
+  props.path ? tagsStore.getTagsForPath(props.path, props.wirePath) : []
 );
 const humanSize = computed(() =>
   props.type === "invalid_link"

@@ -1048,6 +1048,7 @@ import { useCategoriesStore } from "@/stores/categories";
 import type { CategoryGroup } from "@/api/categories";
 import { useFavoritesStore } from "@/stores/favorites";
 import { useTagsStore } from "@/stores/tags";
+import { useFileStore } from "@/stores/file";
 import { useTrashStore } from "@/stores/trash";
 import { useRecentStore } from "@/stores/recent";
 import { useSidebarPreferencesStore } from "@/stores/sidebarPreferences";
@@ -1092,6 +1093,7 @@ const volumesStore = useVolumesStore();
 const categoriesStore = useCategoriesStore();
 const favoritesStore = useFavoritesStore();
 const tagsStore = useTagsStore();
+const fileStore = useFileStore();
 const trashStore = useTrashStore();
 const recentStore = useRecentStore();
 const sidebarPreferencesStore = useSidebarPreferencesStore();
@@ -1951,11 +1953,24 @@ const filterByTag = (tagId: string) => {
   tagsStore.setFilterMode("current");
   tagsStore.setFilter(tagId);
   const base = normalizeFilesRouteBase(route.path);
+  const resource = fileStore.req;
+  const directoryPath = resource
+    ? resource.isDir
+      ? resource.path
+      : resource.path.slice(0, resource.path.lastIndexOf("/")) || "/"
+    : base;
+  const sourceWire = resource ? favoriteWirePath(resource) : undefined;
+  const baseWirePath = sourceWire
+    ? resource?.isDir
+      ? sourceWire
+      : sourceWire.slice(0, sourceWire.lastIndexOf("/")) || "/"
+    : undefined;
   router.push({
     path: "/search",
     query: {
       tag: tagId,
-      base: base.endsWith("/") ? base : base + "/",
+      base: directoryPath.endsWith("/") ? directoryPath : directoryPath + "/",
+      ...(baseWirePath ? { baseWirePath } : {}),
       scope: "current",
     },
   });

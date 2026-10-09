@@ -6,12 +6,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
-data class ServerTag(val id: String, val name: String, val color: String, val paths: List<String>)
-data class TaggedResource(val path: String, val file: ResourceRef? = null, val error: String? = null)
+data class ServerTag(val id: String, val name: String, val color: String, val paths: List<String>, val pathRefs: List<TagPathRef> = paths.map { tagPathRef(it) }) {
+    companion object { internal fun from(row: JSONObject): ServerTag { val refs = tagReferences(row); return ServerTag(row.getString("id"), row.getString("name"), row.getString("color"), refs.map { it.path }, refs) } }
+}
+data class TaggedResource(val path: String, val file: ResourceRef? = null, val error: String? = null, val ref: TagPathRef = tagPathRef(path), val key: String = ref.identity ?: "unknown/$path")
 data class TagsState(val scope: String = "", val items: List<ServerTag> = emptyList(), val loaded: Boolean = false,
     val loading: Boolean = false, val changing: Boolean = false, val error: String? = null, val notice: String? = null,
     val filterId: String? = null, val globalFilter: Boolean = false,
-    val pathTag: String? = null, val pathParent: String? = null, val paths: List<TaggedResource> = emptyList(), val pathTotal: Int = 0,
+    val pathTag: String? = null, val pathParent: String? = null, val pathParentWire: String? = null, val paths: List<TaggedResource> = emptyList(), val pathTotal: Int = 0,
     val pathsLoading: Boolean = false, val pathsError: String? = null)
 
 class TagsController(private val scope: CoroutineScope, private val isCurrent: (SessionContext) -> Boolean) {
@@ -30,11 +32,7 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
     private fun current(context: SessionContext) = bound === context && isCurrent(context)
     private suspend fun read(context: SessionContext): List<ServerTag> {
         val rows = context.api.array("/api/tags")
-        return (0 until rows.length()).map { rows.getJSONObject(it).let { row ->
-            val paths = row.optJSONArray("paths")
-            ServerTag(row.getString("id"), row.getString("name"), row.getString("color"),
-                if (paths == null) emptyList() else (0 until paths.length()).map { collectionPath(paths.getString(it)) }.distinct())
-        } }
+        return (0 until rows.length()).map { ServerTag.from(rows.getJSONObject(it)) }
     }
     fun refresh() = refresh(false)
     fun refresh(replaceRead: Boolean) {
@@ -49,14 +47,20 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
         }
     }
     private fun apply(items: List<ServerTag>) {
+        val before = mutable.value
         mutable.value = mutable.value.copy(items = items, loaded = true, loading = false, changing = false,
             filterId = mutable.value.filterId?.takeIf { id -> items.any { it.id == id } })
+        before.pathTag?.let { selected ->
+            if (items.any { it.id == selected }) { pathJob?.cancel(); pathEpoch++; loadPaths(selected, before.pathParent, parentWire = before.pathParentWire) }
+            else { pathJob?.cancel(); pathEpoch++; mutable.value = mutable.value.copy(pathTag = null, paths = emptyList(), pathTotal = 0, pathsLoading = false) }
+        }
     }
     fun filter(id: String?, global: Boolean = mutable.value.globalFilter) { mutable.value = mutable.value.copy(filterId = id, globalFilter = global) }
-    fun matches(path: String): Boolean = mutable.value.let { value ->
+    fun matches(file: ResourceRef): Boolean = mutable.value.let { value ->
         val tag = value.items.firstOrNull { it.id == value.filterId } ?: return true
-        return taggedPathMatches(path, tag.paths, value.globalFilter)
+        return taggedResourceMatches(file, tag.pathRefs, value.globalFilter)
     }
+    fun assigned(file: ResourceRef): Set<String> = mutable.value.items.filter { taggedResourceMatches(file, it.pathRefs) }.map { it.id }.toSet()
     fun colorAvailable(color: String, except: String? = null) = mutable.value.items.none { it.id != except && it.color.trim().equals(color.trim(), true) }
     private fun change(notice: String, onSaved: () -> Unit = {}, action: suspend (SessionContext) -> Unit) {
         val context = bound ?: return
@@ -98,49 +102,73 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
         }
     }
     fun remove(tag: ServerTag) = change("标签已删除，文件保持原位") { it.api.action("DELETE", "/api/tags/${android.net.Uri.encode(tag.id)}") }
-    fun removePath(tag: ServerTag, path: String) = change("已取消此路径的标签") {
-        it.api.action("DELETE", "/api/tags/${android.net.Uri.encode(tag.id)}/paths", JSONObject().put("path", path))
-    }
-    fun assign(file: ResourceRef, baseline: Set<String>, desired: Set<String>, onSaved: () -> Unit = {}) = change("文件标签已更新", onSaved) { context ->
-        require(!file.path.contains('\uFFFD') || (file.wirePath.isNotEmpty() && file.wirePath == SearchResult.encodePath(file.path))) {
-            "这个文件名的原始字节无法通过当前标签接口表达，请使用其他文件"
-        }
-        val additions = desired - baseline; val removals = baseline - desired
-        val fresh = read(context).map { it.id }.toSet()
-        check(additions.all { it in fresh }) { "所选标签已被删除，请刷新后重新选择" }
-        for (id in additions + removals) {
-            currentCoroutineContext().ensureActive(); check(current(context))
-            if (id !in fresh) continue
-            context.api.action(if (id in additions) "POST" else "DELETE", "/api/tags/${android.net.Uri.encode(id)}/paths",
-                JSONObject().put("path", file.path))
+    fun removePath(tag: ServerTag, ref: TagPathRef, sourceScope: String = mutable.value.scope) {
+        if (bound?.owner != sourceScope) return
+        change("已取消此路径的标签") {
+            check(ref.openable) { "原始路径无法确认，不能按显示名称取消关联" }
+            writeAssociation(it, tag.id, ResourceRef(ref.path, ref.wirePath, "tag", false, "", 0), false)
         }
     }
-    fun loadPaths(id: String, parent: String?, more: Boolean = false) {
+    private suspend fun writeAssociation(context: SessionContext, id: String, file: ResourceRef, adding: Boolean) {
+        val body = tagAssociationBody(file)
+        val response = context.api.action(if (adding) "POST" else "DELETE", "/api/tags/${android.net.Uri.encode(id)}/paths", body)
+        val saved = ServerTag.from(response)
+        check(saved.id == id && taggedResourceMatches(file, saved.pathRefs) == adding) { "服务器未确认原始路径标签结果，请刷新核对" }
+    }
+    fun assign(file: ResourceRef, baseline: Set<String>, desired: Set<String>, onSaved: () -> Unit = {}, sourceScope: String = mutable.value.scope) {
+        if (bound?.owner != sourceScope) return
+        change("文件标签已更新", onSaved) { context ->
+            check(sourceScope == context.owner) { "文件来源已切换，请重新选择" }
+            val additions = desired - baseline; val removals = baseline - desired
+            val fresh = read(context).map { it.id }.toSet()
+            check(additions.all { it in fresh }) { "所选标签已被删除，请刷新后重新选择" }
+            for (id in additions + removals) {
+                currentCoroutineContext().ensureActive(); check(current(context))
+                if (id !in fresh) continue
+                writeAssociation(context, id, file, id in additions)
+            }
+        }
+    }
+    fun loadPaths(id: String, parent: String?, more: Boolean = false, parentWire: String? = null) {
         val context = bound ?: return
         val tag = mutable.value.items.firstOrNull { it.id == id } ?: return
-        val candidates = tag.paths.filter { parent == null || collectionPath(it.substringBeforeLast('/').ifEmpty { "/" }) == collectionPath(parent) }
-        val same = mutable.value.pathTag == id && mutable.value.pathParent == parent
+        val parentIdentity = parent?.let { tagPathRef(it, parentWire).identity }
+        if (parent != null && parentIdentity == null) {
+            pathJob?.cancel(); pathEpoch++
+            mutable.value = mutable.value.copy(pathTag = id, pathParent = parent, pathParentWire = parentWire, paths = emptyList(), pathTotal = 0, pathsLoading = false, pathsError = "当前目录原始路径无法确认，请重新选择目录")
+            return
+        }
+        val candidates = tag.pathRefs.filter { parent == null || parentIdentity != null && it.identity?.substringBeforeLast('/')?.ifEmpty { "/" } == parentIdentity }
+        val same = mutable.value.pathTag == id && mutable.value.pathParent == parent && mutable.value.pathParentWire == parentWire
+        if (same && pathJob?.isActive == true) return
         val count = if (more && same) mutable.value.paths.size + 40 else if (same) maxOf(40, mutable.value.paths.size) else 40
         pathJob?.cancel(); val epoch = ++pathEpoch
-        mutable.value = mutable.value.copy(pathTag = id, pathParent = parent, paths = if (same) mutable.value.paths else emptyList(),
+        mutable.value = mutable.value.copy(pathTag = id, pathParent = parent, pathParentWire = parentWire, paths = if (same) mutable.value.paths else emptyList(),
             pathTotal = candidates.size, pathsLoading = true, pathsError = null)
         pathJob = scope.launch {
             try {
                 val result = mutableListOf<TaggedResource>()
-                for (chunk in candidates.take(count).chunked(100)) {
-                    val rows = context.api.resourceBatch(chunk)
+                val selected = candidates.take(count)
+                val resolved = linkedMapOf<String, TaggedResource>()
+                for (chunk in selected.filter { it.openable }.chunked(100)) {
+                    val rows = context.api.resourceBatch(chunk.map { it.path }, chunk.map { it.wirePath })
                     check(rows.length() == chunk.size)
                     for (index in chunk.indices) {
-                        val row = rows.getJSONObject(index); val path = chunk[index]; val item = row.optJSONObject("item")
-                        val file = item?.takeIf { it.optString("path") == path }?.let {
-                            ResourceRef(path, it.optString("wirePath").ifEmpty { SearchResult.encodePath(path) }, it.getString("name"),
+                        val row = rows.getJSONObject(index); val ref = chunk[index]; val item = row.optJSONObject("item")
+                        val acknowledged = favoritePathIdentity(row.getString("path"), row.optString("wirePath").takeIf { it.isNotEmpty() }, null)
+                        check(acknowledged.openable && favoriteWireIdentity(acknowledged.wirePath) == ref.identity) { "批量资源返回的原始路径顺序不匹配，请刷新重试" }
+                        val file = item?.takeIf { row.optInt("status") == 200 }?.let {
+                            val actual = favoritePathIdentity(it.getString("path"), it.optString("wirePath").takeIf { it.isNotEmpty() }, null)
+                            check(actual.openable && favoriteWireIdentity(actual.wirePath) == ref.identity) { "标签资源的原始路径不匹配" }
+                            ResourceRef(it.getString("path"), actual.wirePath, it.getString("name"),
                                 it.getBoolean("isDir"), it.optString("type"), it.optLong("size"), it.optString("modified"))
                         }
-                        result.add(TaggedResource(path, file, if (file == null) when (row.optInt("status")) {
+                        resolved[ref.identity!!] = TaggedResource(ref.path, file, if (file == null) when (row.optInt("status")) {
                             403 -> "当前账号无权访问"; 404 -> "文件已移走或删除"; else -> "路径暂时无法读取"
-                        } else null))
+                        } else null, ref, ref.identity!!)
                     }
                 }
+                selected.forEachIndexed { index, ref -> result.add(ref.identity?.let { resolved[it] } ?: TaggedResource(ref.path, error = "原始路径无法确认，请刷新或升级服务器", ref = ref, key = "$id/unknown/$index")) }
                 if (current(context) && pathEpoch == epoch) mutable.value = mutable.value.copy(paths = result, pathsLoading = false)
             } catch (error: Exception) {
                 if (error !is CancellationException && current(context) && pathEpoch == epoch)

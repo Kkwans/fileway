@@ -356,7 +356,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }.sortedWith(compareByDescending<ResourceRef> { it.directory }.thenBy { it.name.lowercase() })
     }
 
-    fun directoryItems(): List<ResourceRef> = mutable.value.let { presentFiles(it.files, it.fileCategory, it.fileOrder).filter { file -> tags.matches(file.path) } }
+    fun directoryItems(): List<ResourceRef> = mutable.value.let { presentFiles(it.files, it.fileCategory, it.fileOrder).filter { file -> tags.matches(file) } }
     fun fileCategory(value: FileCategory) { mutable.value = mutable.value.copy(fileCategory = value) }
     fun fileOrder(value: FileOrder) { mutable.value = mutable.value.copy(fileOrder = value) }
     fun open(file: ResourceRef) = openFrom(file, directoryItems(), MediaQueueSource.DIRECTORY)
@@ -462,7 +462,11 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun openSearchResult(file: ResourceRef) = openFrom(file, search.mediaSnapshot(), MediaQueueSource.SEARCH)
-    fun openTagged(file: ResourceRef, candidates: List<ResourceRef>) = openFrom(file, candidates, MediaQueueSource.TAGGED)
+    fun openTagged(file: ResourceRef, candidates: List<ResourceRef>, sourceScope: String) {
+        val bound = context ?: return
+        if (sourceScope != bound.owner || tags.state.value.scope != sourceScope || tags.state.value.paths.none { it.file?.mediaKey == file.mediaKey }) return
+        openFrom(file, candidates, MediaQueueSource.TAGGED)
+    }
     fun download(file: ResourceRef) {
         val bound = context ?: return
         downloads.enqueue(bound, file) { context === bound && generation == bound.generation }

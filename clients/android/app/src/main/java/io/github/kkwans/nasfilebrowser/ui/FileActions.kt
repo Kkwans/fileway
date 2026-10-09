@@ -19,7 +19,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.*
-import io.github.kkwans.nasfilebrowser.data.collectionPath
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -72,7 +71,7 @@ import io.github.kkwans.nasfilebrowser.R
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         FavoriteFileAction(model, file, enabled)
-        val count = tags.items.count { collectionPath(file.path) in it.paths }
+        val count = model.tags.assigned(file).size
         FileActionIcon(R.drawable.ic_tag, "设置文件标签", enabled && !tags.changing, count > 0) { labeling = true }
         if (client.permissions.download) FileActionIcon(R.drawable.ic_download, "下载到本机", enabled && !downloads.busy && downloads.folderPlan == null) {
             model.download(file)
@@ -149,6 +148,7 @@ import io.github.kkwans.nasfilebrowser.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun FileTagPicker(model: ClientModel, file: ResourceRef, dismiss: () -> Unit) {
     val state by model.tags.state.collectAsStateWithLifecycle()
+    val sourceScope = remember { state.scope }
     var baseline by remember { mutableStateOf<Set<String>?>(null) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var attempt by remember { mutableIntStateOf(0) }
@@ -158,11 +158,13 @@ import io.github.kkwans.nasfilebrowser.R
     LaunchedEffect(file, state.scope, attempt) {
         loading = true; error = null
         try {
+            check(state.scope == sourceScope) { "文件来源已切换，请重新选择文件" }
             model.tags.refresh()
             val current = withTimeout(10_000) { model.tags.state.first { !it.loading && !it.changing && (it.loaded || it.error != null) } }
+            check(current.scope == sourceScope) { "文件来源已切换，请重新选择文件" }
             check(current.error == null) { current.error.orEmpty() }
             if (baseline == null) {
-                baseline = current.items.filter { collectionPath(file.path) in it.paths }.map { it.id }.toSet()
+                baseline = model.tags.assigned(file)
                 selected = baseline!!
             }
         } catch (failure: Exception) { if (failure is kotlinx.coroutines.CancellationException) throw failure; error = failure.message ?: "标签读取失败，请重试" }
@@ -178,17 +180,17 @@ import io.github.kkwans.nasfilebrowser.R
             LazyColumn(Modifier.heightIn(max = 360.dp)) {
                 if (state.items.isEmpty() && !loading) item { Text("还没有标签，可先新建一个。", Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 items(state.items, key = { it.id }) { tag -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    .toggleable(tag.id in selected, enabled = !loading && !state.changing, role = Role.Checkbox) { checked -> selected = if (checked) selected + tag.id else selected - tag.id },
+                    .toggleable(tag.id in selected, enabled = !loading && !state.changing && state.scope == sourceScope, role = Role.Checkbox) { checked -> selected = if (checked) selected + tag.id else selected - tag.id },
                     verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(12.dp).background(metadataColor(tag.color, MaterialTheme.colorScheme.primary), CircleShape))
                     Text(tag.name, Modifier.weight(1f).padding(horizontal = 12.dp), style = MaterialTheme.typography.bodyLarge)
                     Checkbox(tag.id in selected, null)
                 } }
             }
-            TextButton({ creating = true }, enabled = !loading && !state.changing) { Text("新建标签") }
+            TextButton({ creating = true }, enabled = !loading && !state.changing && state.scope == sourceScope) { Text("新建标签") }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(dismiss, enabled = !state.changing) { Text("取消") }
-                Button({ model.tags.assign(file, baseline.orEmpty(), selected, onSaved = dismiss) }, enabled = baseline != null && !loading && error == null && !state.changing) { Text(if (state.changing) "正在保存" else "保存标记") }
+                Button({ model.tags.assign(file, baseline.orEmpty(), selected, onSaved = dismiss, sourceScope = sourceScope) }, enabled = baseline != null && !loading && error == null && !state.changing && state.scope == sourceScope) { Text(if (state.changing) "正在保存" else "保存标记") }
             }
         }
     }

@@ -112,7 +112,25 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
     }
     suspend fun array(endpoint: String) = JSONArray(response("GET", endpoint))
-    suspend fun resourceBatch(paths: List<String>): JSONArray = JSONArray(response("POST", "/api/resources/batch", JSONObject().put("paths", JSONArray(paths))))
+    suspend fun resourceBatch(paths: List<String>, wirePaths: List<String>? = null): JSONArray {
+        require(paths.isNotEmpty() && paths.size <= 500 && (wirePaths == null || wirePaths.size == paths.size))
+        val body = JSONObject()
+        if (wirePaths == null) body.put("paths", JSONArray(paths)) else {
+            val targets = paths.indices.map { index -> recentAccessRecordTarget(io.github.kkwans.nasfilebrowser.app.ResourceRef(paths[index], wirePaths[index], "tag", false, "", 0)) }
+            body.put("wirePaths", JSONArray(targets.map { it.wirePath }))
+            if (targets.all { it.legacyCompatible }) body.put("paths", JSONArray(targets.map { it.path }))
+        }
+        // Both JNI envelopes and this readonly endpoint are bounded at 1 MiB.
+        // Split before sending, preserving order without retrying any request.
+        if (body.toString().toByteArray(Charsets.UTF_8).size > 768 * 1024) {
+            require(paths.size > 1) { "资源路径过长，无法读取元数据" }
+            val middle = paths.size / 2
+            val left = resourceBatch(paths.take(middle), wirePaths?.take(middle))
+            val right = resourceBatch(paths.drop(middle), wirePaths?.drop(middle))
+            return JSONArray().apply { for (rows in listOf(left, right)) for (index in 0 until rows.length()) put(rows.get(index)) }
+        }
+        return JSONArray(response("POST", "/api/resources/batch", body))
+    }
     fun search(path: String, wirePath: String, query: String, scope: SearchScope): Flow<SearchUpdate> =
         searchFlow(path, wirePath, query, scope, identity = { token(); Unit }) { command -> native(command.put("session", id)) }
     suspend fun lease(path: String, wirePath: String, cacheKey: String = ""): String {

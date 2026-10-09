@@ -118,6 +118,8 @@ import ResultExplorer, {
   type ExplorerScope,
 } from "@/components/search/ResultExplorer.vue";
 import type { SearchResult } from "@/types/file";
+import { tagReferences } from "@/utils/tagPersistence";
+import { favoriteIdentity } from "@/utils/favoritePersistence";
 import { files as filesApi, search } from "@/api";
 import type { SearchTermination } from "@/api/search";
 import { StatusError } from "@/api/utils";
@@ -184,6 +186,14 @@ const currentBasePath = ref(
       : fileStore.req?.path || "/"
   )
 );
+const currentBaseWire = ref(
+  typeof route.query.baseWirePath === "string"
+    ? route.query.baseWirePath
+    : typeof route.query.base === "string"
+      ? undefined
+      : fileStore.req?.wirePath
+);
+let tagResultSource = "";
 let searchAbortController = new AbortController();
 let searchGeneration = 0;
 let tagLoadGeneration = 0;
@@ -194,7 +204,8 @@ const returnFileRoute = computed(() =>
   buildFilesRouteFromSearchBase(
     typeof route.query.base === "string"
       ? route.query.base
-      : currentBasePath.value
+      : currentBasePath.value,
+    tagMode.value ? currentBaseWire.value : undefined
   )
 );
 const visibleResults = computed(() =>
@@ -218,31 +229,85 @@ async function loadTagResults() {
   tagLoadAbortController.abort();
   tagLoadAbortController = new AbortController();
   const signal = tagLoadAbortController.signal;
+  const sourceScope = tagsStore.sourceScope;
+  const sourceKey = `${sourceScope}/${tagId.value}`;
+  if (tagResultSource !== sourceKey) {
+    tagResults.value = [];
+    tagResultSource = sourceKey;
+  }
   tagLoading.value = true;
   tagError.value = "";
   try {
     if (!tagsStore.loaded) await tagsStore.loadTags();
+    if (
+      generation !== tagLoadGeneration ||
+      sourceScope !== tagsStore.sourceScope
+    )
+      return;
     const tag = activeTag.value;
     if (!tag) {
       tagResults.value = [];
       return;
     }
-    const base =
-      normalizeSearchBase(currentBasePath.value).replace(/\/$/, "") || "/";
-    const paths = tag.paths.filter((path) => {
-      if (tagSearchScope.value === "global" || base === "/") return true;
-      const normalized = normalizeSearchBase(path).replace(/\/$/, "");
-      return normalized === base || normalized.startsWith(`${base}/`);
+    const base = favoriteIdentity({
+      path: currentBasePath.value.replace(/\/+$/, "") || "/",
+      wirePath: currentBaseWire.value,
     });
-    tagResults.value = [];
-    for (let offset = 0; offset < paths.length; offset += 100) {
-      const batchPaths = paths.slice(offset, offset + 100);
-      const batch = await filesApi.fetchBatch(batchPaths, signal);
-      if (generation !== tagLoadGeneration) return;
-      tagResults.value.push(
-        ...batch.map((result): ExplorerResult => {
+    if (tagSearchScope.value === "current" && base === null)
+      throw new Error("当前目录原始路径无法确认，请重新选择目录");
+    const refs = tagReferences(tag).filter((ref) => {
+      if (tagSearchScope.value === "global") return true;
+      const identity = favoriteIdentity(ref);
+      return (
+        base !== null &&
+        identity !== null &&
+        (base === "/" || identity === base || identity.startsWith(`${base}/`))
+      );
+    });
+    const nextResults: ExplorerResult[] = [];
+    if (refs.length === 0) tagResults.value = [];
+    for (let offset = 0; offset < refs.length; offset += 100) {
+      const chunk = refs.slice(offset, offset + 100);
+      const known = chunk.filter((ref) => ref.pathVerified);
+      const batch = known.length
+        ? await filesApi.fetchBatch(
+            known.map((ref) => ref.path),
+            signal,
+            known.map((ref) => ref.wirePath!)
+          )
+        : [];
+      if (
+        generation !== tagLoadGeneration ||
+        sourceScope !== tagsStore.sourceScope
+      )
+        return;
+      const byWire = new Map(
+        batch.map((result) => [favoriteIdentity(result), result])
+      );
+      nextResults.push(
+        ...chunk.map((ref, index): ExplorerResult => {
+          const identity = favoriteIdentity(ref);
+          const result = identity === null ? undefined : byWire.get(identity);
+          const common = {
+            wirePath: ref.wirePath,
+            pathVerified: ref.pathVerified,
+            key: identity ?? `${tag.id}/unknown/${offset + index}`,
+          };
+          if (!result)
+            return {
+              ...common,
+              path: ref.path,
+              name: getTaggedPathName(ref.path),
+              dir: false,
+              size: null,
+              modified: null,
+              url: "",
+              status: 400,
+              error: "原始路径无法确认，请刷新或升级服务器",
+            };
           if (!result.item) {
             return {
+              ...common,
               path: result.path,
               name: getTaggedPathName(result.path),
               dir: false,
@@ -254,6 +319,7 @@ async function loadTagResults() {
             };
           }
           return {
+            ...common,
             path: result.item.path,
             name: result.item.name || getTaggedPathName(result.item.path),
             dir: result.item.isDir,
@@ -263,6 +329,7 @@ async function loadTagResults() {
           };
         })
       );
+      tagResults.value = [...nextResults];
     }
   } catch (error) {
     if (generation === tagLoadGeneration && !signal.aborted) {
@@ -279,7 +346,11 @@ async function setTagSearchScope(scope: ExplorerScope) {
   await router.replace({
     query: {
       ...route.query,
-      ...buildTagSearchQuery(currentBasePath.value, scope),
+      ...buildTagSearchQuery(
+        currentBasePath.value,
+        scope,
+        currentBaseWire.value
+      ),
     },
   });
   await loadTagResults();
@@ -441,10 +512,18 @@ async function handleResultAction(
   action: ExplorerResultAction,
   result: ExplorerResult
 ) {
+  if (tagMode.value && favoriteIdentity(result) === null) {
+    $showError(new Error("标签原始路径无法确认，请重新选择"));
+    return;
+  }
   if (action === "open-location") {
     prepareTagExit();
     fileStore.preselect = result.path;
-    await router.push(buildResultParentRoute(result.path));
+    await router.push(buildResultParentRoute(result.path, result.wirePath));
+    return;
+  }
+  if (!result.url) {
+    $showError(new Error(result.error || "该资源暂时无法打开"));
     return;
   }
   if (action === "download") {
@@ -468,25 +547,61 @@ onMounted(() => {
   }
 });
 
-watch(tagId, () => {
-  searchAbortController.abort();
-  ongoing.value = false;
-  results.value = [];
-  prompt.value = getSearchPromptFromRoute(route.query.q, route.query.tag);
-  activeType.value = detectSearchType(prompt.value);
-  submittedType.value = null;
-  hasSearchAttempt.value = false;
-  if (tagMode.value) {
-    tagSearchScope.value =
-      route.query.scope === "global" ? "global" : "current";
-    loadTagResults();
-  } else {
-    fileSearchScope.value =
-      route.query.scope === "recursive" || route.query.scope === "global"
-        ? "recursive"
-        : "current";
+watch(
+  () =>
+    [
+      tagId.value,
+      route.query.base,
+      route.query.baseWirePath,
+      tagsStore.sourceScope,
+    ] as const,
+  () => {
+    currentBasePath.value = normalizeSearchBase(
+      typeof route.query.base === "string"
+        ? route.query.base
+        : fileStore.req?.path || "/"
+    );
+    currentBaseWire.value =
+      typeof route.query.baseWirePath === "string"
+        ? route.query.baseWirePath
+        : typeof route.query.base === "string"
+          ? undefined
+          : fileStore.req?.wirePath;
+    tagResults.value = [];
+    tagResultSource = "";
+    searchAbortController.abort();
+    ongoing.value = false;
+    results.value = [];
+    prompt.value = getSearchPromptFromRoute(route.query.q, route.query.tag);
+    activeType.value = detectSearchType(prompt.value);
+    submittedType.value = null;
+    hasSearchAttempt.value = false;
+    if (tagMode.value) {
+      tagSearchScope.value =
+        route.query.scope === "global" ? "global" : "current";
+      loadTagResults();
+    } else {
+      fileSearchScope.value =
+        route.query.scope === "recursive" || route.query.scope === "global"
+          ? "recursive"
+          : "current";
+    }
   }
-});
+);
+
+watch(
+  () => [activeTag.value, tagsStore.loaded] as const,
+  ([tag, loaded]) => {
+    if (!tagMode.value) return;
+    if (!loaded || !tag) {
+      tagLoadGeneration++;
+      tagLoadAbortController.abort();
+      tagResults.value = [];
+      return;
+    }
+    void loadTagResults();
+  }
+);
 
 watch(
   () => route.query.scope,

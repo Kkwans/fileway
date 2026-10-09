@@ -44,6 +44,7 @@ export interface ResourceItem extends ResourceBase {
 
 export interface BatchResourceResult {
   path: string;
+  wirePath?: string;
   status: number;
   item?: ResourceItem;
   error?: string;

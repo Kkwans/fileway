@@ -7,6 +7,16 @@ import {
 } from "../tagResults";
 
 describe("tag result paths", () => {
+  it("opens the opaque source and its opaque parent without re-encoding display text", () => {
+    expect(
+      buildTaggedPathUrl("/中文/中.jpg", false, "/%D6%D0%CE%C4/%D6%D0.jpg")
+    ).toBe("/files/%D6%D0%CE%C4/%D6%D0.jpg");
+    expect(
+      buildResultParentRoute("/中文/中.jpg", "/%D6%D0%CE%C4/%D6%D0.jpg")
+    ).toBe("/files/%D6%D0%CE%C4/");
+    expect(() => buildResultParentRoute("/lost�/file")).toThrow("无法确认");
+    expect(getTaggedPathName("/folder/file ")).toBe("file ");
+  });
   it("builds a routable URL for a tagged Chinese directory", () => {
     expect(buildTaggedPathUrl("/volume2/电影/精选", true)).toBe(
       "/files/volume2/%E7%94%B5%E5%BD%B1/%E7%B2%BE%E9%80%89/"
