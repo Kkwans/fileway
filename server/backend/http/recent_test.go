@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -213,6 +214,7 @@ func TestRecentHTTPUsesRoleAwareRootLabel(t *testing.T) {
 func TestRecentPathsFollowRenameAndDisappearInTrash(t *testing.T) {
 	h := newTrashHTTPHarness(t, users.User{
 		Username: "owner",
+		Scope:    filepath.Join(t.TempDir(), "owner"),
 		Perm: users.Permissions{
 			Create: true, Delete: true, Modify: true, Rename: true, Download: true,
 		},

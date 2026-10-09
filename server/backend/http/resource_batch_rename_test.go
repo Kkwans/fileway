@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -200,6 +201,7 @@ func TestBatchRenameWirePathStillEnforcesRenameAndPathPermissions(t *testing.T) 
 func TestBatchRenamePreviewAndExecuteCycleWithMetadata(t *testing.T) {
 	h := newTrashHTTPHarness(t, users.User{
 		Username: "owner",
+		Scope:    filepath.Join(t.TempDir(), "owner"),
 		Perm:     users.Permissions{Create: true, Delete: true, Modify: true, Rename: true, Download: true},
 	})
 	owner := firstTrashHTTPUser(h)
