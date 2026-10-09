@@ -28,6 +28,31 @@ Android 11+ disallows selecting the `Download` root itself; a child such as
 Provider-specific write, seek and directory-view capabilities still require
 device verification; a persisted grant alone does not prove that a file exists.
 
+## Folder downloads
+
+Selecting folders prepares a read-only, bounded snapshot before any task is
+created. Confirm the file count, total bytes and destination; cancelling this
+step creates no records. Parent/child selection overlaps are deduplicated by
+original wire bytes. Listing entries must be immediate children of their source
+directory; invalid paths, foreign entries or changed identities stop preparation.
+Limits are 5,000 files, 2,000 directories and 64 nested levels; split large trees
+into subdirectories when a limit is reached. Empty directories have no downloads.
+
+Each file uses the existing independent download task, writer, offline viewer and
+media index. `relativeDirectory` stores its local hierarchy while its remote
+wire path remains unchanged. Room6→7 adds only this column with an empty default;
+old URI, prefix, progress and account ownership are retained. Confirmation pins
+the selected destination; changing servers/accounts cancels unconfirmed plans
+without removing previously created tasks. A submission failure retains remaining
+entries, so retry does not recreate acknowledged tasks.
+
+MediaStore uses `Download/fileway/<relativeDirectory>`. SAF creates/reuses nested
+directories under the original granted tree, serializing creation across app
+writers and rejecting file/directory conflicts. Files never overwrite existing
+local content. Folder viewing starts at each record's actual nested directory;
+provider reads for resolving it run off the UI thread. An external-storage provider
+still needs its own device acceptance; other provider capabilities are not inferred.
+
 ## Owned device acceptance
 
 `DownloadDirectoryTest` checks scope rejection and absent grants using isolated

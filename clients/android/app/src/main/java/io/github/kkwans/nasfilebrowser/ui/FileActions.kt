@@ -69,9 +69,10 @@ import io.github.kkwans.nasfilebrowser.R
         FavoriteFileAction(model, file, enabled)
         val count = tags.items.count { collectionPath(file.path) in it.paths }
         FileActionIcon(R.drawable.ic_tag, "设置文件标签", enabled && !tags.changing, count > 0) { labeling = true }
-        if (!file.directory && client.permissions.download) FileActionIcon(R.drawable.ic_download, "下载到本机", enabled && !downloads.busy) {
+        if (client.permissions.download) FileActionIcon(R.drawable.ic_download, "下载到本机", enabled && !downloads.busy && downloads.folderPlan == null) {
             model.download(file)
-            if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            if (file.directory) onMoved()
+            if (!file.directory && android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
         if (client.permissions.delete && file.path != "/") FileActionIcon(R.drawable.ic_trash, "移入回收站", enabled && !tags.changing) { moving = true }

@@ -9,7 +9,8 @@ data class DownloadRecord(@PrimaryKey val id: String, val jobId: Int, val accoun
     val sourceRevision: Long, val path: String, val wirePath: String, val name: String, val type: String, val expectedSize: Long,
     val modified: String, val identity: String, val sourceLabel: String, val treeUri: String, val localUri: String = "",
     val status: String = "queued", val downloaded: Long = 0, val createdAt: Long, val updatedAt: Long,
-    val generation: Long = 0, val error: String = "", val positionMs: Long = 0, val durationMs: Long = 0) {
+    val generation: Long = 0, val error: String = "", val positionMs: Long = 0, val durationMs: Long = 0,
+    @ColumnInfo(defaultValue = "''") val relativeDirectory: String = "") {
     val complete get() = status == "completed"
     val active get() = status in setOf("queued", "running")
 }

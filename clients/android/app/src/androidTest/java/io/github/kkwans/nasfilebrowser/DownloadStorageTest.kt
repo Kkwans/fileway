@@ -47,7 +47,7 @@ class DownloadStorageTest {
                 old.execSQL("INSERT INTO active_session VALUES (1,'owned-account','owned-session')")
                 old.version = 5
             }
-            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadMigration()).build()
+            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadMigration(), DownloadFolderMigration()).build()
             assertEquals("unused-owned-reference", room.profiles().account("owned-account")?.credentialRef)
             assertEquals("/%ed%a0%80%2B", room.profiles().directory("owned-account")?.wirePath)
             assertEquals(FileLayout.UNBOUNDED, room.profiles().directory("owned-account")?.fileLayout)
@@ -74,6 +74,33 @@ class DownloadStorageTest {
             assertEquals(1, dao.command(item.id, "queued", 6)); assertEquals(1, dao.claim(item.id, 7))
             assertTrue(dao.get(item.id)!!.generation > generation)
         } finally { db.close() }
+    }
+
+    @Test fun folderMigrationPreservesExistingPartialDownloadAndPersistsNestedTargets(): Unit = runBlocking {
+        val name = "fileway-owned-folder-migration-${UUID.randomUUID()}.db"
+        var room: ClientDatabase? = null
+        try {
+            val schema = JSONObject(InstrumentationRegistry.getInstrumentation().context.assets
+                .open("io.github.kkwans.nasfilebrowser.data.ClientDatabase/6.json").bufferedReader().use { it.readText() }).getJSONObject("database")
+            SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(name), null).use { old ->
+                val entities = schema.getJSONArray("entities")
+                for (index in 0 until entities.length()) {
+                    val entity = entities.getJSONObject(index); val table = entity.getString("tableName")
+                    old.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                    val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
+                    for (j in 0 until indices.length()) old.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                }
+                old.execSQL("INSERT INTO downloads VALUES ('owned-id',7300001,'owned-account','owned-profile',2,'/owned.mkv','/%FF.mkv','owned.mkv','video',8,'owned-modified','8/owned-modified','Owned fixture','content://fixture.invalid/tree/owned','content://fixture.invalid/document/partial','paused',4,1,2,3,'owned-error',42000,60000)")
+                old.version = 6
+            }
+            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadFolderMigration()).build()
+            val saved = room.downloads().get("owned-id")!!
+            assertEquals("paused", saved.status); assertEquals(4L, saved.downloaded); assertEquals(3L, saved.generation)
+            assertEquals(42000L, saved.positionMs); assertEquals(60000L, saved.durationMs); assertEquals("/%FF.mkv", saved.wirePath)
+            assertEquals("content://fixture.invalid/document/partial", saved.localUri); assertEquals("", saved.relativeDirectory)
+            room.downloads().insert(saved.copy(id = "owned-nested", jobId = 7300002, relativeDirectory = "owned/子目录 +% #"))
+            assertEquals("owned/子目录 +% #", room.downloads().get("owned-nested")!!.relativeDirectory)
+        } finally { room?.close(); context.deleteDatabase(name) }
     }
 
     @Test fun completedContentReadsAndSeeksOfflineWithoutProfileOrCredentials() = runBlocking {

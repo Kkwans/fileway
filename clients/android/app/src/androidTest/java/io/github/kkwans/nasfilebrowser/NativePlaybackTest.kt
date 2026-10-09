@@ -297,7 +297,8 @@ class NativePlaybackTest {
     }
 
     internal class Fixture(private val media: ByteArray, private val subtitles: Map<String, ByteArray> = emptyMap(),
-        private val videos: List<String> = listOf("fixture.mkv"), private val download: Boolean = false) : Closeable {
+        private val videos: List<String> = listOf("fixture.mkv"), private val download: Boolean = false,
+        private val directories: List<String> = emptyList()) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val rawRequests = AtomicInteger()
@@ -351,6 +352,23 @@ class NativePlaybackTest {
                     send(token.toByteArray(), "text/plain")
                 }
                 endpoint == "/api/tags" -> send("[]".toByteArray())
+                directories.isNotEmpty() && endpoint.startsWith("/api/resources/") -> {
+                    val uri = java.net.URI(endpoint)
+                    val path = uri.path.removePrefix("/api/resources").trimEnd('/').ifEmpty { "/" }
+                    fun item(name: String, directory: Boolean): JSONObject = JSONObject().put("path", "/$name")
+                        .put("wirePath", SearchResult.encodePath("/$name")).put("name", name.substringAfterLast('/'))
+                        .put("isDir", directory).put("type", if (directory) "" else "video")
+                        .put("size", if (directory) 0 else media.size).put("modified", "owned-download-v1")
+                    val key = path.removePrefix("/")
+                    if (uri.rawQuery == "metadata=1") {
+                        val found = if (path == "/") item("", true) else if (key in directories) item(key, true) else if (key in videos) item(key, false) else null
+                        send((found?.toString() ?: "{}").toByteArray(), status = if (found == null) 404 else 200)
+                    } else {
+                        val entries = directories.filter { it.substringBeforeLast('/', "") == key }.map { item(it, true) } +
+                            videos.filter { it.substringBeforeLast('/', "") == key }.map { item(it, false) }
+                        send(JSONObject().put("items", JSONArray(entries)).toString().toByteArray())
+                    }
+                }
                 endpoint == "/api/resources/" -> {
                     val items = JSONArray()
                     videos.forEach { name -> items.put(JSONObject().put("path", "/$name").put("wirePath", "/$name")
@@ -377,7 +395,7 @@ class NativePlaybackTest {
                     if (request[0] == "PUT") { position = JSONObject(String(body)).getDouble("position"); updated = System.currentTimeMillis() }
                     send(JSONObject().put("identity", identity).put("position", position).put("duration", 12.0).put("updatedAt", updated).put("exists", true).toString().toByteArray())
                 }
-                endpoint.substringBefore('?').removePrefix("/api/raw/") in videos -> {
+                java.net.URI(endpoint).path.removePrefix("/api/raw/") in videos -> {
                     check(!endpoint.contains("inline=true"))
                     rawRequests.incrementAndGet()
                     val range = headers["range"]?.removePrefix("bytes=")

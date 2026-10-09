@@ -113,17 +113,16 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
                         if (state.permissions.create && state.permissions.rename) FileActionIcon(R.drawable.ic_move, "批量移动", !state.busy && !selectionBusy && operations.transfer == null && chosen.isNotEmpty()) {
                             model.startFileTransfer(chosen, FileTransferAction.MOVE, state.previewScope)
                         }
-                        FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !selectionBusy && chosen.isNotEmpty() && chosen.none { it.directory } && state.permissions.download) {
+                        FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !selectionBusy && downloads.folderPlan == null && chosen.isNotEmpty() && state.permissions.download) {
                             batchKind = "download"
                             model.downloadFiles(chosen) { file -> selected = selected - key(file) }
-                            if (android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                            if (chosen.none { it.directory } && android.os.Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                         }
                         if (state.permissions.delete) FileActionIcon(R.drawable.ic_trash, "批量移入回收站", !state.busy && !selectionBusy && chosen.isNotEmpty()) {
                             pendingTrash = chosen.toList(); trashAttempted = false
                         }
                     }
-                    if (chosen.any { it.directory }) Text("文件夹暂不支持批量下载，请只选择文件", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                     if (selectionBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                     val error = if (batchKind == "trash") trash.error else if (batchKind == "download") downloads.error else null
                     val notice = if (batchKind == "trash") trash.notice else if (batchKind == "download") downloads.notice else null

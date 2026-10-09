@@ -899,6 +899,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         tasks.bind(null)
         trash.bind(null)
         fileOperations.bind(null)
+        downloads.cancelFolderDownloads(quiet = true)
         storageTools.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()

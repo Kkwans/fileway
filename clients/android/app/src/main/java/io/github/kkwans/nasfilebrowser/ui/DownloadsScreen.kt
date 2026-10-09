@@ -28,11 +28,15 @@ import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.*
 import io.github.kkwans.nasfilebrowser.download.*
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun DownloadsScreen(model: ClientModel) {
     val state by model.downloads.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var filter by rememberSaveable { mutableStateOf("全部") }
     var settings by rememberSaveable { mutableStateOf(false) }
     var remove by remember { mutableStateOf<DownloadRecord?>(null) }
@@ -46,17 +50,22 @@ import java.util.Locale
     val folderFallback = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         model.downloads.reportNotice("目录浏览已结束，下载位置未更改")
     }
-    fun openFolder(tree: String) {
-        fun browseFolder() {
+    fun openFolder(tree: String, relativeDirectory: String = "") {
+        fun browseFolder() = scope.launch {
             try {
                 model.downloads.reportNotice("使用系统目录浏览器查看文件，不会更改下载位置")
-                folderFallback.launch(model.downloads.target.directoryPicker(tree))
+                val intent = withContext(Dispatchers.IO) { model.downloads.target.directoryPicker(tree, relativeDirectory) }
+                folderFallback.launch(intent)
             } catch (_: Exception) { model.downloads.reportError("此设备没有可用的目录浏览器，请检查系统文件管理器") }
         }
-        try { context.startActivity(model.downloads.target.directoryIntent(tree)) }
-        catch (_: android.content.ActivityNotFoundException) { browseFolder() }
-        catch (_: SecurityException) { browseFolder() }
-        catch (_: Exception) { model.downloads.reportError("无法打开目录，请检查文件管理器及目录授权") }
+        scope.launch {
+            try {
+                val intent = withContext(Dispatchers.IO) { model.downloads.target.directoryIntent(tree, relativeDirectory) }
+                context.startActivity(intent)
+            } catch (_: android.content.ActivityNotFoundException) { browseFolder() }
+            catch (_: SecurityException) { browseFolder() }
+            catch (_: Exception) { model.downloads.reportError("无法打开目录，请检查文件管理器及目录授权") }
+        }
     }
     val records = state.items.filter { when (filter) { "已完成" -> it.complete; "未完成" -> !it.complete; else -> true } }
     Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "downloads") }) { insets ->
@@ -91,6 +100,8 @@ import java.util.Locale
                             Column(Modifier.weight(1f).clickable(enabled = canOpen) { openDownloaded(context, model, item, kind) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp)) {
                                 Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Text(item.sourceLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (item.relativeDirectory.isNotEmpty()) Text(item.relativeDirectory, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             }
                         }
                         val fraction = if (item.expectedSize > 0) (item.downloaded.toDouble() / item.expectedSize).toFloat().coerceIn(0f, 1f) else 0f
@@ -110,7 +121,7 @@ import java.util.Locale
                             Box {
                                 TextButton({ more = true }, enabled = !state.busy) { Text("更多") }
                                 DropdownMenu(more, { more = false }) {
-                                    DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri) })
+                                    DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri, item.relativeDirectory) })
                                     if (item.treeUri.isNotEmpty()) DropdownMenuItem({ Text("重新授权目录") }, {
                                         more = false; reauthorizing = item.id
                                         try { recoverFolder.launch(model.downloads.target.directoryUri(item.treeUri)) }

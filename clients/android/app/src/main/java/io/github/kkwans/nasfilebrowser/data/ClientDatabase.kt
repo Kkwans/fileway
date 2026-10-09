@@ -7,6 +7,7 @@ import java.util.UUID
 import io.github.kkwans.nasfilebrowser.download.DownloadRecord
 import io.github.kkwans.nasfilebrowser.download.DownloadDao
 import io.github.kkwans.nasfilebrowser.download.DownloadMigration
+import io.github.kkwans.nasfilebrowser.download.DownloadFolderMigration
 
 enum class BackendKind { NAS, WINDOWS }
 enum class ConnectionMode { DIRECT, TAILNET }
@@ -88,7 +89,7 @@ data class PlaybackSnapshot(
     @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
 }
 
-@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class, DownloadRecord::class], version = 6, exportSchema = true)
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class, DownloadRecord::class], version = 7, exportSchema = true)
 abstract class ClientDatabase : RoomDatabase() {
     abstract fun profiles(): ProfileDao
     abstract fun playback(): PlaybackDao
@@ -99,7 +100,7 @@ abstract class ClientDatabase : RoomDatabase() {
         /** One upgrade chain for the app and isolated historical-database checks. */
         internal fun migrations(backups: java.io.File): Array<androidx.room.migration.Migration> = arrayOf(
             HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups),
-            ActiveSessionMigration(backups), DownloadMigration(),
+            ActiveSessionMigration(backups), DownloadMigration(), DownloadFolderMigration(),
         )
         fun get(context: Context): ClientDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, ClientDatabase::class.java, "nfb-client.db")

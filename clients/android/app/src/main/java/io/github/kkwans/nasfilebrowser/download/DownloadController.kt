@@ -10,7 +10,10 @@ import kotlinx.coroutines.flow.*
 import java.util.UUID
 
 data class DownloadsState(val items: List<DownloadRecord> = emptyList(), val tree: String = "", val busy: Boolean = false, val error: String? = null, val notice: String? = null,
-    val speeds: Map<String, Long?> = emptyMap())
+    val speeds: Map<String, Long?> = emptyMap(), val folderRequest: Boolean = false, val preparing: Boolean = false, val scannedFiles: Int = 0, val folderPlan: FolderDownloadPlan? = null)
+
+private data class PreparedFolderDownloads(val binding: SessionContext, val current: () -> Boolean,
+    val created: (ResourceRef) -> Unit, val tree: String, var plan: FolderDownloadPlan)
 
 class DownloadController(private val context: Context, private val scope: CoroutineScope) {
     private val database = ClientDatabase.get(context); private val dao = database.downloads()
@@ -18,6 +21,8 @@ class DownloadController(private val context: Context, private val scope: Corout
     private val mutable = MutableStateFlow(DownloadsState(tree = target.selectedTree()))
     val state = mutable.asStateFlow()
     private var sampling: Job? = null
+    private var actionJob: Job? = null
+    private var prepared: PreparedFolderDownloads? = null
     fun visible(active: Boolean) {
         if (active == (sampling?.isActive == true)) return
         sampling?.cancel(); sampling = null
@@ -57,6 +62,7 @@ class DownloadController(private val context: Context, private val scope: Corout
         dao.observe().collect { mutable.value = mutable.value.copy(items = it) }
     } }
     fun selectDirectory(uri: android.net.Uri?) = perform {
+        check(prepared == null) { "请先完成或取消文件夹下载计划" }
         withContext(Dispatchers.IO) { target.selectTree(uri) }
         mutable.value = mutable.value.copy(tree = target.selectedTree())
         "下载目录已保存"
@@ -69,10 +75,24 @@ class DownloadController(private val context: Context, private val scope: Corout
     }
     fun enqueue(binding: SessionContext, file: ResourceRef, current: () -> Boolean) = enqueueAll(binding, listOf(file), current)
     fun enqueueAll(binding: SessionContext, files: List<ResourceRef>, current: () -> Boolean, onCreated: (ResourceRef) -> Unit = {}) = perform {
+        check(prepared == null) { "请先完成或取消当前下载计划" }
         val snapshot = files.distinctBy { it.wirePath.ifEmpty { it.path } }
-        require(snapshot.isNotEmpty() && snapshot.all { !it.directory && it.downloadId.isEmpty() }) { "请选择服务器上的文件，暂不支持文件夹批量下载" }
+        require(snapshot.isNotEmpty() && snapshot.all { it.downloadId.isEmpty() }) { "请选择服务器上的文件或文件夹" }
         check(current()) { "下载来源已切换" }
         check(binding.api.permissions().download) { "当前账号没有下载权限" }
+        if (snapshot.any { it.directory }) {
+            mutable.value = mutable.value.copy(folderRequest = true, preparing = true, scannedFiles = 0)
+            try {
+                val plan = scanFolderDownloads(snapshot, current, { endpoint -> binding.api.request("GET", endpoint) }) { count ->
+                    mutable.value = mutable.value.copy(scannedFiles = count)
+                }
+                check(current()) { "下载来源已切换" }
+                check(plan.entries.isNotEmpty()) { "所选文件夹没有可下载的文件" }
+                prepared = PreparedFolderDownloads(binding, current, onCreated, target.selectedTree(), plan)
+                mutable.value = mutable.value.copy(folderPlan = plan)
+            } finally { mutable.value = mutable.value.copy(preparing = false) }
+            return@perform "已读取文件夹，请确认下载范围与保存位置"
+        }
         var created = 0
         for (file in snapshot) {
             try {
@@ -88,13 +108,53 @@ class DownloadController(private val context: Context, private val scope: Corout
         }
         "已添加 $created 项下载，可在本机下载中查看"
     }
-    private suspend fun addDownload(binding: SessionContext, file: ResourceRef, current: () -> Boolean, created: () -> Unit) {
+    fun confirmFolderDownloads() {
+        val pending = prepared ?: return
+        perform {
+            check(pending.current()) { "下载来源已切换，请重新选择" }
+            check(pending.binding.api.permissions().download) { "当前账号没有下载权限" }
+            check(withContext(Dispatchers.IO) { target.hasAccess(pending.tree) }) { "下载目录授权已失效，请取消后重新选择" }
+            val roots = pending.plan.roots
+            var created = 0
+            val count = pending.plan.entries.size
+            for (entry in pending.plan.entries.toList()) {
+                try {
+                    addDownload(pending.binding, entry.file, pending.current, entry.relativeDirectory, pending.tree, verifySnapshot = true) {
+                        created++
+                        pending.plan = pending.plan.copy(entries = pending.plan.entries.filterNot { it === entry })
+                        if (prepared === pending && pending.current()) mutable.value = mutable.value.copy(folderPlan = pending.plan, notice = "已建立 $created / $count 项下载任务")
+                        val root = roots.firstOrNull { file -> resourceWireBytes(file.wirePath.ifEmpty { SearchResult.encodePath(file.path) })
+                            .let { java.util.Base64.getEncoder().encodeToString(it) } == entry.rootKey }
+                        if (root != null && pending.plan.entries.none { it.rootKey == entry.rootKey } && prepared === pending && pending.current()) pending.created(root)
+                    }
+                } catch (failure: Exception) {
+                    if (failure is CancellationException) throw failure
+                    throw IllegalStateException("已建立 $created / $count 项任务；${entry.file.name}：${failure.message ?: "添加失败"}。重试只添加剩余项目，已有任务保留。", failure)
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            check(prepared === pending && pending.current()) { "下载来源已切换，已建立的任务保留" }
+            prepared = null
+            mutable.value = mutable.value.copy(folderRequest = false, folderPlan = null)
+            "已添加 $created 项下载，保留文件夹层级，可从本机下载查看"
+        }
+    }
+    fun cancelFolderDownloads(quiet: Boolean = false) {
+        if (!mutable.value.folderRequest) return
+        actionJob?.cancel(); actionJob = null; prepared = null
+        mutable.value = mutable.value.copy(busy = false, folderRequest = false, preparing = false, folderPlan = null, scannedFiles = 0, error = null,
+            notice = if (quiet) null else "下载计划已取消，已经建立的任务保留")
+    }
+    private suspend fun addDownload(binding: SessionContext, file: ResourceRef, current: () -> Boolean,
+        relativeDirectory: String = "", tree: String = target.selectedTree(), verifySnapshot: Boolean = false, created: () -> Unit) {
         check(current()) { "下载来源已切换" }
         val wire = file.wirePath.ifEmpty { SearchResult.encodePath(file.path) }
         val info = binding.api.request("GET", "/api/resources$wire?metadata=1")
         check(current() && !info.getBoolean("isDir")) { "下载来源已切换或文件已变化" }
         val size = info.getLong("size"); val modified = info.optString("modified")
         check(size >= 0) { "源文件长度无法确认" }
+        if (verifySnapshot) check(size == file.size && modified == file.modified && resourceWireBytes(info.optString("wirePath").ifEmpty { SearchResult.encodePath(info.getString("path")) })
+            .contentEquals(resourceWireBytes(wire))) { "源文件已变化，请重新读取下载范围" }
         val now = System.currentTimeMillis()
         val record = database.withTransaction {
             check(current()) { "下载来源已切换" }
@@ -102,7 +162,7 @@ class DownloadController(private val context: Context, private val scope: Corout
             check(next in 7300001..7900000) { "下载任务编号已用完，请整理历史记录" }
             DownloadRecord(UUID.randomUUID().toString(), next, binding.account.key, binding.profile.id, binding.profile.sourceRevision,
                 file.path, wire, file.name, file.type, size, modified, "$size/$modified", binding.profile.name + " · " + binding.account.username,
-                target.selectedTree(), createdAt = now, updatedAt = now).also { dao.insert(it) }
+                tree, createdAt = now, updatedAt = now, relativeDirectory = relativeDirectory).also { dao.insert(it) }
         }
         try { DownloadScheduler.start(context, record) }
         catch (failure: Exception) { dao.command(record.id, "failed", now); throw failure }
@@ -132,7 +192,7 @@ class DownloadController(private val context: Context, private val scope: Corout
     private fun perform(action: suspend () -> String) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, error = null, notice = null)
-        scope.launch {
+        actionJob = scope.launch {
             try { val message = action(); mutable.value = mutable.value.copy(busy = false, notice = message) }
             catch (failure: Exception) { if (failure is CancellationException) throw failure; mutable.value = mutable.value.copy(busy = false, error = failure.message ?: "下载操作失败，请重试") }
         }
