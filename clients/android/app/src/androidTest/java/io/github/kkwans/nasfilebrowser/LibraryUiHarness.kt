@@ -3,6 +3,8 @@ package io.github.kkwans.nasfilebrowser
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.*
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.data.*
@@ -27,9 +29,38 @@ internal open class LibraryUiHarness {
         text("文件详情")
     }
     private fun missing(label: String): Nothing {
-        capture("library-missing-action")
-        device.dumpWindowHierarchy(java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "library-missing-action.xml"))
-        error("Missing visible action $label; tab=${model.state.value.tab}, busy=${model.state.value.busy}, tagsLoaded=${model.tags.state.value.loaded}")
+        // Pure setContent tests intentionally need no bound ClientModel. A
+        // diagnostic failure must never replace the original missing control.
+        fun observe(block: () -> String) = runCatching(block).getOrElse { "unavailable(${it.javaClass.simpleName})" }
+        val foreground = observe { device.currentPackageName ?: "none" }
+        val scenario = observe { activity.scenario.state.toString() }
+        var activities = "unavailable"
+        val lifecycle = observe {
+            instrumentation.runOnMainSync {
+                val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+                activities = Stage.values().filter { it != Stage.PRE_ON_CREATE && it != Stage.DESTROYED }
+                    .flatMap { stage -> monitor.getActivitiesInStage(stage).map { current ->
+                        val decor = current.window.decorView
+                        "${current.javaClass.simpleName}@${System.identityHashCode(current)}:$stage" +
+                            "(task=${current.taskId},focus=${current.hasWindowFocus()},finishing=${current.isFinishing}," +
+                            "destroyed=${current.isDestroyed},attached=${decor.isAttachedToWindow},shown=${decor.isShown}," +
+                            "visibility=${decor.windowVisibility},size=${decor.width}x${decor.height})"
+                    } }.sorted().joinToString(prefix = "[", postfix = "]")
+            }
+            activities
+        }
+        val modelState = observe {
+            if (!this::model.isInitialized) "model=uninitialized" else {
+                val state = model.state.value
+                "model=bound,tab=${state.tab},busy=${state.busy},startupPending=${state.startupPending}," +
+                    "connected=${state.connected},tagsLoaded=${model.tags.state.value.loaded}"
+            }
+        }
+        // No hierarchy, screenshot, Intent or View text: those can contain
+        // credentials/input/private filenames. Explicit owned captures remain opt-in.
+        val diagnostics = "$modelState; foregroundPackage=$foreground; scenario=$scenario; testActivities=$lifecycle"
+        runCatching { OwnedUiTraceRule.trace("missing-control $diagnostics") }
+        error("Missing visible action $label; $diagnostics")
     }
     protected suspend fun fixture(data: LibraryFixtureData, block: suspend (ClientSearchTest.Fixture) -> Unit) {
         val source = ClientSearchTest.Fixture(data.files.keys.filter { it.substringBeforeLast('/').isEmpty() }.map { it.substringAfterLast('/') }, library = data)
