@@ -14,7 +14,8 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Keystore encrypts data keys and credentials; private files are excluded from backup. */
-class CredentialVault(context: Context) {
+class CredentialVault internal constructor(context: Context, private val atomicFile: (File) -> AtomicFile) {
+    constructor(context: Context) : this(context, { AtomicFile(it) })
     private val directory = File(context.noBackupFilesDir, "vault").apply { mkdirs() }
     companion object { private val lock = Any(); private const val alias = "nfb-client-vault-v1" }
 
@@ -30,7 +31,7 @@ class CredentialVault(context: Context) {
     }
     private fun file(id: String): AtomicFile {
         val name = MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString("") { "%02x".format(it) }
-        return AtomicFile(File(directory, "$name.bin"))
+        return atomicFile(File(directory, "$name.bin"))
     }
     fun read(id: String): ByteArray? = synchronized(lock) {
         val entry = file(id)
@@ -49,7 +50,19 @@ class CredentialVault(context: Context) {
         }
         val payload = byteArrayOf(1) + cipher.iv + cipher.doFinal(value)
         val entry = file(id); val output = entry.startWrite()
-        try { output.write(payload); entry.finishWrite(output) } catch (error: Exception) { entry.failWrite(output); throw error }
+        try {
+            output.write(payload)
+            // AtomicFile.finishWrite logs sync/close/rename errors instead of
+            // throwing. Explicit sync and verification must precede our ACK.
+            output.fd.sync()
+            entry.finishWrite(output)
+            check(entry.baseFile.isFile && entry.baseFile.length() == payload.size.toLong() &&
+                !File(entry.baseFile.path + ".new").exists() && !File(entry.baseFile.path + ".bak").exists() &&
+                entry.baseFile.readBytes().contentEquals(payload)) { "本机登录凭据未能保存，请重试" }
+        } catch (error: Exception) {
+            runCatching { entry.failWrite(output) }.onFailure(error::addSuppressed)
+            throw IllegalStateException("本机登录凭据未能保存，请重试", error)
+        }
     }
     fun remove(id: String) = synchronized(lock) {
         val entry = file(id)
