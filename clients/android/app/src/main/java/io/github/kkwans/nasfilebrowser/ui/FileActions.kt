@@ -63,6 +63,7 @@ import io.github.kkwans.nasfilebrowser.R
     var moving by remember(file.mediaKey, tags.scope) { mutableStateOf(false) }
     var renaming by remember(file.mediaKey, operations.scope) { mutableStateOf(false) }
     var more by remember(file.mediaKey, operations.scope) { mutableStateOf(false) }
+    DisposableEffect(file) { onDispose { if (model.fileChecksum.state.value.file === file) model.fileChecksum.close() } }
     val enabled = !trash.changing && !client.busy && !operations.changing
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -76,9 +77,12 @@ import io.github.kkwans.nasfilebrowser.R
                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
         if (client.permissions.delete && file.path != "/") FileActionIcon(R.drawable.ic_trash, "移入回收站", enabled && !tags.changing) { moving = true }
-        if (file.path != "/" && (client.permissions.rename || client.permissions.create)) Box {
+        if (file.path != "/" && (client.permissions.rename || client.permissions.create || client.permissions.download && !file.directory)) Box {
             FileActionIcon(R.drawable.ic_more_vert, "更多文件操作", enabled && operations.transfer == null) { more = true }
             DropdownMenu(more, { more = false }) {
+                if (client.permissions.download && !file.directory) DropdownMenuItem({ Text("校验文件") }, {
+                    more = false; model.fileChecksum.open(file, client.previewScope)
+                }, leadingIcon = { Icon(painterResource(R.drawable.ic_info), null) })
                 if (client.permissions.rename) DropdownMenuItem({ Text("重命名") }, { more = false; renaming = true },
                     enabled = !tags.changing && !favorites.changing, leadingIcon = { Icon(painterResource(R.drawable.ic_edit), null) },
                     modifier = Modifier.semantics { contentDescription = "重命名文件" })
@@ -101,6 +105,7 @@ import io.github.kkwans.nasfilebrowser.R
         if (!renaming) operations.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
     }
     if (labeling) FileTagPicker(model, file) { labeling = false }
+    if (model.fileChecksum.state.collectAsStateWithLifecycle().value.file?.mediaKey == file.mediaKey) FileChecksumSheet(model.fileChecksum)
     if (renaming) FileRenameDialog(model, file, { renaming = false }) { renaming = false; onMoved() }
     if (moving) AlertDialog(onDismissRequest = { moving = false }, title = { Text("移入回收站？") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -127,6 +127,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
     val operationHistory = OperationHistoryController(viewModelScope) { context === it && generation == it.generation }
     val recentAccess = RecentAccessController(viewModelScope) { context === it && generation == it.generation }
+    val fileChecksum = FileChecksumController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
     val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished,
         { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } }, ::resourcesBatchRenamed)
@@ -247,6 +248,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 tasks.bind(bound)
                 operationHistory.bind(bound)
                 recentAccess.bind(bound)
+                fileChecksum.bind(bound)
                 trash.bind(bound)
                 fileOperations.bind(bound)
                 storageTools.bind(bound)
@@ -999,6 +1001,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         tasks.bind(null)
         operationHistory.bind(null)
         recentAccess.bind(null)
+        fileChecksum.bind(null)
         trash.bind(null)
         fileOperations.bind(null)
         downloads.cancelFolderDownloads(quiet = true)
