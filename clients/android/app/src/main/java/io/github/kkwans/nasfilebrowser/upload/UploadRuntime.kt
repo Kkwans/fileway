@@ -170,6 +170,12 @@ class UploadRuntime private constructor(private val context: Context) {
                         val reply = send(id, lease, "POST", ByteArray(0).toRequestBody(), mapOf("Upload-Length" to record.expectedSize.toString(), "Tus-Resumable" to "1.0.0"))
                         checkReply(reply, setOf(201)); check(reply.headers["Location"] == lease.url) { "上传位置与原来源不一致，请核对" }
                         check(dao.created(id, record.generation, System.currentTimeMillis()) == 1)
+                        // A duplicate creation acknowledgement can belong to
+                        // an already started session; never assume offset zero.
+                        val head = send(id, lease, "HEAD", headers = mapOf("Tus-Resumable" to "1.0.0"))
+                        checkReply(head, setOf(200, 204))
+                        offset = head.headers["Upload-Offset"]?.toLongOrNull() ?: error("服务器未确认上传初始位置")
+                        check(head.headers["Upload-Length"]?.toLongOrNull() == record.expectedSize && offset in 0..record.expectedSize) { "原上传的文件长度或位置已变化" }
                     }
                     check(dao.progress(id, record.generation, offset, System.currentTimeMillis()) == 1)
                     baselines[id] = offset
