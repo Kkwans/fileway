@@ -21,6 +21,7 @@ class OperationHistoryContractTest {
         var second = page(listOf(entry("web-first", "/中文 #?%/web.txt"), entry("web-second", "/second.txt")), "", 2)
         var hold: CompletableDeferred<Unit>? = null
         var entered = CompletableDeferred<Unit>()
+        val heldReadEntered = CompletableDeferred<Unit>()
         val heldReadFinished = CompletableDeferred<Unit>()
         var failGet = false
         var deleteStatus = 200
@@ -34,9 +35,15 @@ class OperationHistoryContractTest {
                 requests.add(method to endpoint)
                 var status = 200
                 val body = if (method == "GET") {
-                    entered.complete(Unit)
+                    // Capture this response and its gate before notifying the test;
+                    // the next filter may immediately replace both fixture values.
                     val captured = if (endpoint.contains("cursor=")) second.toString() else first.toString()
-                    hold?.let { try { withContext(NonCancellable) { it.await() } } finally { heldReadFinished.complete(Unit) } }
+                    val pendingHold = hold
+                    entered.complete(Unit)
+                    pendingHold?.let { try { withContext(NonCancellable) {
+                        heldReadEntered.complete(Unit)
+                        it.await()
+                    } } finally { heldReadFinished.complete(Unit) } }
                     if (failGet) error("Owned history read failure")
                     captured
                 } else {
@@ -133,10 +140,13 @@ class OperationHistoryContractTest {
         authority.hold = releaseOld
         try {
             main { controller.bind(context); controller.refresh() }
-            withTimeout(5000) { authority.entered.await() }
+            withTimeout(5000) { authority.heldReadEntered.await() }
             authority.hold = null
             authority.first = Authority.page(listOf(Authority.entry("filtered", "/filtered.txt")), "", 1)
             main { controller.filter(OperationHistoryFilter(text = "filtered")) }; settled(controller)
+            assertEquals(2, authority.requests.size)
+            assertEquals("filtered", controller.state.value.items.single().id)
+            assertFalse("Old response must still be held after the new filter settles", authority.heldReadFinished.isCompleted)
             releaseOld.complete(Unit)
             withTimeout(5000) { authority.heldReadFinished.await() }
             withContext(Dispatchers.Main) { yield() }
