@@ -2,12 +2,14 @@ package io.github.kkwans.nasfilebrowser
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.app.ActivityManager
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
@@ -35,6 +37,38 @@ internal class RealWindowsConnectionTest : LibraryUiHarness() {
         var target = text(label)
         while (!target.isClickable) target = target.parent ?: error("Missing owned control")
         target.click()
+    }
+
+    private suspend fun foregroundOwnedActivity() {
+        var task = -1
+        activity.scenario.onActivity { task = it.taskId }
+        instrumentation.uiAutomation.adoptShellPermissionIdentity("android.permission.REORDER_TASKS")
+        try { instrumentation.targetContext.getSystemService(ActivityManager::class.java).moveTaskToFront(task, 0) }
+        finally { instrumentation.uiAutomation.dropShellPermissionIdentity() }
+        withTimeout(5000) {
+            while (true) {
+                var focused = false
+                activity.scenario.onActivity { focused = it.hasWindowFocus() }
+                if (focused) break
+                delay(50)
+            }
+        }
+    }
+
+    private suspend fun thumbnailsLoaded(vararg names: String) {
+        fun phase(node: AccessibilityNodeInfo?, name: String): String? {
+            if (node == null) return null
+            if (node.contentDescription?.toString()?.contains("$name 预览") == true) return node.stateDescription?.toString()
+            for (i in 0 until node.childCount) phase(node.getChild(i), name)?.let { return it }
+            return null
+        }
+        withTimeout(10_000) {
+            while (true) {
+                val root = instrumentation.uiAutomation.rootInActiveWindow
+                if (names.all { phase(root, it) == "预览已加载" }) return@withTimeout
+                delay(100)
+            }
+        }
     }
 
     private suspend fun assertNativePicture() {
@@ -86,10 +120,15 @@ internal class RealWindowsConnectionTest : LibraryUiHarness() {
         val profile = store.save(ServerProfile(name = "Owned Windows $nonce", address = config.getString("baseUrl"), backend = BackendKind.WINDOWS))
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         try {
+            foregroundOwnedActivity()
             main { model.selectProfile(profile) }
             withTimeout(5000) { model.state.first { !it.busy && it.profile?.id == profile.id } }
             text("Windows"); click("收起连接选项")
-            assertTrue(device.wait(Until.gone(By.text("档案名称（选填）")), 5000))
+            if (!device.wait(Until.gone(By.text("档案名称（选填）")), 5000)) {
+                capture("windows-form-collapse-failure")
+                device.dumpWindowHierarchy(java.io.File(instrumentation.targetContext.getExternalFilesDir(null), "windows-form-collapse-failure.xml"))
+                error("Owned form collapse did not reach the visible state")
+            }
             device.waitForIdle()
             val fields = device.findObjects(By.clazz("android.widget.EditText")).filter { !it.visibleBounds.isEmpty }
             assertEquals(3, fields.size)
@@ -101,9 +140,18 @@ internal class RealWindowsConnectionTest : LibraryUiHarness() {
             assertEquals(user, model.state.value.accountName)
             val account = store.accounts(profile).single()
             assertEquals(account.key, store.active()?.second?.key)
-            capture("windows-files")
+            thumbnailsLoaded(png, video); capture("windows-files")
             val api = NasSession.restore(profile, store.token(profile, account) ?: error("Saved Windows identity missing"), account.userId)
             val image = model.state.value.files.single { it.name == png }
+            val preview = api.preview(image.path, image.wirePath)
+            try {
+                val reply = model.previewImageLoader.execute(coil3.request.ImageRequest.Builder(instrumentation.targetContext)
+                    .data(preview.url).size(512, 512).build())
+                if (reply is coil3.request.ErrorResult) {
+                    throw AssertionError("Actual thumbnail loader failed: ${reply.throwable.javaClass.simpleName}: ${reply.throwable.message}", reply.throwable)
+                }
+                assertTrue(reply is coil3.request.SuccessResult)
+            } finally { preview.release() }
             val lease = api.lease(image.path, image.wirePath)
             try {
                 withContext(Dispatchers.IO) {
@@ -142,7 +190,7 @@ internal class RealWindowsConnectionTest : LibraryUiHarness() {
             withTimeout(15_000) { model.state.first { it.connected && !it.busy && it.accountName == user } }
             assertEquals(account.key, store.active()?.second?.key)
             assertEquals(BackendKind.WINDOWS, model.state.value.profile?.backend)
-            capture("windows-restored")
+            thumbnailsLoaded(png, video); capture("windows-restored")
         } finally { withContext(NonCancellable) {
             password = ""
             main { model.disconnect() }; store.remove(profile)
