@@ -29,6 +29,8 @@ class DocumentPreviewController internal constructor(private val context: Contex
     private var bitmap: DocumentPageBitmap? = null
     private var width = 1080
     private var opened = false
+    private data class BorrowedAsset(val owner: SessionContext, val lease: PreviewLease)
+    private var borrowedAsset: BorrowedAsset? = null
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val memoryClass = context.getSystemService(ActivityManager::class.java).memoryClass
     private fun current(owner: SessionContext, epoch: Long) = bound === owner && isCurrent(owner) && revision == epoch
@@ -45,6 +47,7 @@ class DocumentPreviewController internal constructor(private val context: Contex
         val old = pdf; pdf = null
         if (old != null) cleanup.launch { old.close() }
         opened = false
+        borrowedAsset = null
         mutable.value = DocumentPreviewState(scope = bound?.owner.orEmpty())
     }
     fun open(file: ResourceRef, sourceScope: String) {
@@ -54,10 +57,21 @@ class DocumentPreviewController internal constructor(private val context: Contex
         mutable.value = DocumentPreviewState(scope = owner.owner, file = file, kind = documentPreviewKind(file))
         retry()
     }
+    /** Root owns/revokes this capability. This viewer owns only its existing
+     * reader work/PDF resources and never records an asset as an ordinary path. */
+    fun openAsset(file: ResourceRef, lease: PreviewLease, sourceScope: String) {
+        val owner = bound ?: return
+        if (!isCurrent(owner) || sourceScope != owner.api.id || lease.scope != owner.api.id) return
+        close()
+        borrowedAsset = BorrowedAsset(owner, lease)
+        mutable.value = DocumentPreviewState(scope = owner.owner, file = file, kind = documentPreviewKind(file))
+        retry()
+    }
     fun retry() {
         val owner = bound ?: return
         val before = mutable.value
         val file = before.file ?: return
+        val asset = borrowedAsset
         if (!isCurrent(owner) || before.loading) return
         loading?.cancel(); rendering?.cancel(); renderRevision++
         bitmap?.close(); bitmap = null
@@ -71,21 +85,36 @@ class DocumentPreviewController internal constructor(private val context: Contex
             var working: DocumentWorkingFile? = null
             var prepared: DocumentPdfSession? = null
             try {
-                val wire = documentWirePath(file)
-                val metadata = owner.api.request("GET", "/api/resources$wire?metadata=1")
-                check(!metadata.getBoolean("isDir") && resourceWireBytes(metadata.optString("wirePath").ifEmpty { SearchResult.encodePath(metadata.getString("path")) })
-                    .contentEquals(resourceWireBytes(wire))) { "文件来源已变化，请从文件列表重新选择" }
-                val actual = file.copy(path = metadata.getString("path"), wirePath = wire, name = metadata.getString("name"),
-                    size = metadata.getLong("size"), modified = metadata.optString("modified"), type = metadata.optString("type"))
+                val wire: String
+                val actual = if (asset == null) {
+                    wire = documentWirePath(file)
+                    val metadata = owner.api.request("GET", "/api/resources$wire?metadata=1")
+                    check(!metadata.getBoolean("isDir") && resourceWireBytes(metadata.optString("wirePath").ifEmpty { SearchResult.encodePath(metadata.getString("path")) })
+                        .contentEquals(resourceWireBytes(wire))) { "文件来源已变化，请从文件列表重新选择" }
+                    file.copy(path = metadata.getString("path"), wirePath = wire, name = metadata.getString("name"),
+                        size = metadata.getLong("size"), modified = metadata.optString("modified"), type = metadata.optString("type"))
+                } else {
+                    wire = ""
+                    check(asset.owner === owner && asset.lease.scope == owner.api.id && before.scope == owner.owner) { "包内文件来源已切换" }
+                    require(!file.directory && file.size >= 0) { "包内文件元数据无效" }
+                    val uri = try { java.net.URI(asset.lease.url) } catch (_: java.net.URISyntaxException) { error("包内文件能力地址无效") }
+                    require(uri.scheme == "http" && uri.host == "127.0.0.1" && uri.port > 0 && uri.rawUserInfo == null &&
+                        uri.rawQuery == null && uri.rawFragment == null && uri.path?.startsWith("/stream/") == true) { "包内文件来源不是有效的本机能力地址" }
+                    file
+                }
                 val kind = documentPreviewKind(actual)
                 check(current(owner, epoch)) { "连接已切换" }
                 mutable.value = mutable.value.copy(file = actual, kind = kind)
-                if (kind == DocumentPreviewKind.OTHER) { mutable.value = mutable.value.copy(loading = false); return@launch }
+                if (kind == DocumentPreviewKind.OTHER) {
+                    if (asset != null) check(owner.api.permissions().download) { "当前账号没有读取文件内容的权限" }
+                    mutable.value = mutable.value.copy(loading = false); return@launch
+                }
                 check(owner.api.permissions().download) { "当前账号没有读取文件内容的权限" }
                 val limit = if (kind == DocumentPreviewKind.TEXT) DOCUMENT_TEXT_LIMIT else DOCUMENT_PDF_LIMIT
                 check(actual.size in 0..limit) { if (kind == DocumentPreviewKind.TEXT) "文本超过 10 MiB 阅读上限，请下载后打开" else "PDF 超过 64 MiB 查看上限，请下载后打开" }
                 // ORIGINAL is the existing raw lease wrapper, with no image conversion.
-                lease = owner.api.image(actual.path, wire, ImageQuality.ORIGINAL)
+                lease = if (asset == null) owner.api.image(actual.path, wire, ImageQuality.ORIGINAL)
+                    else PreviewLease(asset.lease.url, asset.lease.scope) { /* Borrowed: root retains revocation ownership. */ }
                 currentCoroutineContext().ensureActive()
                 if (kind == DocumentPreviewKind.TEXT) {
                     val bytes = reader.text(lease, actual.size)
@@ -118,7 +147,7 @@ class DocumentPreviewController internal constructor(private val context: Contex
         }
     }
     private fun acknowledge(owner: SessionContext, file: ResourceRef) {
-        if (opened) return
+        if (opened || borrowedAsset != null) return
         opened = true
         try { onOpened(owner, file) } catch (_: Exception) { /* Recording cannot make a readable document fail. */ }
     }
