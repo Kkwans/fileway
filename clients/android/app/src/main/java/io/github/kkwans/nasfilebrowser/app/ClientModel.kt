@@ -143,6 +143,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         }, onProfileChanged = { bound, profile ->
             if (context === bound && generation == bound.generation) mutable.value = mutable.value.copy(accountName = profile.username)
         })
+    val adminUsers = AdminUsersController(viewModelScope, { context === it && generation == it.generation },
+        onOwnAccountChanged = { bound, _, password ->
+            if (context === bound && password != null && store.password(bound.profile, bound.account) != null && context === bound)
+                store.rememberPassword(bound.profile, bound.account, password)
+            if (context === bound) disconnect()
+        }, onOwnAccountDeleted = { bound -> if (context === bound) disconnect() })
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
     val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished,
         { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } }, ::resourcesBatchRenamed)
@@ -268,6 +274,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 archives.bind(bound)
                 documentEdits.bind(bound)
                 accountSettings.bind(bound)
+                adminUsers.bind(bound)
                 trash.bind(bound)
                 fileOperations.bind(bound)
                 storageTools.bind(bound)
@@ -807,6 +814,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
         accountSettings.setVisible(visible && mutable.value.tab == "account")
         archives.setVisible(foreground && archives.state.value.file != null && mutable.value.connected)
+        adminUsers.setVisible(visible && mutable.value.tab == "admin-users")
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
         uploads.visible(foreground && mutable.value.tab == "uploads")
         fileOperations.setVisible(foreground && mutable.value.connected)
@@ -1050,6 +1058,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         archives.bind(null)
         documentEdits.bind(null)
         accountSettings.bind(null)
+        adminUsers.bind(null)
         trash.bind(null)
         fileOperations.bind(null)
         downloads.cancelFolderDownloads(quiet = true)
