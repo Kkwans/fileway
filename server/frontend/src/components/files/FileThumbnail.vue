@@ -65,6 +65,7 @@ import { getResourceIconName } from "@/utils/fileIcons";
 const props = defineProps<{
   name: string;
   path: string;
+  wirePath?: string;
   type: string;
   modified: string;
   size: number;
@@ -101,6 +102,7 @@ const item = computed(
   () =>
     ({
       path: props.path,
+      wirePath: props.wirePath,
       modified: props.modified,
       size: props.size,
     }) as ResourceItem
@@ -174,7 +176,7 @@ watch(
 );
 
 watch(
-  () => [props.path, props.modified, props.size, props.fit],
+  () => [props.wirePath || props.path, props.modified, props.size, props.fit],
   () => {
     cancelActiveLoad();
     start();

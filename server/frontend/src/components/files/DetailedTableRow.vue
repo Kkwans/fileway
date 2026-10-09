@@ -41,6 +41,7 @@
           <FileThumbnail
             :name="name"
             :path="path"
+            :wire-path="wirePath"
             :type="type"
             :modified="modified"
             :size="size"
@@ -206,6 +207,7 @@ const props = defineProps<{
   index: number;
   readOnly?: boolean;
   path: string;
+  wirePath?: string;
   riskLevel?: RiskLevel;
   visibleKeys?: string[];
   registerItem?: (key: string, element: HTMLElement | null) => void;
@@ -246,7 +248,7 @@ const inlineRiskLevel = computed<Exclude<RiskLevel, "low"> | null>(() => {
     : null;
 });
 const isFavorited = computed(() =>
-  props.path ? favoritesStore.isFavorite(props.path) : false
+  props.path ? favoritesStore.isFavorite(props.path, props.wirePath) : false
 );
 const pathTags = computed(() =>
   props.path ? tagsStore.getTagsForPath(props.path) : []
@@ -370,7 +372,13 @@ const drop = async (event: DragEvent) => {
 };
 
 const toggleFav = () => {
-  if (props.path) favoritesStore.toggleFavorite(props.path, props.name);
+  if (props.path)
+    favoritesStore.toggleFavorite(
+      props.path,
+      props.name,
+      undefined,
+      props.wirePath
+    );
 };
 const open = (event?: MouseEvent) => {
   if (event && touchInteraction.value) return;

@@ -38,6 +38,7 @@
       <FileThumbnail
         :name="name"
         :path="path"
+        :wire-path="wirePath"
         :type="type"
         :modified="modified"
         :size="size"
@@ -317,6 +318,7 @@ const props = defineProps<{
   index: number;
   readOnly?: boolean;
   path: string;
+  wirePath?: string;
   riskLevel?: RiskLevel;
   visibleKeys?: string[];
   registerItem?: (key: string, element: HTMLElement | null) => void;
@@ -360,12 +362,17 @@ const inlineRiskLevel = computed<Exclude<RiskLevel, "low"> | null>(() => {
 
 const isFavorited = computed(() => {
   if (!props.path) return false;
-  return favoritesStore.isFavorite(props.path);
+  return favoritesStore.isFavorite(props.path, props.wirePath);
 });
 
 const toggleFav = () => {
   if (!props.path) return;
-  favoritesStore.toggleFavorite(props.path, props.name);
+  favoritesStore.toggleFavorite(
+    props.path,
+    props.name,
+    undefined,
+    props.wirePath
+  );
 };
 
 const selectForAction = () => {

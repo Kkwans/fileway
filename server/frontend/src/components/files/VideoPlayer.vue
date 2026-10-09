@@ -274,6 +274,7 @@ import "video.js/dist/video-js.min.css";
 const props = withDefaults(
   defineProps<{
     path: string;
+    wirePath?: string;
     source: string;
     poster?: string;
     downloadSource?: string;
@@ -289,6 +290,12 @@ const props = withDefaults(
     directSource: "",
   }
 );
+
+const mediaPath = computed(() => ({
+  path: props.path,
+  wirePath: props.wirePath,
+}));
+let unsupportedSaveNoticeShown = false;
 
 const videoPlayer = ref<HTMLVideoElement | null>(null);
 const stage = ref<HTMLDivElement | null>(null);
@@ -387,10 +394,10 @@ let gesture:
 nextTick(initVideoPlayer);
 
 watch(
-  () => [props.path, props.source] as const,
+  () => [props.path, props.source, props.wirePath] as const,
   ([nextPath, nextSource], previous) => {
     if (!player.value || !previous) return;
-    void persistPlayback(true, previous[0]);
+    void persistPlayback(true, previous[0], previous[2]);
     pendingResume = null;
     restoredPosition.value = 0;
     resumeApplied.value = false;
@@ -718,7 +725,10 @@ async function restorePlayback(path: string) {
   const request = ++progressRequest;
   pendingResume = null;
   try {
-    const saved = await mediaApi.getPlayback(path);
+    const saved = await mediaApi.getPlayback({
+      path,
+      wirePath: props.wirePath,
+    });
     if (request !== progressRequest || path !== props.path || !saved.exists)
       return;
     restoredPosition.value = saved.position;
@@ -997,7 +1007,10 @@ async function enrichCodecHint() {
   const path = props.path;
   if (!path || disposed) return;
   try {
-    const info = await mediaApi.getMediaInformation(path, false);
+    const info = await mediaApi.getMediaInformation(
+      { path, wirePath: props.wirePath },
+      false
+    );
     if (disposed || path !== props.path) return;
     mediaCodec.value = info.videoCodec || "";
   } catch {
@@ -1050,7 +1063,7 @@ async function probeNativeContainer(path: string) {
 
   try {
     const information = await mediaApi.getMediaInformation(
-      path,
+      { path, wirePath: props.wirePath },
       false,
       controller.signal
     );
@@ -1182,7 +1195,7 @@ async function startCompatibilityPlayback() {
   stopCompatibilityPolling();
   try {
     const status = await mediaApi.startHLSPlayback(
-      props.path,
+      mediaPath.value,
       supportsH264CompatibilityPlayback() ? "mp4" : "webm"
     );
     if (disposed || request !== compatibilityRequest) return;
@@ -1444,7 +1457,11 @@ function onTimeUpdate() {
     void persistPlayback(false);
 }
 
-async function persistPlayback(force: boolean, path = props.path) {
+async function persistPlayback(
+  force: boolean,
+  path = props.path,
+  wirePath = props.wirePath
+) {
   const currentPlayer = player.value;
   if (!currentPlayer || !path || Date.now() < suppressPersistenceUntil) return;
   if (pendingResume?.path === path) return;
@@ -1464,9 +1481,17 @@ async function persistPlayback(force: boolean, path = props.path) {
   lastSavedAt = Date.now();
   lastSavedPosition = position;
   try {
-    await mediaApi.savePlayback(path, position, duration);
-  } catch {
-    if (force && !disposed) showProgressMessage("播放位置暂时无法保存");
+    await mediaApi.savePlayback({ path, wirePath }, position, duration);
+  } catch (error) {
+    if (
+      !disposed &&
+      !unsupportedSaveNoticeShown &&
+      error instanceof Error &&
+      error.message.startsWith("服务器尚不支持")
+    ) {
+      unsupportedSaveNoticeShown = true;
+      showProgressMessage(error.message);
+    } else if (force && !disposed) showProgressMessage("播放位置暂时无法保存");
   }
 }
 
@@ -1478,7 +1503,7 @@ async function restartFromBeginning() {
   suppressPersistenceUntil = Date.now() + 1000;
   player.value?.currentTime(0);
   try {
-    await mediaApi.clearPlayback(props.path);
+    await mediaApi.clearPlayback(mediaPath.value);
     showProgressMessage("已清除续播位置");
   } catch {
     showProgressMessage("续播位置清除失败");

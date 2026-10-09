@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref } from "vue";
-import type { AudioQueueItem } from "@/utils/audioQueue";
+import { audioQueueIdentity, type AudioQueueItem } from "@/utils/audioQueue";
 
 export const useMediaStore = defineStore("media", () => {
   const audioQueue = ref<AudioQueueItem[]>([]);
@@ -26,15 +26,24 @@ export const useMediaStore = defineStore("media", () => {
   function openAudioQueue(
     queue: AudioQueueItem[],
     path: string,
-    autoplay = false
+    autoplay = false,
+    wirePath?: string
   ) {
-    const nextIndex = queue.findIndex((item) => item.path === path);
+    const key = audioQueueIdentity({ path, wirePath });
+    if (key === null) return;
+    const verifiedQueue = queue.filter(
+      (item) => audioQueueIdentity(item) !== null
+    );
+    const nextIndex = verifiedQueue.findIndex(
+      (item) => audioQueueIdentity(item) === key
+    );
     if (nextIndex < 0) return;
-    const sameItem = currentAudio.value?.path === path;
-    audioQueue.value = queue.map((item) => ({ ...item }));
+    const sameItem =
+      currentAudio.value && audioQueueIdentity(currentAudio.value) === key;
+    audioQueue.value = verifiedQueue.map((item) => ({ ...item }));
     audioIndex.value = nextIndex;
     if (!sameItem) {
-      audioCurrentTime.value = sessionPositions[path] ?? 0;
+      audioCurrentTime.value = sessionPositions[key] ?? 0;
       audioDuration.value = 0;
       audioError.value = "";
       desiredAudioPlaying.value = autoplay;
@@ -60,8 +69,10 @@ export const useMediaStore = defineStore("media", () => {
 
   function selectAudio(index: number, autoplay = true) {
     if (index < 0 || index >= audioQueue.value.length) return;
+    const key = audioQueueIdentity(audioQueue.value[index]);
+    if (key === null) return;
     audioIndex.value = index;
-    audioCurrentTime.value = sessionPositions[currentAudio.value!.path] ?? 0;
+    audioCurrentTime.value = sessionPositions[key] ?? 0;
     audioDuration.value = 0;
     audioError.value = "";
     desiredAudioPlaying.value = autoplay;
@@ -81,7 +92,8 @@ export const useMediaStore = defineStore("media", () => {
     audioCurrentTime.value = position;
     audioDuration.value = duration;
     if (currentAudio.value && Number.isFinite(position) && position >= 0) {
-      sessionPositions[currentAudio.value.path] = position;
+      const key = audioQueueIdentity(currentAudio.value);
+      if (key !== null) sessionPositions[key] = position;
     }
   }
 

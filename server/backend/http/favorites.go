@@ -3,18 +3,23 @@ package fbhttp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 
 	fberrors "github.com/Kkwans/nas-file-browser/backend/errors"
 	"github.com/Kkwans/nas-file-browser/backend/favorites"
+	"github.com/Kkwans/nas-file-browser/backend/files"
+	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 )
 
 type favoriteRequest struct {
-	Path    string `json:"path"`
-	Name    string `json:"name"`
-	GroupID string `json:"groupId,omitempty"`
+	Path     string `json:"path"`
+	WirePath string `json:"wirePath,omitempty"`
+	Name     string `json:"name"`
+	GroupID  string `json:"groupId,omitempty"`
 }
 
 type favoriteUpdateRequest struct {
@@ -60,8 +65,15 @@ var favoritesPostHandler = withUser(func(w http.ResponseWriter, r *http.Request,
 		return http.StatusBadRequest, err
 	}
 
-	if req.Path == "" {
-		return http.StatusBadRequest, fberrors.ErrInvalidRequestParams
+	resourcePath, err := favoriteResourcePath(req)
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+	if !d.Check(resourcePath) {
+		return http.StatusForbidden, fmt.Errorf("没有访问收藏路径的权限")
+	}
+	if _, err := d.user.Fs.Stat(resourcePath); err != nil {
+		return errToStatus(err), err
 	}
 
 	// Get current count for ordering
@@ -70,7 +82,7 @@ var favoritesPostHandler = withUser(func(w http.ResponseWriter, r *http.Request,
 		return http.StatusInternalServerError, err
 	}
 
-	fav, err := d.store.Favorites.AddToGroup(d.user.ID, req.Path, req.Name, req.GroupID, len(all))
+	fav, err := d.store.Favorites.AddToGroup(d.user.ID, resourcePath, req.Name, req.GroupID, len(all))
 	if err != nil {
 		if errors.Is(err, favorites.ErrExist) {
 			return http.StatusConflict, fberrors.ErrExist
@@ -80,6 +92,24 @@ var favoritesPostHandler = withUser(func(w http.ResponseWriter, r *http.Request,
 
 	return renderJSON(w, r, fav)
 })
+
+func favoriteResourcePath(request favoriteRequest) (string, error) {
+	if request.WirePath == "" {
+		if request.Path == "" || strings.ContainsRune(request.Path, '\x00') {
+			return "", fberrors.ErrInvalidRequestParams
+		}
+		// Legacy JSON paths are literal UTF-8 text, never URI-decode them.
+		return pathmeta.Clean(request.Path), nil
+	}
+	resourcePath, err := decodeResourceWirePath(request.WirePath)
+	if err != nil {
+		return "", err
+	}
+	if request.Path != "" && pathmeta.Clean(request.Path) != files.DisplayPath(resourcePath) {
+		return "", fmt.Errorf("收藏显示路径与原始路径不一致")
+	}
+	return resourcePath, nil
+}
 
 var favoritePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	vars := mux.Vars(r)

@@ -214,10 +214,10 @@ function mediaTrackLabel(track: MediaTrack) {
 }
 
 watch(
-  () => [props.open, props.resource.path] as const,
+  () => [props.open, props.resource.wirePath || props.resource.path] as const,
   ([open], previous) => {
     if (!open) return;
-    if (previous?.[1] !== props.resource.path) {
+    if (previous?.[1] !== (props.resource.wirePath || props.resource.path)) {
       info.value = null;
       locationRequested.value = false;
       locationError.value = "";
@@ -234,7 +234,7 @@ async function loadInformation(includeLocation: boolean) {
   error.value = "";
   try {
     const loaded = await mediaApi.getMediaInformation(
-      props.resource.path,
+      props.resource,
       includeLocation
     );
     if (currentRequest !== requestId) return;

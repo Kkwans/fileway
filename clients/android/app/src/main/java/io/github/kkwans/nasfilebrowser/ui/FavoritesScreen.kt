@@ -68,7 +68,7 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
             } else LazyColumn(Modifier.weight(1f).semantics { contentDescription = "服务端收藏列表" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(items, key = { it.id }) { favorite ->
                     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.background) {
-                        Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button) { model.openRemotePath(favorite.path) }
+                        Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button) { model.openFavorite(favorite, state.scope) }
                             .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(painterResource(R.drawable.ic_bookmark), null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
                             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -177,7 +177,7 @@ private fun favoriteColor(value: String, fallback: Color): Color = try { Color(a
     var choosing by remember(file, state.scope) { mutableStateOf(false) }
     var chosenGroup by remember(file, state.scope) { mutableStateOf("") }
     LaunchedEffect(file, state.scope) { model.favorites.refresh() }
-    val existing = model.favorites.favorite(file.path)
+    val existing = model.favorites.favorite(file)
     FileActionIcon(R.drawable.ic_bookmark, if (existing == null) "加入收藏" else "取消收藏",
         enabled && state.loaded && !state.loading && !state.changing && state.error == null, existing != null) {
         if (existing != null) model.favorites.remove(existing) else choosing = true

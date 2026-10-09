@@ -82,6 +82,7 @@ import { useFavoritesStore } from "@/stores/favorites";
 const props = defineProps<{
   path: string;
   name: string;
+  wirePath?: string;
 }>();
 
 const emit = defineEmits<{
@@ -95,29 +96,36 @@ const createInput = ref<HTMLInputElement | null>(null);
 
 const cleaned = computed(() => props.path.replace(/\/+$/, ""));
 
-const isFavorited = computed(() => favoritesStore.isFavorite(cleaned.value));
+const isFavorited = computed(() =>
+  favoritesStore.isFavorite(cleaned.value, props.wirePath)
+);
 
 const currentGroupId = computed(() => {
-  const fav = favoritesStore.favorites.find((f) => f.path === cleaned.value);
+  const fav = favoritesStore.findFavorite(cleaned.value, props.wirePath);
   return fav ? fav.groupId || "" : "";
 });
 
 function assignTo(groupId: string) {
   if (isFavorited.value) {
     // Move existing favorite to group
-    const fav = favoritesStore.favorites.find((f) => f.path === cleaned.value);
+    const fav = favoritesStore.findFavorite(cleaned.value, props.wirePath);
     if (fav) {
       favoritesStore.moveFavoriteToGroup(fav.id, groupId);
     }
   } else {
     // Add new favorite in group
-    favoritesStore.addFavorite(cleaned.value, props.name, groupId);
+    favoritesStore.addFavorite(
+      cleaned.value,
+      props.name,
+      groupId,
+      props.wirePath
+    );
   }
   emit("close");
 }
 
 function remove() {
-  favoritesStore.removeByPath(cleaned.value);
+  favoritesStore.removeByPath(cleaned.value, props.wirePath);
   emit("close");
 }
 

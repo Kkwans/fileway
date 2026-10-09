@@ -189,7 +189,14 @@
                     type="button"
                     class="sidebar-rail-popover-item"
                     :title="fav.path"
-                    @click="navigateVolume(fav.path, fav.groupId)"
+                    @click="
+                      navigateVolume(
+                        fav.path,
+                        fav.groupId,
+                        fav.wirePath,
+                        fav.pathVerified
+                      )
+                    "
                   >
                     <AppIcon
                       :name="isFileByExtension(fav.name) ? 'file' : 'folder'"
@@ -487,7 +494,14 @@
                     class="action favorite-item"
                     :class="favoriteDropClass(fav.id)"
                     draggable="true"
-                    @click="navigateVolume(fav.path, fav.groupId)"
+                    @click="
+                      navigateVolume(
+                        fav.path,
+                        fav.groupId,
+                        fav.wirePath,
+                        fav.pathVerified
+                      )
+                    "
                     :title="fav.path"
                     @dragstart="onFavDragStart($event, fav.id)"
                     @dragover.stop.prevent="onFavDragOverItem($event, fav.id)"
@@ -583,7 +597,14 @@
                     class="action favorite-item category-path-item"
                     :class="favoriteDropClass(fav.id)"
                     draggable="true"
-                    @click="navigateVolume(fav.path, fav.groupId)"
+                    @click="
+                      navigateVolume(
+                        fav.path,
+                        fav.groupId,
+                        fav.wirePath,
+                        fav.pathVerified
+                      )
+                    "
                     :title="fav.path"
                     @dragstart="onFavDragStart($event, fav.id)"
                     @dragover.stop.prevent="onFavDragOverItem($event, fav.id)"
@@ -1039,6 +1060,7 @@ import type { AppIconName } from "@/components/ui/iconRegistry";
 import * as auth from "@/utils/auth";
 import { getResourceIconName, isFileByExtension } from "@/utils/fileIcons";
 import { resolveRiskIcon } from "@/utils/sidebarIconSemantics";
+import { favoriteWirePath } from "@/utils/favoritePersistence";
 import {
   getFavoriteDropPosition,
   type FavoriteDropPosition,
@@ -1680,10 +1702,22 @@ const riskIcon = (risk: string) => {
   return resolveRiskIcon(risk);
 };
 
-const navigateVolume = (path: string, favoriteGroupId = "") => {
+const navigateVolume = (
+  path: string,
+  favoriteGroupId = "",
+  wirePath?: string,
+  pathVerified?: boolean
+) => {
+  const wire = favoriteWirePath({ path, wirePath, pathVerified });
+  if (!wire) {
+    $showError(new Error("原始路径无法确认，请刷新收藏或升级服务器"));
+    return;
+  }
   closeRailPanel();
   const isFile = isFileByExtension(path);
-  const url = isFile ? "/files" + path : "/files" + path + "/";
+  const url = isFile
+    ? "/files" + wire
+    : "/files" + wire.replace(/\/+$/, "") + "/";
   router.push({
     path: url,
     query: isFile && favoriteGroupId ? { mediaQueue: favoriteGroupId } : {},

@@ -144,11 +144,12 @@
           v-if="useArtPlayer && fileStore.req?.type == 'video'"
           :key="
             'art-' +
-            fileStore.req.path +
+            (fileStore.req.wirePath || fileStore.req.path) +
             '-' +
             String(route.query.transcode || '')
           "
           :path="fileStore.req.path"
+          :wire-path="fileStore.req.wirePath"
           :source="previewUrl"
           :poster="videoPosterUrl"
           :download-source="downloadUrl"
@@ -161,8 +162,10 @@
         />
         <VideoPlayer
           v-else-if="fileStore.req?.type == 'video'"
+          :key="'video-' + (fileStore.req.wirePath || fileStore.req.path)"
           ref="player"
           :path="fileStore.req.path"
+          :wire-path="fileStore.req.wirePath"
           :source="previewUrl"
           :poster="videoPosterUrl"
           :download-source="downloadUrl"
@@ -243,10 +246,10 @@ import { resolveControlsTimeoutMs } from "@/utils/playerControls";
 import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
 import { useMediaStore } from "@/stores/media";
+import { mediaResourceIndex } from "@/utils/mediaResource";
 import { useFavoritesStore } from "@/stores/favorites";
 
 import { files as api } from "@/api";
-import { createURL } from "@/api/utils";
 import { resizePreview } from "@/utils/constants";
 import url from "@/utils/url";
 import { throttle } from "lodash-es";
@@ -480,7 +483,7 @@ const previewUrl = computed(() => {
   }
 
   if (isEpub.value) {
-    return createURL("api/raw" + fileStore.req.path, {});
+    return api.getDownloadURL(fileStore.req, false);
   }
 
   return api.getDownloadURL(fileStore.req, true);
@@ -537,7 +540,9 @@ const isUnifiedMedia = computed(() =>
   ["image", "video", "audio"].includes(fileStore.req?.type ?? "")
 );
 const isCurrentFavorite = computed(() =>
-  fileStore.req ? favoritesStore.isFavorite(fileStore.req.path) : false
+  fileStore.req
+    ? favoritesStore.isFavorite(fileStore.req.path, fileStore.req.wirePath)
+    : false
 );
 
 const subtitles = computed(() => {
@@ -589,7 +594,10 @@ const deleteFile = () => {
         return;
       }
 
-      const index = listing.value.findIndex((item) => item.name == name.value);
+      const index = fileStore.req
+        ? mediaResourceIndex(listing.value, fileStore.req)
+        : -1;
+      if (index < 0) return;
       listing.value.splice(index, 1);
 
       if (hasNext.value) {
@@ -676,9 +684,10 @@ function updateNavigation(generation: number) {
 
   previousLink.value = "";
   nextLink.value = "";
-  if (listing.value) {
+  if (listing.value && fileStore.req) {
+    const selectedIndex = mediaResourceIndex(listing.value, fileStore.req);
     for (let i = 0; i < listing.value.length; i++) {
-      if (listing.value[i].name !== name.value) {
+      if (i !== selectedIndex) {
         continue;
       }
 
@@ -759,9 +768,12 @@ const syncAudioQueue = () => {
     favoriteQueue.length > 0
       ? favoriteQueue
       : directoryAudioQueue(listing.value ?? []);
-  if (queue.some((item) => item.path === current.path)) {
-    mediaStore.openAudioQueue(queue, current.path, autoPlay.value);
-  }
+  mediaStore.openAudioQueue(
+    queue,
+    current.path,
+    autoPlay.value,
+    current.wirePath
+  );
 };
 
 const prefetchUrl = (item: ResourceItem) => {
@@ -785,7 +797,12 @@ const toggleCurrentFavorite = async () => {
   if (!current || favoritePending.value) return;
   favoritePending.value = true;
   try {
-    await favoritesStore.toggleFavorite(current.path, current.name);
+    await favoritesStore.toggleFavorite(
+      current.path,
+      current.name,
+      undefined,
+      current.wirePath
+    );
   } finally {
     favoritePending.value = false;
   }

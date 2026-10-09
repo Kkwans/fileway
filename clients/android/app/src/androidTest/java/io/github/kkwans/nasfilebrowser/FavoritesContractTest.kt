@@ -19,6 +19,9 @@ class FavoritesContractTest {
         var groups = JSONArray().put(JSONObject().put("id", "web-group").put("name", "电影").put("color", "#3F72D8").put("order", 0))
         val token = "owned." + android.util.Base64.encodeToString("{\"user\":{\"id\":1,\"username\":\"fixture\"}}".toByteArray(), android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP) + ".fixture"
         val mutations = mutableListOf<JSONObject>()
+        val writeAttempts = mutableListOf<JSONObject>()
+        val displayPaths = mutableMapOf<String, String>()
+        var legacy = false
         var hold: CompletableDeferred<Unit>? = null
         var rejectWrites = false
         var failReads = false
@@ -27,9 +30,11 @@ class FavoritesContractTest {
             "token" -> token
             "request" -> {
                 val endpoint = command.getString("endpoint"); val method = command.getString("method")
+                if (method != "GET") writeAttempts.add(JSONObject(command.toString()))
                 if (method == "GET" && failReads) error("Owned refresh failure")
                 if (method != "GET" && rejectWrites) error("Owned save rejection")
                 var status = 200
+                var acknowledgement: JSONObject? = null
                 val body = if (method == "GET") when (endpoint) {
                     "/api/favorites" -> rows.toString()
                     "/api/favorites/groups" -> {
@@ -39,21 +44,29 @@ class FavoritesContractTest {
                     }
                     else -> error("Unexpected GET $endpoint")
                 } else {
-                    mutations.add(JSONObject(command.toString()))
                     val input = command.optJSONObject("body")
                     when {
                         endpoint == "/api/favorites" && method == "POST" -> {
-                            status = 201
-                            rows.put(JSONObject(input!!.toString()).put("id", "server-created").put("order", rows.length()))
+                            if (legacy && !input!!.has("path")) status = 400
+                            else {
+                                status = 200
+                                mutations.add(JSONObject(command.toString()))
+                                val wire = input!!.getString("wirePath")
+                                val path = input.optString("path").ifEmpty { displayPaths[wire] ?: error("Unconfigured owned wire fixture") }
+                                acknowledgement = JSONObject(input.toString()).put("path", path).put("id", if (rows.length() == 1) "server-created" else "server-created-${rows.length()}").put("order", rows.length())
+                                if (legacy) acknowledgement!!.remove("wirePath") else acknowledgement!!.put("pathVerified", true)
+                                rows.put(acknowledgement)
+                            }
                         }
                         endpoint == "/api/favorites/reorder" -> {
+                            mutations.add(JSONObject(command.toString()))
                             val ids = input!!.getJSONArray("ids")
                             for (i in 0 until ids.length()) for (j in 0 until rows.length()) if (rows.getJSONObject(j).getString("id") == ids.getString(i)) rows.getJSONObject(j).put("order", i)
                         }
-                        endpoint == "/api/favorites/server-created" && method == "DELETE" -> { status = 204; rows.remove((0 until rows.length()).single { rows.getJSONObject(it).getString("id") == "server-created" }) }
+                        endpoint.startsWith("/api/favorites/server-created") && method == "DELETE" -> { mutations.add(JSONObject(command.toString())); status = 204; rows.remove((0 until rows.length()).single { rows.getJSONObject(it).getString("id") == endpoint.substringAfterLast('/') }) }
                         else -> error("Unexpected mutation $method $endpoint")
                     }
-                    if (status == 204) "" else "{}"
+                    if (status == 204) "" else acknowledgement?.toString() ?: "{}"
                 }
                 JSONObject().put("status", status).put("body", body)
             }
@@ -133,6 +146,56 @@ class FavoritesContractTest {
             withTimeout(3000) { controller.state.first { !it.loading && it.error == null && it.items.size == 2 } }
             assertEquals(1, authority.mutations.size)
             assertNotNull(controller.favorite(file.path))
+        } finally { scope.cancel() }
+    }
+
+    @Test fun sameDisplayOpaqueFavoritesUseSeparateWireWritesLookupsAndRemovalIds(): Unit = runBlocking {
+        val authority = Authority(); val context = authority.context("wire")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val controller = FavoritesController(scope) { it === context }
+        val opaque = ResourceRef("/中文.txt", "/%D6%D0%CE%C4.txt", "中文.txt", false, "", 1)
+        val utf8 = opaque.copy(wirePath = SearchResult.encodePath(opaque.path))
+        authority.displayPaths[opaque.wirePath] = opaque.path
+        try {
+            withContext(Dispatchers.Main) { controller.bind(context); controller.refresh() }
+            withTimeout(3000) { controller.state.first { it.loaded && !it.loading } }
+            withContext(Dispatchers.Main) { controller.add(opaque) }
+            withTimeout(3000) { controller.state.first { !it.changing && it.items.size == 2 } }
+            assertFalse(authority.writeAttempts.single().getJSONObject("body").has("path"))
+            withContext(Dispatchers.Main) { controller.add(utf8) }
+            withTimeout(3000) { controller.state.first { !it.changing && it.items.size == 3 } }
+            val first = controller.favorite(opaque)!!; val second = controller.favorite(utf8)!!
+            assertNotEquals(first.id, second.id)
+            assertEquals(opaque.wirePath, first.wirePath); assertEquals(utf8.wirePath, second.wirePath)
+            assertEquals(utf8.path, authority.writeAttempts.last().getJSONObject("body").getString("path"))
+            withContext(Dispatchers.Main) { controller.remove(first) }
+            withTimeout(3000) { controller.state.first { !it.changing && it.items.size == 2 } }
+            assertNull(controller.favorite(opaque)); assertEquals(second.id, controller.favorite(utf8)!!.id)
+            assertEquals("/api/favorites/${first.id}", authority.writeAttempts.last().getString("endpoint"))
+        } finally { scope.cancel() }
+    }
+
+    @Test fun legacyDecoderRejectsOpaqueOnceAndAcceptsUTF8InOneRequest(): Unit = runBlocking {
+        val authority = Authority(); authority.legacy = true
+        val context = authority.context("legacy")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val controller = FavoritesController(scope) { it === context }
+        try {
+            withContext(Dispatchers.Main) { controller.bind(context); controller.refresh() }
+            withTimeout(3000) { controller.state.first { it.loaded && !it.loading } }
+            val opaque = ResourceRef("/中文.txt", "/%D6%D0%CE%C4.txt", "中文.txt", false, "", 1)
+            withContext(Dispatchers.Main) { controller.add(opaque) }
+            withTimeout(3000) { controller.state.first { !it.changing && it.error != null } }
+            assertEquals(1, authority.writeAttempts.size); assertTrue(authority.mutations.isEmpty())
+            assertFalse(authority.writeAttempts.single().getJSONObject("body").has("path"))
+            val utf8 = opaque.copy(wirePath = SearchResult.encodePath(opaque.path))
+            withContext(Dispatchers.Main) { controller.add(utf8) }
+            withTimeout(3000) { controller.state.first { !it.changing && it.items.size == 2 } }
+            assertEquals(2, authority.writeAttempts.size); assertEquals(1, authority.mutations.size)
+            assertEquals(utf8.path, authority.writeAttempts.last().getJSONObject("body").getString("path"))
+            assertNotNull(controller.favorite(utf8)); assertNull(controller.favorite(opaque))
+            val lost = Favorite.from(JSONObject().put("id", "lost").put("path", "/lost�").put("name", "legacy").put("pathVerified", false))
+            assertFalse(lost.openable); assertEquals("", lost.wirePath)
         } finally { scope.cancel() }
     }
 }

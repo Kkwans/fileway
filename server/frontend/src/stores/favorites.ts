@@ -6,6 +6,9 @@ import {
   replaceFavoriteByPath,
   resolvePersistenceState,
   userStorageKey,
+  favoriteIdentity,
+  favoriteWirePath,
+  favoriteCreateBody,
 } from "@/utils/favoritePersistence";
 import {
   reorderFavoriteItems,
@@ -27,6 +30,8 @@ export interface Favorite {
   groupId?: string;
   addedAt: number;
   order: number;
+  wirePath?: string;
+  pathVerified?: boolean;
 }
 
 const STORAGE_KEY = "nas-file-browser-favorites";
@@ -69,13 +74,15 @@ export const useFavoritesStore = defineStore("favorites", () => {
       const res = await fetchURL(API_BASE, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: fav.path,
-          name: fav.name,
-          groupId: fav.groupId || "",
-        }),
+        body: JSON.stringify(favoriteCreateBody(fav)),
       });
-      return await res.json();
+      const created = (await res.json()) as Favorite;
+      if (
+        favoriteIdentity(created) !== favoriteIdentity(fav) ||
+        favoriteIdentity(created) === null
+      )
+        return null;
+      return created;
     } catch {
       return null;
     }
@@ -299,9 +306,24 @@ export const useFavoritesStore = defineStore("favorites", () => {
     saveToLocalStorage();
   }
 
-  async function addFavorite(path: string, name: string, groupId?: string) {
-    const cleaned = path.replace(/\/+$/, "");
-    if (favorites.value.some((f) => f.path === cleaned)) return;
+  function findFavorite(path: string, wirePath?: string) {
+    const identity = favoriteIdentity({ path, wirePath });
+    return identity === null
+      ? undefined
+      : favorites.value.find(
+          (favorite) => favoriteIdentity(favorite) === identity
+        );
+  }
+
+  async function addFavorite(
+    path: string,
+    name: string,
+    groupId?: string,
+    wirePath?: string
+  ) {
+    const cleaned = path.replace(/\/+$/, "") || "/";
+    const sourceWire = favoriteWirePath({ path: cleaned, wirePath });
+    if (!sourceWire || findFavorite(cleaned, sourceWire)) return;
 
     const snapshot = snapshotFavorites();
 
@@ -312,6 +334,8 @@ export const useFavoritesStore = defineStore("favorites", () => {
       groupId: groupId || "",
       addedAt: Date.now(),
       order: favorites.value.length,
+      wirePath: sourceWire,
+      pathVerified: true,
     };
     favorites.value.push(newFav);
     saveToLocalStorage();
@@ -336,13 +360,12 @@ export const useFavoritesStore = defineStore("favorites", () => {
     }
   }
 
-  async function removeByPath(path: string) {
-    const cleaned = path.replace(/\/+$/, "");
-    const target = favorites.value.find((f) => f.path === cleaned);
+  async function removeByPath(path: string, wirePath?: string) {
+    const target = findFavorite(path, wirePath);
     if (!target) return;
 
     const snapshot = snapshotFavorites();
-    favorites.value = favorites.value.filter((f) => f.path !== cleaned);
+    favorites.value = favorites.value.filter((f) => f.id !== target.id);
     favorites.value.forEach((f, i) => (f.order = i));
     saveToLocalStorage();
     const result = await apiDelete(target.id);
@@ -352,14 +375,25 @@ export const useFavoritesStore = defineStore("favorites", () => {
     }
   }
 
-  function isFavorite(path: string): boolean {
-    const cleaned = path.replace(/\/+$/, "");
-    return favorites.value.some((f) => f.path === cleaned);
+  function isFavorite(path: string, wirePath?: string): boolean {
+    return findFavorite(path, wirePath) !== undefined;
   }
 
   function applyPathRewrite(from: string, to: string) {
+    // Display-only mutation callbacks cannot identify opaque siblings. The
+    // server has already committed the corresponding metadata transaction.
+    if (
+      favorites.value.some(
+        (item) => item.wirePath || item.pathVerified !== undefined
+      )
+    ) {
+      void refreshAfterMutation(true);
+      return;
+    }
+    // Preserve the old UTF-8-only server's immediate collection reconciliation.
     let changed = false;
     favorites.value = favorites.value.map((favorite) => {
+      if (favoriteIdentity(favorite) === null) return favorite;
       const rewritten = rewriteTagPathPrefix(favorite.path, from, to);
       if (rewritten === null || rewritten === favorite.path) return favorite;
       changed = true;
@@ -369,27 +403,35 @@ export const useFavoritesStore = defineStore("favorites", () => {
   }
 
   function applyPathRemoval(prefix: string) {
+    if (
+      favorites.value.some(
+        (item) => item.wirePath || item.pathVerified !== undefined
+      )
+    ) {
+      void refreshAfterMutation(true);
+      return;
+    }
     const normalizedPrefix = normalizeTagPath(prefix);
-    const previousLength = favorites.value.length;
-    favorites.value = favorites.value.filter((favorite) => {
-      const normalized = normalizeTagPath(favorite.path);
-      return (
-        normalized !== normalizedPrefix &&
-        rewriteTagPathPrefix(normalized, normalizedPrefix, "/") === null
-      );
-    });
-    if (favorites.value.length === previousLength) return;
-    favorites.value.forEach((favorite, index) => (favorite.order = index));
+    favorites.value = favorites.value.filter(
+      (favorite) =>
+        favoriteIdentity(favorite) === null ||
+        (normalizeTagPath(favorite.path) !== normalizedPrefix &&
+          rewriteTagPathPrefix(favorite.path, normalizedPrefix, "/") === null)
+    );
     saveToLocalStorage();
   }
 
-  async function toggleFavorite(path: string, name: string, groupId?: string) {
-    const cleaned = path.replace(/\/+$/, "");
-    const existing = favorites.value.find((f) => f.path === cleaned);
+  async function toggleFavorite(
+    path: string,
+    name: string,
+    groupId?: string,
+    wirePath?: string
+  ) {
+    const existing = findFavorite(path, wirePath);
     if (existing) {
       await removeFavorite(existing.id);
     } else {
-      await addFavorite(cleaned, name, groupId);
+      await addFavorite(path, name, groupId, wirePath);
     }
   }
 
@@ -467,8 +509,13 @@ export const useFavoritesStore = defineStore("favorites", () => {
   async function syncFavorites() {
     const apiData = await apiGet();
     if (apiData) {
-      const apiPaths = new Set(apiData.map((f) => f.path));
-      const localOnly = favorites.value.filter((f) => !apiPaths.has(f.path));
+      const apiPaths = new Set(
+        apiData.map(favoriteIdentity).filter((key) => key !== null)
+      );
+      const localOnly = favorites.value.filter((f) => {
+        const key = favoriteIdentity(f);
+        return key !== null && !apiPaths.has(key);
+      });
       for (const fav of localOnly) {
         await apiCreate(fav);
       }
@@ -605,6 +652,7 @@ export const useFavoritesStore = defineStore("favorites", () => {
     removeFavorite,
     removeByPath,
     isFavorite,
+    findFavorite,
     applyPathRewrite,
     applyPathRemoval,
     toggleFavorite,

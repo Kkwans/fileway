@@ -85,6 +85,8 @@
       title="选择外挂字幕文件"
       mode="file"
       :model-value="videoDirPath"
+      :model-wire-path="videoDirWire"
+      wire-paths
       :file-extensions="SUBTITLE_EXTS"
       @select="onPickSubtitleFile"
       @close="subtitlePickerOpen = false"
@@ -197,8 +199,12 @@ import {
 import Artplayer from "artplayer";
 import Hls from "hls.js";
 import { files as api, media as mediaApi, users as usersApi } from "@/api";
-import { createURL } from "@/api/utils";
-import { encodeResourceRoute, resolveBackendMediaURL } from "@/utils/url";
+import { decodePath, resolveBackendMediaURL } from "@/utils/url";
+import { mediaResourceURL } from "@/utils/mediaResource";
+import {
+  favoriteIdentity,
+  favoriteWirePath,
+} from "@/utils/favoritePersistence";
 import { baseURL } from "@/utils/constants";
 import { useAuthStore } from "@/stores/auth";
 import { useAccountPreferencesStore } from "@/stores/accountPreferences";
@@ -230,12 +236,19 @@ const PRESET_RATES = [0.25, 0.5, 1, 1.25, 1.5, 2];
 
 const props = defineProps<{
   path: string;
+  wirePath?: string;
   source: string;
   poster?: string;
   downloadSource?: string;
   subtitles?: { url: string; lang?: string; name?: string }[];
   transcodeTaskId?: string;
 }>();
+
+const mediaPath = computed(() => ({
+  path: props.path,
+  wirePath: props.wirePath,
+}));
+let unsupportedSaveNoticeShown = false;
 
 const authStore = useAuthStore();
 const accountPreferences = useAccountPreferencesStore();
@@ -307,6 +320,12 @@ const videoDirPath = computed(() => {
   const i = p.lastIndexOf("/");
   return i <= 0 ? "/" : `${p.slice(0, i)}/`;
 });
+const videoDirWire = computed(() => {
+  const wire = favoriteWirePath(mediaPath.value);
+  if (!wire) return undefined;
+  const separator = wire.lastIndexOf("/");
+  return separator <= 0 ? "/" : wire.slice(0, separator) + "/";
+});
 
 const allSubtitleItems = computed(() => {
   const embedded = embeddedSubtitleTracks.value
@@ -319,7 +338,7 @@ const allSubtitleItems = computed(() => {
       url:
         track.codec === "hdmv_pgs_subtitle"
           ? embeddedSubtitleValue(track.index)
-          : createURL(`api/subtitle${props.path}`, {
+          : mediaResourceURL("api/subtitle", mediaPath.value, {
               inline: "true",
               streamIndex: String(track.index),
             }),
@@ -335,15 +354,17 @@ const allSubtitleItems = computed(() => {
 });
 
 function embeddedSubtitleValue(index: number) {
-  return `embedded:${encodeURIComponent(props.path)}:${index}`;
+  return `embedded:${encodeURIComponent(favoriteIdentity(mediaPath.value) || "")}:${index}`;
 }
 
 async function scanSiblingSubtitles() {
   try {
-    const res = await api.fetch(encodeResourceRoute(videoDirPath.value));
+    if (!videoDirWire.value) return;
+    const res = await api.fetch("/files" + videoDirWire.value);
     const items = (res?.items || []) as Array<{
       name: string;
       path?: string;
+      wirePath?: string;
       url?: string;
       isDir?: boolean;
     }>;
@@ -354,14 +375,16 @@ async function scanSiblingSubtitles() {
         return {
           path,
           name: it.name,
-          url: createURL(`api/subtitle${path}`, { inline: "true" }),
+          url: mediaResourceURL(
+            "api/subtitle",
+            { path, wirePath: it.wirePath },
+            { inline: "true" }
+          ),
         };
       });
     const known = new Set(allSubtitleItems.value.map((s) => s.url));
     extraSubtitles.value = [
-      ...extraSubtitles.value.filter((s) =>
-        found.some((f) => f.url === s.url || f.name === s.name)
-      ),
+      ...extraSubtitles.value.filter((s) => found.some((f) => f.url === s.url)),
       ...found.filter((f) => !known.has(f.url)),
     ];
     refreshSubtitlePicker();
@@ -379,7 +402,11 @@ function onPickSubtitleFile(path: string | string[]) {
     return;
   }
   const name = raw.split("/").pop() || "外挂字幕";
-  const url = createURL(`api/subtitle${raw}`, { inline: "true" });
+  const url = mediaResourceURL(
+    "api/subtitle",
+    { path: decodePath(raw), wirePath: raw },
+    { inline: "true" }
+  );
   if (!extraSubtitles.value.some((s) => s.url === url)) {
     extraSubtitles.value = [...extraSubtitles.value, { url, name, path: raw }];
   }
@@ -449,9 +476,7 @@ const policy = computed<Policy>(() => {
 });
 
 const downloadUrl = computed(
-  () =>
-    props.downloadSource ||
-    api.getDownloadURL({ path: props.path } as never, false)
+  () => props.downloadSource || api.getDownloadURL(mediaPath.value, false)
 );
 
 const resolutionLabel = computed(() => {
@@ -586,7 +611,7 @@ const loadingVisible = computed(() => {
 });
 
 function rawUrl() {
-  return api.getDownloadURL({ path: props.path } as never, true);
+  return props.source || api.getDownloadURL(mediaPath.value, true);
 }
 
 function clampRate(n: number) {
@@ -772,7 +797,7 @@ function injectResumeToast(
           seekTo(0);
           void video.play?.().catch(() => {});
         }
-        void mediaApi.clearPlayback(props.path).catch(() => {});
+        void mediaApi.clearPlayback(mediaPath.value).catch(() => {});
         dismiss();
       } else if (act === "close") {
         dismiss();
@@ -899,7 +924,7 @@ function clearLoadingState(options?: { force?: boolean }) {
 }
 
 function playerStorageId() {
-  return `${authStore.user?.id ?? "guest"}:${props.path}`;
+  return `${authStore.user?.id ?? "guest"}:${favoriteIdentity(mediaPath.value)}`;
 }
 
 /** Official ArtPlayer auto-playback stores times under artplayer_settings. */
@@ -1190,13 +1215,22 @@ function persistPlaybackPosition(force = false) {
   lastSaveAt = now;
   void mediaApi
     .savePlayback(
-      props.path,
+      mediaPath.value,
       pos,
       actualMode.value === "compat"
         ? sourceDuration.value || video.duration
         : video.duration
     )
-    .catch(() => {});
+    .catch((error: unknown) => {
+      if (
+        !unsupportedSaveNoticeShown &&
+        error instanceof Error &&
+        error.message.startsWith("服务器尚不支持")
+      ) {
+        unsupportedSaveNoticeShown = true;
+        notice(error.message);
+      }
+    });
 }
 
 function captureResume() {
@@ -1283,7 +1317,7 @@ function maybePrefetchWindow(video: HTMLVideoElement) {
   prefetchedWindow = candidate;
   candidate.request = mediaApi
     .startHLSPlayback(
-      props.path,
+      mediaPath.value,
       options.format,
       options.quality,
       embeddedSubtitleIndex.value ?? undefined,
@@ -1681,7 +1715,7 @@ async function switchEngine(
       let status =
         (reusePrefetch ? await candidate.request : undefined) ||
         (await mediaApi.startHLSPlayback(
-          props.path,
+          mediaPath.value,
           format,
           backendQuality,
           embeddedSubtitleIndex.value ?? undefined,
@@ -1884,7 +1918,7 @@ function startCompatProgressPolling(id: string) {
 
 async function loadMediaInfo() {
   try {
-    const info = await mediaApi.getMediaInformation(props.path, false);
+    const info = await mediaApi.getMediaInformation(mediaPath.value, false);
     sourceVideoCodec.value = info.videoCodec || "";
     sourceVideoBitDepth.value = info.videoBitDepth || 0;
     sourceAudioCodec.value = info.audioCodec || "";
@@ -1909,7 +1943,7 @@ async function loadMediaInfo() {
 
 async function loadVideoSprite() {
   try {
-    let sprite = await mediaApi.getVideoSprite(props.path);
+    let sprite = await mediaApi.getVideoSprite(mediaPath.value);
     const startedAt = Date.now();
     while (
       sprite.state === "preparing" &&
@@ -1918,7 +1952,7 @@ async function loadVideoSprite() {
     ) {
       await new Promise((resolve) => window.setTimeout(resolve, 2000));
       if (!art.value) return;
-      sprite = await mediaApi.getVideoSprite(props.path);
+      sprite = await mediaApi.getVideoSprite(mediaPath.value);
     }
     if (
       !art.value ||
@@ -2782,7 +2816,7 @@ onMounted(async () => {
   // Always seed official toast storage when we have a saved position.
   if (!askVisible.value) {
     try {
-      const saved = await mediaApi.getPlayback(props.path);
+      const saved = await mediaApi.getPlayback(mediaPath.value);
       if (saved.exists && saved.position > accountResumeMinSec()) {
         lastSavedPosition = saved.position;
         seedArtPlayerResume(saved.position);
@@ -3021,7 +3055,7 @@ onMounted(async () => {
     } else if (!askVisible.value && !resumePromptShown) {
       resumePromptShown = true;
       void mediaApi
-        .getPlayback(props.path)
+        .getPlayback(mediaPath.value)
         .then((saved) => {
           if (saved?.exists && saved.position > accountResumeMinSec()) {
             lastSavedPosition = saved.position;

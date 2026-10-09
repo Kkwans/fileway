@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { directoryAudioQueue, favoriteGroupAudioQueue } from "../audioQueue";
+import {
+  audioQueueIdentity,
+  directoryAudioQueue,
+  favoriteGroupAudioQueue,
+} from "../audioQueue";
 
 vi.mock("@/api/utils", () => ({
   createURL: (path: string) => `/${path}`,
@@ -8,6 +12,43 @@ vi.mock("@/api/utils", () => ({
 beforeEach(() => vi.clearAllMocks());
 
 describe("音频播放队列", () => {
+  it("收藏组同显示音频保留独立原始source和队列身份，未知旧路径不播放", () => {
+    const base = {
+      id: "opaque",
+      path: "/中文.mp3",
+      name: "中文.mp3",
+      groupId: "g",
+      order: 0,
+      addedAt: 0,
+    };
+    const queue = favoriteGroupAudioQueue(
+      [
+        { ...base, wirePath: "/%D6%D0%CE%C4.mp3", pathVerified: true },
+        {
+          ...base,
+          id: "utf8",
+          order: 1,
+          wirePath: "/%E4%B8%AD%E6%96%87.mp3",
+          pathVerified: true,
+        },
+        {
+          ...base,
+          id: "lost",
+          path: "/lost�.mp3",
+          order: 2,
+          pathVerified: false,
+        },
+      ],
+      "g"
+    );
+    expect(queue).toHaveLength(2);
+    expect(queue.map((item) => item.source)).toEqual([
+      "/api/raw/%D6%D0%CE%C4.mp3",
+      "/api/raw/%E4%B8%AD%E6%96%87.mp3",
+    ]);
+    expect(audioQueueIdentity(queue[0])).not.toBe(audioQueueIdentity(queue[1]));
+  });
+
   it("只使用当前目录当前顺序中的直接音频文件", () => {
     const items = [
       { path: "/music/b.mp3", name: "b.mp3", type: "audio", isDir: false },

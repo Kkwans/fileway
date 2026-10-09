@@ -13,6 +13,7 @@ import {
   getHLSPlayback,
   getMediaInformation,
   getPlayback,
+  getVideoSprite,
   type PlaybackPosition,
   savePlayback,
   startHLSPlayback,
@@ -22,6 +23,57 @@ describe("媒体 API", () => {
   beforeEach(() => {
     mocks.fetchJSON.mockReset().mockResolvedValue({});
     mocks.fetchURL.mockReset().mockResolvedValue(new Response(null));
+  });
+
+  it("opaque同显示资源的GET/DELETE实际query只解码一次，不读取UTF8兄弟", async () => {
+    const opaque = { path: "/中文.mp4", wirePath: "/%D6%D0%CE%C4.mp4" };
+    const utf8 = { path: opaque.path, wirePath: "/%E4%B8%AD%E6%96%87.mp4" };
+    await getPlayback(opaque);
+    await getPlayback(utf8);
+    await getMediaInformation(opaque, true);
+    await getVideoSprite(opaque);
+    expect(mocks.fetchJSON.mock.calls.map((call) => call[0])).toEqual([
+      "/api/media/playback?path=%2F%D6%D0%CE%C4.mp4",
+      "/api/media/playback?path=%2F%E4%B8%AD%E6%96%87.mp4",
+      "/api/media/info?path=%2F%D6%D0%CE%C4.mp4&includeLocation=true",
+      "/api/media/sprite?path=%2F%D6%D0%CE%C4.mp4",
+    ]);
+    await clearPlayback(opaque);
+    expect(mocks.fetchURL.mock.calls[0]).toEqual([
+      "/api/media/playback?path=%2F%D6%D0%CE%C4.mp4",
+      { method: "DELETE" },
+    ]);
+  });
+
+  it("不支持opaque JSON写和兼容播放时明确拒绝，不发display或第二次请求", async () => {
+    const source = { path: "/中文.mp4", wirePath: "/%D6%D0%CE%C4.mp4" };
+    await expect(savePlayback(source, 1, 20)).rejects.toThrow("尚不支持");
+    await expect(startHLSPlayback(source)).rejects.toThrow("尚不支持");
+    expect(mocks.fetchURL).not.toHaveBeenCalled();
+    expect(mocks.fetchJSON).not.toHaveBeenCalled();
+    await savePlayback(
+      { path: source.path, wirePath: "/%E4%B8%AD%E6%96%87.mp4" },
+      1,
+      20
+    );
+    const request = JSON.parse(mocks.fetchJSON.mock.calls[0][1].body);
+    expect(request).toEqual({ path: "/中文.mp4", position: 1, duration: 20 });
+  });
+
+  it("wire query中的literal plus/ampersand/equals不会变成额外参数", async () => {
+    await getMediaInformation({
+      path: "/a+b&includeLocation=true.mp4",
+      wirePath: "/a+b&includeLocation=true.mp4",
+    });
+    const request = new URL(
+      mocks.fetchJSON.mock.calls[0][0],
+      "https://fixture.invalid"
+    );
+    expect(request.searchParams.get("path")).toBe(
+      "/a+b&includeLocation=true.mp4"
+    );
+    expect(request.searchParams.has("includeLocation")).toBe(false);
+    expect([...request.searchParams.keys()]).toEqual(["path"]);
   });
 
   it("只有显式请求时才发送位置元数据参数", async () => {

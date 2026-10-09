@@ -1,5 +1,6 @@
 package io.github.kkwans.nasfilebrowser.app
 
+import io.github.kkwans.nasfilebrowser.data.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -8,7 +9,15 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Favorite(val id: String, val path: String, val name: String, val groupId: String, val order: Int)
+data class Favorite(val id: String, val path: String, val name: String, val groupId: String, val order: Int,
+    val wirePath: String = "", val openable: Boolean = false) {
+    companion object { internal fun from(row: JSONObject): Favorite {
+        val path = row.getString("path")
+        val identity = favoritePathIdentity(path, if (row.has("wirePath")) row.get("wirePath") as? String ?: error("收藏原始路径格式无效") else null,
+            if (row.has("pathVerified")) row.get("pathVerified") as? Boolean ?: error("收藏路径状态无效") else null)
+        return Favorite(row.getString("id"), path, row.getString("name"), row.optString("groupId"), row.optInt("order"), identity.wirePath, identity.openable)
+    } }
+}
 data class FavoriteGroup(val id: String, val name: String, val color: String, val order: Int)
 data class FavoritesState(val scope: String = "", val items: List<Favorite> = emptyList(), val groups: List<FavoriteGroup> = emptyList(),
     val loading: Boolean = false, val changing: Boolean = false, val loaded: Boolean = false, val error: String? = null, val notice: String? = null)
@@ -30,9 +39,7 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
         val items = async { context.api.array("/api/favorites") }
         val groups = async { context.api.array("/api/favorites/groups") }
         val rows = items.await(); val folders = groups.await()
-        (0 until rows.length()).map { rows.getJSONObject(it).let { row ->
-            Favorite(row.getString("id"), row.getString("path"), row.getString("name"), row.optString("groupId"), row.optInt("order"))
-        } }.sortedWith(compareBy<Favorite> { it.order }.thenBy { it.id }) to
+        (0 until rows.length()).map { Favorite.from(rows.getJSONObject(it)) }.sortedWith(compareBy<Favorite> { it.order }.thenBy { it.id }) to
             (0 until folders.length()).map { folders.getJSONObject(it).let { row ->
                 FavoriteGroup(row.getString("id"), row.getString("name"), row.optString("color"), row.optInt("order"))
             } }.sortedWith(compareBy<FavoriteGroup> { it.order }.thenBy { it.id })
@@ -55,8 +62,13 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
             }
         }
     }
-    fun favorite(path: String) = mutable.value.items.firstOrNull { it.path.trimEnd('/') == path.trimEnd('/') }
-    private fun mutate(method: String, endpoint: String, body: JSONObject? = null, notice: String, onSaved: () -> Unit = {}) {
+    fun favorite(file: ResourceRef): Favorite? {
+        val wire = runCatching { favoriteWireIdentity(favoriteRecordTarget(file).wirePath) }.getOrNull() ?: return null
+        return mutable.value.items.firstOrNull { it.openable && favoriteWireIdentity(it.wirePath) == wire }
+    }
+    fun favorite(path: String) = favorite(ResourceRef(path, "", "favorite", false, "", 0))
+    private fun mutate(method: String, endpoint: String, body: JSONObject? = null, notice: String, onSaved: () -> Unit = {},
+        write: (suspend (SessionContext) -> Unit)? = null) {
         val context = bound ?: return
         if (!isCurrent(context) || mutable.value.changing) return
         reads?.cancel(); revision++
@@ -65,7 +77,8 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
             writes.withLock {
                 var applied = false
                 try {
-                    context.api.action(method, endpoint, body); applied = true
+                    if (write == null) context.api.action(method, endpoint, body) else write(context)
+                    applied = true
                     val (items, groups) = read(context)
                     if (bound === context && isCurrent(context)) mutable.value = mutable.value.copy(
                         items = items, groups = groups, loaded = true, changing = false, notice = notice)
@@ -81,8 +94,23 @@ class FavoritesController(private val scope: CoroutineScope, private val isCurre
         }
     }
     private fun id(value: String) = android.net.Uri.encode(value)
-    fun add(file: ResourceRef, group: String = "", onSaved: () -> Unit = {}) = mutate("POST", "/api/favorites", JSONObject()
-        .put("path", file.path.trimEnd('/').ifEmpty { "/" }).put("name", file.name).put("groupId", group), "已加入收藏", onSaved)
+    fun add(file: ResourceRef, group: String = "", onSaved: () -> Unit = {}) = mutate("POST", "/api/favorites", notice = "已加入收藏", onSaved = onSaved,
+        write = { context ->
+            val target = favoriteRecordTarget(file)
+            val body = JSONObject().put("wirePath", target.wirePath).put("name", file.name).put("groupId", group)
+            // The legacy decoder ignores unknown fields. A known strict UTF-8
+            // source can carry path in the first request, without write retries.
+            if (target.legacyCompatible) body.put("path", target.path)
+            val row = try { context.api.action("POST", "/api/favorites", body) }
+            catch (error: ServiceException) {
+                if (error.status == 400 && !target.legacyCompatible) throw IllegalStateException("服务器拒绝了原始路径收藏，请检查路径或升级服务器：${error.message}", error)
+                throw error
+            }
+            val saved = Favorite.from(row)
+            check(saved.openable && saved.id.isNotBlank() && favoriteWireIdentity(saved.wirePath) == favoriteWireIdentity(target.wirePath)) {
+                "服务器未确认原始路径收藏结果，请刷新核对"
+            }
+        })
     fun remove(item: Favorite, onSaved: () -> Unit = {}) = mutate("DELETE", "/api/favorites/${id(item.id)}", notice = "已取消收藏", onSaved = onSaved)
     fun update(item: Favorite, name: String, group: String, onSaved: () -> Unit = {}) = mutate("PUT", "/api/favorites/${id(item.id)}",
         JSONObject().put("name", name.trim()).put("groupId", group), "收藏已更新", onSaved)

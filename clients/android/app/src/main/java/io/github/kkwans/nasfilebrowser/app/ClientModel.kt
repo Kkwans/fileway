@@ -422,6 +422,17 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun verifyDocumentDirectory(parent: DirectoryCrumb) { tab("files"); browse(parent.path, parent.wirePath ?: SearchResult.encodePath(parent.path)) }
     fun openRemotePath(path: String) = openRemotePathWithWire(path, "")
+    fun openFavorite(item: Favorite, sourceScope: String) {
+        val bound = context ?: return
+        val collection = favorites.state.value
+        if (sourceScope != bound.owner || collection.scope != sourceScope) return
+        val current = collection.items.firstOrNull { it.id == item.id && it.wirePath == item.wirePath && it.path == item.path } ?: return
+        if (!current.openable) {
+            mutable.value = mutable.value.copy(error = "收藏原始路径无法确认，请刷新收藏或升级服务器")
+            return
+        }
+        openRemotePathWithWire(current.path, current.wirePath)
+    }
     private fun openRemotePathWithWire(path: String, requestedWire: String) {
         val bound = context ?: return
         if (mutable.value.busy) return
@@ -435,6 +446,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 check(context === bound && generation == bound.generation)
                 val actualPath = data.optString("path", path)
                 check(actualPath == path) { "文件路径已变化，请重新选择" }
+                if (requestedWire.isNotEmpty()) {
+                    val confirmed = favoritePathIdentity(actualPath, data.optString("wirePath").takeIf { it.isNotEmpty() }, if (data.has("wirePath")) true else null)
+                    check(confirmed.openable && favoriteWireIdentity(confirmed.wirePath) == favoriteWireIdentity(requestedWire)) { "服务器返回的原始路径与所选资源不一致，请刷新核对" }
+                }
                 val file = ResourceRef(path, data.optString("wirePath").ifEmpty { wire }, data.optString("name").ifEmpty { path.substringAfterLast('/') },
                     data.getBoolean("isDir"), data.optString("type"), data.optLong("size"), data.optString("modified"))
                 mutable.value = mutable.value.copy(busy = false, stage = "")

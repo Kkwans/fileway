@@ -1,4 +1,11 @@
 import { fetchJSON, fetchURL } from "./utils";
+import {
+  mediaJSONPath,
+  mediaPathQuery,
+  mediaReference,
+  type MediaSource,
+} from "@/utils/mediaResource";
+import { favoriteIdentity } from "@/utils/favoritePersistence";
 
 export interface PlaybackPosition {
   path: string;
@@ -25,6 +32,7 @@ type PlaybackMutation =
   | {
       kind: "delete";
       path: string;
+      wirePath?: string;
       waiters: PlaybackWaiter[];
     };
 
@@ -121,30 +129,37 @@ export interface VideoSprite {
   url: string;
 }
 
-export function getPlayback(path: string): Promise<PlaybackPosition> {
+export function getPlayback(path: MediaSource): Promise<PlaybackPosition> {
   return fetchJSON<PlaybackPosition>(
-    `/api/media/playback?path=${encodeURIComponent(path)}`
+    `/api/media/playback?${mediaPathQuery(path)}`
   );
 }
 
 export async function savePlayback(
-  path: string,
+  source: MediaSource,
   position: number,
   duration: number
 ): Promise<PlaybackPosition> {
-  return enqueuePlaybackMutation<PlaybackPosition>(path, {
-    kind: "put",
-    path,
-    position,
-    duration,
-    waiters: [],
-  });
+  const path = mediaJSONPath(source);
+  return enqueuePlaybackMutation<PlaybackPosition>(
+    favoriteIdentity(mediaReference(source))!,
+    {
+      kind: "put",
+      path,
+      position,
+      duration,
+      waiters: [],
+    }
+  );
 }
 
-export function clearPlayback(path: string): Promise<void> {
-  return enqueuePlaybackMutation<void>(path, {
+export function clearPlayback(source: MediaSource): Promise<void> {
+  mediaPathQuery(source);
+  const resource = mediaReference(source);
+  return enqueuePlaybackMutation<void>(favoriteIdentity(resource)!, {
     kind: "delete",
-    path,
+    path: resource.path,
+    wirePath: resource.wirePath,
     waiters: [],
   });
 }
@@ -202,7 +217,7 @@ function runPlaybackQueue(path: string, queue: PlaybackQueue) {
           }),
         })
       : fetchURL(
-          `/api/media/playback?path=${encodeURIComponent(mutation.path)}`,
+          `/api/media/playback?${mediaPathQuery({ path: mutation.path, wirePath: mutation.wirePath })}`,
           { method: "DELETE" }
         ).then(() => undefined);
 
@@ -226,21 +241,20 @@ function runPlaybackQueue(path: string, queue: PlaybackQueue) {
 }
 
 export function getMediaInformation(
-  path: string,
+  path: MediaSource,
   includeLocation = false,
   signal?: AbortSignal
 ): Promise<MediaInformation> {
-  const query = new URLSearchParams({ path });
-  if (includeLocation) query.set("includeLocation", "true");
-  return fetchJSON<MediaInformation>(`/api/media/info?${query.toString()}`, {
-    signal,
-  });
+  return fetchJSON<MediaInformation>(
+    `/api/media/info?${mediaPathQuery(path)}${includeLocation ? "&includeLocation=true" : ""}`,
+    {
+      signal,
+    }
+  );
 }
 
-export function getVideoSprite(path: string): Promise<VideoSprite> {
-  return fetchJSON<VideoSprite>(
-    `/api/media/sprite?path=${encodeURIComponent(path)}`
-  );
+export function getVideoSprite(path: MediaSource): Promise<VideoSprite> {
+  return fetchJSON<VideoSprite>(`/api/media/sprite?${mediaPathQuery(path)}`);
 }
 
 export async function startTranscodes(
@@ -266,13 +280,14 @@ export function getTranscodePlayback(id: string): Promise<HLSPlaybackStatus> {
 }
 
 export async function startHLSPlayback(
-  path: string,
+  source: MediaSource,
   format: "hls" | "mp4" | "webm" = "hls",
   quality: "source" | "4k" | "2k" | "1080p" | "720p" | "480p" = "source",
   subtitleStreamIndex?: number,
   audioStreamIndex?: number,
   window?: { startSeconds: number; windowSeconds: number; sessionId: string }
 ): Promise<HLSPlaybackStatus> {
+  const path = mediaJSONPath(source);
   const response = await fetchURL("/api/media/hls", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

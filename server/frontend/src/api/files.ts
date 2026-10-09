@@ -10,7 +10,7 @@ import {
   uploadTransferId,
   useTus,
 } from "./tus";
-import { createURL, fetchURL, removePrefix, StatusError } from "./utils";
+import { fetchURL, removePrefix, StatusError } from "./utils";
 import type { ApiMethod, ApiOpts, ApiContent, ChecksumAlg } from "@/types/api";
 import type { TrashItem } from "./trash";
 import type { TaskItem } from "./tasks";
@@ -25,6 +25,7 @@ import type {
 import urlUtils from "@/utils/url";
 import * as transfersApi from "./transfers";
 import { batchRenameWireKey } from "@/utils/batchRename";
+import { mediaResourceURL } from "@/utils/mediaResource";
 
 export interface BatchRenameItem {
   from: string;
@@ -570,12 +571,15 @@ export async function checksum(url: string, algo: ChecksumAlg) {
   return (await data.json()).checksums[algo];
 }
 
-export function getDownloadURL(file: ResourceItem, inline: boolean) {
+export function getDownloadURL(
+  file: Pick<ResourceItem, "path" | "wirePath">,
+  inline: boolean
+) {
   const params = {
     ...(inline && { inline: "true" }),
   };
 
-  return createURL("api/raw" + file.path, params);
+  return mediaResourceURL("api/raw", file, params);
 }
 
 export function getPreviewURL(
@@ -591,7 +595,7 @@ export function getPreviewURL(
     ...(options.fit ? { fit: options.fit } : {}),
   };
 
-  return createURL("api/preview/" + size + file.path, params);
+  return mediaResourceURL("api/preview/" + size, file, params);
 }
 
 export function getSubtitlesURL(file: ResourceItem) {
@@ -599,7 +603,13 @@ export function getSubtitlesURL(file: ResourceItem) {
     inline: "true",
   };
 
-  return file.subtitles?.map((d) => createURL("api/subtitle" + d, params));
+  return file.subtitles?.flatMap((path) => {
+    try {
+      return [mediaResourceURL("api/subtitle", { path }, params)];
+    } catch {
+      return [];
+    } // Legacy subtitle names with lost bytes cannot be guessed.
+  });
 }
 
 export async function usage(url: string, signal: AbortSignal) {

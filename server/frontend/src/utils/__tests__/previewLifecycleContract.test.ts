@@ -174,7 +174,9 @@ describe("媒体预览生命周期契约", () => {
   });
 
   it("进度预览失败不阻断播放器初始化", () => {
-    expect(artPlayerSource).toContain("mediaApi.getVideoSprite(props.path)");
+    expect(artPlayerSource).toContain(
+      "mediaApi.getVideoSprite(mediaPath.value)"
+    );
     expect(artPlayerSource).toContain("art.value.thumbnails =");
     expect(artPlayerSource).toContain(
       "Progress thumbnails are optional; playback remains fully functional."

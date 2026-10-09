@@ -113,6 +113,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import { mediaIcon } from "@/utils/mediaIconSemantics";
+import { favoriteWirePath } from "@/utils/favoritePersistence";
 
 const mediaStore = useMediaStore();
 const router = useRouter();
@@ -126,7 +127,7 @@ const queueLabel = computed(() => {
 });
 
 watch(
-  () => mediaStore.currentAudio?.path,
+  () => mediaStore.currentAudio?.source,
   async () => {
     await nextTick();
     if (!audio.value || !mediaStore.currentAudio) return;
@@ -198,8 +199,13 @@ function changeVolume(event: Event) {
 function openCurrentAudio() {
   const item = mediaStore.currentAudio;
   if (!item) return;
+  const wire = favoriteWirePath(item);
+  if (!wire) {
+    mediaStore.setAudioError("音频原始路径无法确认，请重新选择");
+    return;
+  }
   router.push({
-    path: `/files${item.path}`,
+    path: `/files${wire}`,
     query: item.groupId ? { mediaQueue: item.groupId } : {},
   });
 }

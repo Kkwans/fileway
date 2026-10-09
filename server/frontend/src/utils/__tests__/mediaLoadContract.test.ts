@@ -41,7 +41,7 @@ describe("media loading contract", () => {
 
   it("rebuilds the thumbnail request when the listing fit mode changes", () => {
     const watchStart = thumbnailSource.indexOf(
-      "watch(\n  () => [props.path, props.modified, props.size, props.fit]"
+      "watch(\n  () => [props.wirePath || props.path, props.modified, props.size, props.fit]"
     );
     expect(watchStart).toBeGreaterThanOrEqual(0);
     const watchEnd = thumbnailSource.indexOf("\n);", watchStart);

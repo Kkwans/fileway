@@ -1,11 +1,13 @@
 package favorites
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 )
 
@@ -34,6 +36,23 @@ type Favorite struct {
 	AddedAt        int64  `json:"addedAt"`
 	Order          int    `json:"order"`
 	PathUnverified bool   `json:"-"`
+}
+
+// Public strings are presentation only. The encoded path retains filesystem
+// bytes; historical references whose bytes were lost remain explicitly closed.
+func (favorite *Favorite) MarshalJSON() ([]byte, error) {
+	type favoriteAlias Favorite
+	wire := ""
+	if !favorite.PathUnverified {
+		wire = files.EncodeWirePath(favorite.Path)
+	}
+	return json.Marshal(&struct {
+		*favoriteAlias
+		Path         string `json:"path"`
+		Name         string `json:"name"`
+		WirePath     string `json:"wirePath,omitempty"`
+		PathVerified bool   `json:"pathVerified"`
+	}{(*favoriteAlias)(favorite), files.DisplayPath(favorite.Path), files.DisplayName(favorite.Name), wire, !favorite.PathUnverified})
 }
 
 // GroupStorageBackend is the interface for favorite group storage.
