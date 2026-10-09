@@ -99,6 +99,9 @@ import java.util.Locale
     if (state.tab == "admin-users" && state.connected) { LibraryTheme {
         AdminUsersScreen(model.adminUsers, { model.tab("settings") }, model::disconnect)
     }; return }
+    if (state.tab == "server-settings" && state.connected) { LibraryTheme {
+        ServerSettingsScreen(model.serverSettings, { model.tab("settings") }, model::disconnect)
+    }; return }
     if (state.tab == "updates") { LibraryTheme { AppUpdatesScreen(model) }; return }
     val taskGroup = TaskCenterSection.forRoute(state.tab)
     if (taskGroup != null) {

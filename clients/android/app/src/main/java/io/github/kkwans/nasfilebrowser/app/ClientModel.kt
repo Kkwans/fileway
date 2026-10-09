@@ -133,6 +133,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val archives = ArchiveController(viewModelScope, isCurrent = { context === it && generation == it.generation },
         onOpened = { bound, file -> if (context === bound) recentAccess.record(file) },
         onTaskAccepted = { bound, _ -> if (context === bound) tasks.refresh() })
+    val serverSettings = ServerSettingsController(viewModelScope) { context === it && generation == it.generation }
     val documentEdits = DocumentEditController(application, viewModelScope, { context === it && generation == it.generation },
         onSaved = { bound, _ -> if (context === bound) { documents.retry(); transferRefreshPending = true; refreshTransferDirectoryIfVisible() } },
         onCreated = { bound, _ -> if (context === bound) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
@@ -273,6 +274,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 fileChecksum.bind(bound)
                 documents.bind(bound)
                 archives.bind(bound)
+                serverSettings.bind(bound)
                 documentEdits.bind(bound)
                 accountSettings.bind(bound)
                 adminUsers.bind(bound)
@@ -815,6 +817,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
         accountSettings.setVisible(visible && mutable.value.tab == "account")
+        serverSettings.setVisible(visible && mutable.value.tab == "server-settings")
         archives.setVisible(foreground && archives.state.value.file != null && mutable.value.connected)
         adminUsers.setVisible(visible && mutable.value.tab == "admin-users")
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
@@ -1058,6 +1061,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         fileChecksum.bind(null)
         documents.bind(null)
         archives.bind(null)
+        serverSettings.bind(null)
         documentEdits.bind(null)
         accountSettings.bind(null)
         adminUsers.bind(null)

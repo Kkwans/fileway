@@ -111,6 +111,7 @@ import kotlinx.coroutines.launch
                     SettingsGroup("账户") {
                         SettingsAction("账户设置", "共享偏好与修改密码", R.drawable.ic_person) { model.tab("account") }
                         if (state.permissions.admin) SettingsAction("用户管理", "账号、权限与访问规则", R.drawable.ic_person) { model.tab("admin-users") }
+                        if (state.permissions.admin) SettingsAction("服务器设置", "全局配置与默认账户策略", R.drawable.ic_storage) { model.tab("server-settings") }
                     }
                 }
                 item {
