@@ -99,7 +99,7 @@ class BrowserScreenTest {
             text("这个目录还没有文件。")
             device.findObject(By.desc("上一级")).click()
             withTimeout(5000) { model.state.first { !it.busy && it.path == "/" && it.files.size == 6 } }
-            text("最近播放").click(); text("继续观看")
+            text("最近").click(); text("继续观看")
             text("文件").click()
             assertTrue(device.wait(Until.hasObject(By.desc("文件列表")), 5000))
         } catch (error: Throwable) { capture("failure"); throw error }

@@ -26,6 +26,8 @@ import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.FileLayout
+import io.github.kkwans.nasfilebrowser.app.RecentSection
+import io.github.kkwans.nasfilebrowser.app.TaskCenterSection
 import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.data.PlaybackSnapshot
 import io.github.kkwans.nasfilebrowser.data.ProgressSync
@@ -37,6 +39,8 @@ import java.util.Locale
     val recent by model.recent.collectAsStateWithLifecycle()
     val search by model.search.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
+    // Local queue filters/scroll survive connecting or changing the server.
+    val localTaskState = rememberSaveableStateHolder()
     val activity = LocalActivity.current
     // Register before every route/early return, so an external picker result
     // survives Activity/process recreation and restores its original task.
@@ -52,7 +56,7 @@ import java.util.Locale
             else model.uploads.reselectSource(id, generation, uri)
         }
     }
-    BackHandler(state.connected || state.image != null || state.selected != null || state.tab in setOf("downloads", "uploads", "updates")) { if (!model.back()) activity?.finish() }
+    BackHandler(state.connected || state.image != null || state.selected != null || state.tab != "files") { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
     if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model); UploadSelectionDialog(model) }
     if (state.startupPending) {
@@ -68,13 +72,28 @@ import java.util.Locale
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (state.tab == "updates") { LibraryTheme { AppUpdatesScreen(model) }; return }
-    if (state.tab == "downloads") { LibraryTheme { DownloadsScreen(model) }; return }
-    if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) { row, restart ->
-        uploadSourceId = row.id; uploadSourceGeneration = row.generation; uploadSourceRestart = restart
-        try { uploadSource.launch(arrayOf("*/*")) }
-        catch (_: Exception) { uploadSourceId = null; model.uploads.reportError("无法打开系统文件选择器，原任务保留") }
-    } }; return }
-    if (!state.connected) { ConnectionScreen(model, state); return }
+    val taskGroup = TaskCenterSection.forRoute(state.tab)
+    if (taskGroup != null) {
+        LibraryTheme {
+            TaskCenterScaffold(model, taskGroup) {
+                val holder = if (taskGroup == TaskCenterSection.DOWNLOADS || taskGroup == TaskCenterSection.UPLOADS) localTaskState else pageState
+                holder.SaveableStateProvider("taskcenter/${taskGroup.route}") {
+                    when (taskGroup) {
+                        TaskCenterSection.DOWNLOADS -> DownloadsScreen(model)
+                        TaskCenterSection.UPLOADS -> UploadsScreen(model) { row, restart ->
+                            uploadSourceId = row.id; uploadSourceGeneration = row.generation; uploadSourceRestart = restart
+                            try { uploadSource.launch(arrayOf("*/*")) }
+                            catch (_: Exception) { uploadSourceId = null; model.uploads.reportError("无法打开系统文件选择器，原任务保留") }
+                        }
+                        TaskCenterSection.BACKGROUND -> if (state.connected) ServerTasksScreen(model, state) else TaskConnectionGuide(model::showConnection)
+                        TaskCenterSection.HISTORY -> OperationHistoryContent(model.operationHistory, state.connected, model::showConnection)
+                    }
+                }
+            }
+        }
+        return
+    }
+    if (!state.connected && state.tab != "recent") { ConnectionScreen(model, state); return }
     pageState.SaveableStateProvider(if (search.open) "search" else if (state.tab == "library") "library/${state.librarySection}" else state.tab) {
         LibraryTheme {
             when {
@@ -84,7 +103,8 @@ import java.util.Locale
                 state.tab == "library" -> when (state.librarySection) {
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.FAVORITES -> FavoritesScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TAGS -> TagsScreen(model, state)
-                    io.github.kkwans.nasfilebrowser.app.LibrarySection.TASKS -> ServerTasksScreen(model, state)
+                    // Compatibility only: old task routes render in the unified center.
+                    io.github.kkwans.nasfilebrowser.app.LibrarySection.TASKS -> TaskCenterScaffold(model, TaskCenterSection.BACKGROUND) { ServerTasksScreen(model, state) }
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TRASH -> TrashScreen(model, state)
                     io.github.kkwans.nasfilebrowser.app.LibrarySection.TOOLS -> StorageToolsScreen(model, state)
                 }
@@ -94,40 +114,67 @@ import java.util.Locale
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun RecentScreen(model: ClientModel, state: ClientState, recent: List<PlaybackSnapshot>) {
     val colors = MaterialTheme.colorScheme.copy(surface = MaterialTheme.colorScheme.surfaceContainer)
     var details by remember(state.previewScope) { mutableStateOf<ResourceRef?>(null) }
     MaterialTheme(colorScheme = colors) {
         Scaffold(containerColor = colors.surface, bottomBar = { ClientNavigation(model, "recent") }) { insets ->
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("继续观看", style = MaterialTheme.typography.titleLarge, color = colors.onBackground, modifier = Modifier.weight(1f))
-                    if (recent.isNotEmpty()) Text("${recent.size} 项", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                }
-                state.error?.let { message ->
-                    Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = colors.errorContainer, shape = RoundedCornerShape(10.dp)) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp)) { Text(message, color = colors.onErrorContainer); if (state.connected) TextButton(onClick = model::retry) { Text("重试") } }
+                Text("最近", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.titleLarge)
+                PrimaryTabRow(selectedTabIndex = state.recentSection.ordinal) {
+                    RecentSection.entries.forEach { section ->
+                        Tab(selected = section == state.recentSection, onClick = { model.recentSection(section) },
+                            modifier = Modifier.semantics { contentDescription = "${section.label}分组" }, text = { Text(section.label) })
                     }
                 }
-                state.notice?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant) }
-                if (state.busy) {
-                    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(12.dp)); Text(state.stage, modifier = Modifier.weight(1f)); TextButton(onClick = model::cancel) { Text("取消") } }
-                }
-                LazyColumn(Modifier.weight(1f).semantics { contentDescription = "最近播放列表" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (recent.isEmpty() && !state.busy) item {
-                        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), color = colors.background) {
-                            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(painterResource(R.drawable.ic_history), null, Modifier.size(24.dp), tint = colors.primary)
-                                Text("还没有播放记录", style = MaterialTheme.typography.titleMedium)
-                                Text("从文件页打开视频，观看进度会保存在这里。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-                                TextButton(onClick = { model.tab("files") }) { Text("浏览文件") }
+                val recentState = rememberSaveableStateHolder()
+                recentState.SaveableStateProvider(state.recentSection.name) {
+                    if (state.recentSection == RecentSection.ACCESS) {
+                        val access by model.recentAccess.state.collectAsStateWithLifecycle()
+                        val sourceScope = access.scope
+                        Column(Modifier.fillMaxSize()) {
+                            state.error?.let { message ->
+                                Text(message, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = colors.error)
+                            }
+                            if (state.busy) Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Text(state.stage, Modifier.weight(1f).padding(horizontal = 12.dp))
+                                TextButton(model::cancel) { Text("取消") }
+                            }
+                            RecentAccessContent(model.recentAccess, state.connected, model::showConnection) { model.openRecentAccess(it, sourceScope) }
+                        }
+                    } else Column(Modifier.fillMaxSize()) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("继续观看", style = MaterialTheme.typography.titleLarge, color = colors.onBackground, modifier = Modifier.weight(1f))
+                            if (recent.isNotEmpty()) Text("${recent.size} 项", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                        }
+                        state.error?.let { message ->
+                            Surface(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = colors.errorContainer, shape = RoundedCornerShape(10.dp)) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp)) { Text(message, color = colors.onErrorContainer); if (state.connected) TextButton(onClick = model::retry) { Text("重试") } }
                             }
                         }
-                    }
-                    items(recent, key = { it.resourceKey }) { snapshot ->
-                        val file = ResourceRef(snapshot.path, snapshot.wirePath, snapshot.name, false, "video", 0)
-                        FileEntry(model, file, FileLayout.DETAIL, enabled = !state.busy,
-                            open = { model.openRecent(snapshot) }, details = { details = file }, metadata = { RecentProgress(snapshot) })
+                        state.notice?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant) }
+                        if (state.busy) {
+                            Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(12.dp)); Text(state.stage, modifier = Modifier.weight(1f)); TextButton(onClick = model::cancel) { Text("取消") } }
+                        }
+                        LazyColumn(Modifier.weight(1f).semantics { contentDescription = "最近播放列表" }, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (recent.isEmpty() && !state.busy) item {
+                                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp), color = colors.background) {
+                                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Icon(painterResource(R.drawable.ic_history), null, Modifier.size(24.dp), tint = colors.primary)
+                                        Text("还没有播放记录", style = MaterialTheme.typography.titleMedium)
+                                        Text("从文件页打开视频，观看进度会保存在这里。", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                                        TextButton(onClick = { model.tab("files") }) { Text("浏览文件") }
+                                    }
+                                }
+                            }
+                            items(recent, key = { it.resourceKey }) { snapshot ->
+                                val file = ResourceRef(snapshot.path, snapshot.wirePath, snapshot.name, false, "video", 0)
+                                FileEntry(model, file, FileLayout.DETAIL, enabled = !state.busy,
+                                    open = { model.openRecent(snapshot) }, details = { details = file }, metadata = { RecentProgress(snapshot) })
+                            }
+                        }
                     }
                 }
             }

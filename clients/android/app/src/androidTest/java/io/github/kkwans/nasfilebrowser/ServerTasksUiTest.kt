@@ -15,7 +15,7 @@ internal class ServerTasksUiTest : LibraryUiHarness() {
         repeat(35) { data.tasks.put(data.task("done-$it", "analysis.storage", "completed", "已完成样本 $it")) }
         data.tasks.put(data.task("failed-storage", "analysis.storage", "failed", "存储统计样本").put("createdAt", System.currentTimeMillis() + 1000).put("error", "Owned failure"))
         fixture(data) {
-            action("资料库导航").click(); action("任务资料页").click()
+            action("任务中心导航").click(); action("后台任务分组").click()
             withTimeout(5000) { model.tasks.state.first { it.loaded && !it.loading } }
             assertEquals(30, model.tasks.state.value.items.size)
             main { model.tasks.refresh(more = true) }

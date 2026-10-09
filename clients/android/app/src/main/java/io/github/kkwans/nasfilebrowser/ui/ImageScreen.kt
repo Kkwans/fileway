@@ -74,6 +74,7 @@ import kotlin.math.abs
                 HorizontalPager(state = pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1,
                     userScrollEnabled = !zoomed, key = { entries[it].mediaKey }) { index ->
                     ImagePage(model, entries[index], active = index == pager.settledPage,
+                        sourceScope = client.previewScope,
                         previewEnabled = abs(index - pager.settledPage) <= 1, previews = previews, chrome = chrome,
                         onClick = { chrome = !chrome }, onZoom = { zoomedPages[entries[index].mediaKey] = it })
                 }
@@ -103,7 +104,7 @@ import kotlin.math.abs
 }
 
 @Composable private fun ImagePage(model: ClientModel, file: ResourceRef, active: Boolean, previewEnabled: Boolean,
-    previews: Semaphore, chrome: Boolean, onClick: () -> Unit, onZoom: (Boolean) -> Unit) {
+    sourceScope: String, previews: Semaphore, chrome: Boolean, onClick: () -> Unit, onZoom: (Boolean) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val cache by model.cache.state.collectAsStateWithLifecycle()
@@ -228,6 +229,13 @@ import kotlin.math.abs
             }).build()
     }
     val ready = fetched && imageState.isImageDisplayed
+    var recordedToken by remember(sourceScope, file.mediaKey) { mutableLongStateOf(-1L) }
+    LaunchedEffect(active, ready, sourceScope, file.mediaKey, token) {
+        if (activeNow && ready && fetched && imageState.isImageDisplayed && requestToken == token && !local && !canceled && failure == null && recordedToken != token) {
+            model.recordRecentAccess(current, sourceScope)
+            recordedToken = token
+        }
+    }
     val message = when {
         failure != null -> failure!! + if (preview != null) " · 仍可查看预览" else ""
         canceled -> if (preview != null) "已保留预览图" else "已取消读取"

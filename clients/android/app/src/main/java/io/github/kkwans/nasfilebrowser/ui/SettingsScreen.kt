@@ -52,13 +52,13 @@ import kotlinx.coroutines.launch
 
 @Composable internal fun ClientNavigation(model: ClientModel, selected: String) {
     val labelStyle = MaterialTheme.typography.labelMedium
-    val labelPixels = rememberTextMeasurer().measure("最近播放", style = labelStyle, maxLines = 1).size.height
+    val labelPixels = rememberTextMeasurer().measure("任务中心", style = labelStyle, maxLines = 1).size.height
     val barHeight = 64.dp + with(LocalDensity.current) { labelPixels.toDp() }
     NavigationBar(containerColor = MaterialTheme.colorScheme.background, tonalElevation = 0.dp,
         modifier = Modifier.heightIn(min = barHeight)) {
-        listOf(Triple("files", "文件", R.drawable.ic_folder), Triple("recent", "最近播放", R.drawable.ic_history),
+        listOf(Triple("files", "文件", R.drawable.ic_folder), Triple("recent", "最近", R.drawable.ic_history),
             Triple("library", "资料库", R.drawable.ic_bookmark),
-            Triple("downloads", "下载", R.drawable.ic_download),
+            Triple("taskcenter", "任务中心", R.drawable.ic_download),
             Triple("settings", "设置", R.drawable.ic_person)).forEach { (tab, label, icon) ->
             NavigationBarItem(selected = selected == tab, onClick = { model.tab(tab) },
                 modifier = Modifier.semantics { contentDescription = "${label}导航" },
@@ -102,7 +102,7 @@ import kotlinx.coroutines.launch
                     Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.background) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                             SettingsShortcut("文件", R.drawable.ic_folder, Modifier.weight(1f)) { model.tab("files") }
-                            SettingsShortcut("最近播放", R.drawable.ic_history, Modifier.weight(1f)) { model.tab("recent") }
+                            SettingsShortcut("最近", R.drawable.ic_history, Modifier.weight(1f)) { model.tab("recent") }
                             SettingsShortcut("服务器", R.drawable.ic_network, Modifier.weight(1f), model::disconnect)
                         }
                     }

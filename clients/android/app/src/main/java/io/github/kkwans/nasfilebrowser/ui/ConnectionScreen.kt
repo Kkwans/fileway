@@ -123,7 +123,7 @@ import io.github.kkwans.nasfilebrowser.data.*
                             Text("保存服务器档案", fontSize = 14.sp)
                         }
                         Row {
-                            TextButton(onClick = { model.tab("downloads") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("本机下载") }
+                            TextButton(onClick = { model.tab("taskcenter") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("任务中心") }
                             TextButton(onClick = model::openUpdates, modifier = Modifier.heightIn(min = 48.dp)) { Text("检查更新") }
                         }
                     }

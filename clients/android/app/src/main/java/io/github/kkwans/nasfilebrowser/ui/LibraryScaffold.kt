@@ -27,7 +27,7 @@ import io.github.kkwans.nasfilebrowser.app.LibrarySection
             }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val colors = libraryChipColors()
-                LibrarySection.entries.forEach { page -> FilterChip(page == section, { model.librarySection(page) }, { Text(page.label) }, colors = colors,
+                LibrarySection.entries.filter { it != LibrarySection.TASKS }.forEach { page -> FilterChip(page == section, { model.librarySection(page) }, { Text(page.label) }, colors = colors,
                     modifier = Modifier.semantics { contentDescription = "${page.label}资料页" }) }
             }
             content()

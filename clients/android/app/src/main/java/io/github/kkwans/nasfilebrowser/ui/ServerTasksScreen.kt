@@ -10,6 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,21 +37,22 @@ internal fun serverTime(value: Long): String = if (value <= 0) "未提供" else 
 
 @Composable internal fun ServerTasksScreen(model: ClientModel, client: ClientState) {
     val state by model.tasks.state.collectAsStateWithLifecycle()
-    var search by remember(state.scope) { mutableStateOf(state.filter.text) }
+    var search by rememberSaveable(state.scope) { mutableStateOf(state.filter.text) }
     var advanced by remember(state.scope) { mutableStateOf(false) }
     var confirm by remember(state.scope) { mutableStateOf<TaskConfirmation?>(null) }
     fun confirmAction(task: ServerTask?, command: String) { confirm = TaskConfirmation(task, command, state.filter, state.total) }
     val list = rememberLazyListState()
     val enabled = !state.loading && !state.changing && !state.paging
-    LaunchedEffect(state.scope) { model.tasks.refresh() }
     LaunchedEffect(list, state.scope) { snapshotFlow { list.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.toSet() }.collect(model.tasks::watch) }
-    LibraryScaffold(model, LibrarySection.TASKS, actions = {
-        TextButton({ advanced = true }, enabled = enabled) { Text("筛选") }
-        IconButton({ model.tasks.refresh() }, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新任务") }
-    }) {
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("服务器任务", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            TextButton({ advanced = true }, enabled = enabled) { Text("筛选") }
+            IconButton({ model.tasks.refresh() }, enabled = enabled) { Icon(painterResource(R.drawable.ic_refresh), "刷新任务") }
+        }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(state.filter.category == "file", { model.tasks.filter(state.filter.copy(category = "file")) }, { Text("文件任务") }, enabled = enabled, colors = libraryChipColors())
-            FilterChip(state.filter.category == "background", { model.tasks.filter(state.filter.copy(category = "background")) }, { Text("后台任务") }, enabled = enabled, colors = libraryChipColors())
+            FilterChip(state.filter.category == "background", { model.tasks.filter(state.filter.copy(category = "background")) }, { Text("其他后台任务") }, enabled = enabled, colors = libraryChipColors())
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = .10f), selectedLabelColor = MaterialTheme.colorScheme.primary)

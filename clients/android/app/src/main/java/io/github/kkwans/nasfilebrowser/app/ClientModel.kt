@@ -39,6 +39,11 @@ import org.json.JSONObject
 import java.net.URLEncoder
 
 typealias FileLayout = io.github.kkwans.nasfilebrowser.data.FileLayout
+enum class RecentSection(val label: String) { PLAYBACK("最近播放"), ACCESS("最近访问") }
+enum class TaskCenterSection(val route: String, val label: String) {
+    DOWNLOADS("downloads", "下载"), UPLOADS("uploads", "上传"), BACKGROUND("tasks", "后台任务"), HISTORY("history", "操作历史");
+    companion object { fun forRoute(route: String): TaskCenterSection? = entries.firstOrNull { it.route == route } }
+}
 enum class LibrarySection(val label: String, val title: String) { FAVORITES("收藏", "收藏夹"), TAGS("标签", "标签"), TRASH("回收站", "回收站"), TASKS("任务", "任务中心"), TOOLS("工具", "存储工具") }
 
 data class ResourceRef(val path: String, val wirePath: String, val name: String, val directory: Boolean, val type: String, val size: Long, val modified: String = "", val downloadId: String = "")
@@ -52,6 +57,8 @@ data class ClientState(
     val downloadBytesPerSecond: Long? = null,
     val profile: ServerProfile? = null, val accounts: List<AccountRecord> = emptyList(), val editorVersion: Int = 0,
     val librarySection: LibrarySection = LibrarySection.FAVORITES,
+    val recentSection: RecentSection = RecentSection.PLAYBACK,
+    val taskCenterSection: TaskCenterSection = TaskCenterSection.DOWNLOADS,
     val permissions: ServerPermissions = ServerPermissions(),
     val notice: String? = null,
     val progressStatus: String? = null, val tab: String = "files", val previewScope: String = "", val fileLayout: FileLayout = FileLayout.COVER,
@@ -118,6 +125,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val favorites = FavoritesController(viewModelScope) { context === it && generation == it.generation }
     val tags = TagsController(viewModelScope) { context === it && generation == it.generation }
     val tasks = ServerTasksController(viewModelScope) { context === it && generation == it.generation }
+    val operationHistory = OperationHistoryController(viewModelScope) { context === it && generation == it.generation }
+    val recentAccess = RecentAccessController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
     val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished,
         { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
@@ -144,6 +153,19 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             uploads.state.collect { value ->
                 if (value.completedRevision != revision) {
                     revision = value.completedRevision; transferRefreshPending = true; refreshTransferDirectoryIfVisible()
+                }
+            }
+        }
+        // A request/lease is not a successful visit. Record video only after its
+        // first decoded frame, once for each actual player generation.
+        viewModelScope.launch {
+            var recordedGeneration = -1L
+            player.state.collect { value ->
+                val binding = playback
+                if (value.firstFrameRendered && value.error == null && binding != null && value.mediaGeneration != recordedGeneration &&
+                    context === binding.context && generation == binding.context.generation) {
+                    recordedGeneration = value.mediaGeneration
+                    recentAccess.record(binding.file)
                 }
             }
         }
@@ -223,6 +245,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 favorites.bind(bound)
                 tags.bind(bound)
                 tasks.bind(bound)
+                operationHistory.bind(bound)
+                recentAccess.bind(bound)
                 trash.bind(bound)
                 fileOperations.bind(bound)
                 storageTools.bind(bound)
@@ -283,6 +307,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             if (generation == bound.generation && context == bound) {
                 if (pendingDirectory == (path to wire)) pendingDirectory = null
                 mutable.value = mutable.value.copy(busy = false, stage = "", path = path, wirePath = wire, files = files, error = null)
+                recentAccess.record(ResourceRef(path, wire, data.optString("name").ifEmpty { path.substringAfterLast('/').ifEmpty { "/" } }, true, "", 0))
             }
         }
     }
@@ -355,7 +380,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun showFileTask(id: String? = null) {
         if (mutable.value.image != null) closeImage()
         if (mutable.value.selected != null) leavePlayer()
-        librarySection(LibrarySection.TASKS)
+        taskCenterSection(TaskCenterSection.BACKGROUND)
         tasks.filter(TaskFilter(category = "file"))
         id?.let(tasks::select)
     }
@@ -703,7 +728,15 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun tab(value: String) { if (value in setOf("downloads", "uploads", "updates") && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun tab(value: String) {
+        val target = if (value == "taskcenter") mutable.value.taskCenterSection.route else value
+        if ((TaskCenterSection.forRoute(target) != null || target == "updates") && mutable.value.startupPending) cancel()
+        if (target != "files") search.close()
+        mutable.value = mutable.value.copy(tab = target, taskCenterSection = TaskCenterSection.forRoute(target) ?: mutable.value.taskCenterSection)
+    }
+    fun recentSection(value: RecentSection) { search.close(); mutable.value = mutable.value.copy(tab = "recent", recentSection = value) }
+    fun taskCenterSection(value: TaskCenterSection) { tab(value.route) }
+    fun showConnection() { tab("files") }
     fun openUpdates() { if (mutable.value.tab != "updates") updateReturnTab = mutable.value.tab; tab("updates") }
     fun openDownloads() {
         if (mutable.value.selected != null || pendingMediaOpen != null) leavePlayer()
@@ -715,12 +748,17 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (mutable.value.image != null) closeImage()
         tab("uploads")
     }
-    fun librarySection(value: LibrarySection) { search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value) }
-    fun showServerTask(id: String) { librarySection(LibrarySection.TASKS); tasks.select(id) }
+    fun librarySection(value: LibrarySection) {
+        if (value == LibrarySection.TASKS) { taskCenterSection(TaskCenterSection.BACKGROUND); return }
+        search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value)
+    }
+    fun showServerTask(id: String) { taskCenterSection(TaskCenterSection.BACKGROUND); tasks.filter(tasks.state.value.filter.copy(category = "background")); tasks.select(id) }
     fun showAnalysis(id: String, type: String) { librarySection(LibrarySection.TOOLS); storageTools.openReport(id, if (type == "analysis.storage") "storage" else "duplicates") }
     private fun syncLibraryObservers() {
         val visible = foreground && mutable.value.connected && mutable.value.selected == null && mutable.value.image == null && !search.state.value.open
-        tasks.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TASKS)
+        tasks.setVisible(visible && mutable.value.tab == TaskCenterSection.BACKGROUND.route)
+        operationHistory.setVisible(visible && mutable.value.tab == TaskCenterSection.HISTORY.route)
+        recentAccess.setVisible(visible && mutable.value.tab == "recent" && mutable.value.recentSection == RecentSection.ACCESS)
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
@@ -795,6 +833,22 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         // Re-read the directory before returning from the recycle bin; a
         // restored file's favorites/tags are supplied by the server transaction.
         if (mutable.value.path == path.substringBeforeLast('/').ifEmpty { "/" }) retry()
+    }
+    /** Called only after the active remote image has actually decoded. */
+    fun recordRecentAccess(file: ResourceRef, sourceScope: String = mutable.value.previewScope) {
+        val bound = context ?: return
+        val active = mutable.value.image ?: return
+        if (sourceScope == mutable.value.previewScope && file.downloadId.isEmpty() && active.mediaKey == file.mediaKey && generation == bound.generation) recentAccess.record(file)
+    }
+    fun openRecentAccess(entry: RecentAccessEntry, sourceScope: String) {
+        val bound = context ?: return
+        val access = recentAccess.state.value
+        if (sourceScope != bound.owner || access.scope != sourceScope || mutable.value.busy || !entry.openable ||
+            access.items.none { it.id == entry.id && it.path == entry.path && it.wirePath == entry.wirePath }) return
+        val file = entry.resource()
+        // Revalidate the authoritative resource metadata. The history DTO is
+        // not a playback-progress record and never becomes a directory queue.
+        openRemotePathWithWire(file.path, file.wirePath)
     }
     fun openRecent(snapshot: PlaybackSnapshot) {
         val bound = context ?: return
@@ -932,6 +986,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         favorites.bind(null)
         tags.bind(null)
         tasks.bind(null)
+        operationHistory.bind(null)
+        recentAccess.bind(null)
         trash.bind(null)
         fileOperations.bind(null)
         downloads.cancelFolderDownloads(quiet = true)

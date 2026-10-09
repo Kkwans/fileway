@@ -81,7 +81,7 @@ class SettingsScreenTest {
             action("关于应用").click()
             assertTrue(device.wait(Until.hasObject(By.text("栖卷 · Fileway")), 5000))
             (device.wait(Until.findObject(By.text("关闭")), 5000) ?: error("Dialog close action missing")).click()
-            nav("最近播放").click()
+            nav("最近").click()
             assertTrue(device.wait(Until.hasObject(By.text("继续观看")), 5000))
             nav("文件").click()
             assertTrue(device.wait(Until.hasObject(By.desc("文件网格")), 5000))

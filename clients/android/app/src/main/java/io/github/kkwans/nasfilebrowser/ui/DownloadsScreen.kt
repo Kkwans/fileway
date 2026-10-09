@@ -68,74 +68,71 @@ import kotlinx.coroutines.withContext
         }
     }
     val records = state.items.filter { when (filter) { "已完成" -> it.complete; "未完成" -> !it.complete; else -> true } }
-    Scaffold(containerColor = MaterialTheme.colorScheme.surfaceContainer, bottomBar = { ClientNavigation(model, "downloads") }) { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("本机下载", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                TextButton(model::openUploads) { Text("上传") }
-                TextButton({ settings = true }) { Text("下载目录") }
-            }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("全部", "未完成", "已完成").forEach { label -> FilterChip(filter == label, { filter = label }, { Text(label) }) }
-            }
-            state.error?.let { message -> Text(message, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
-            state.notice?.let { message -> Text(message, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            LazyColumn(Modifier.weight(1f).semantics { contentDescription = "本机下载列表" }, contentPadding = PaddingValues(bottom = 16.dp)) {
-                if (records.isEmpty()) item {
-                    Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Icon(painterResource(R.drawable.ic_download), null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
-                        Text(if (state.items.isEmpty()) "把文件带在身边" else "这里还没有${filter}的文件", style = MaterialTheme.typography.titleMedium)
-                        Text("从文件详情中下载。下载中的视频可边下边播，完成的图片和视频可离线打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        TextButton({ model.tab("files") }) { Text("浏览服务器文件") }
-                    }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("本机下载", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            TextButton({ settings = true }) { Text("下载目录") }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("全部", "未完成", "已完成").forEach { label -> FilterChip(filter == label, { filter = label }, { Text(label) }) }
+        }
+        state.error?.let { message -> Text(message, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
+        state.notice?.let { message -> Text(message, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        LazyColumn(Modifier.weight(1f).semantics { contentDescription = "本机下载列表" }, contentPadding = PaddingValues(bottom = 16.dp)) {
+            if (records.isEmpty()) item {
+                Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(painterResource(R.drawable.ic_download), null, Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(if (state.items.isEmpty()) "把文件带在身边" else "这里还没有${filter}的文件", style = MaterialTheme.typography.titleMedium)
+                    Text("从文件详情中下载。下载中的视频可边下边播，完成的图片和视频可离线打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton({ model.tab("files") }) { Text("浏览服务器文件") }
                 }
-                items(records, key = { it.id }) { item ->
-                    val file = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
-                    val kind = file.mediaKind()
-                    val canOpen = item.localUri.isNotEmpty() && (item.complete || kind == MediaKind.VIDEO)
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (item.complete && kind == MediaKind.IMAGE) MediaThumbnail(model, file, Modifier.size(52.dp), showStatusText = false)
-                            else Icon(painterResource(if (kind == MediaKind.IMAGE) R.drawable.ic_image else if (kind == MediaKind.VIDEO) R.drawable.art_play else R.drawable.ic_download), null,
-                                Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
-                            Column(Modifier.weight(1f).clickable(enabled = canOpen) { openDownloaded(context, model, item, kind) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp)) {
-                                Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                Text(item.sourceLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (item.relativeDirectory.isNotEmpty()) Text(item.relativeDirectory, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
+            }
+            items(records, key = { it.id }) { item ->
+                val file = ResourceRef(item.path, item.wirePath, item.name, false, item.type, item.expectedSize, item.modified, item.id)
+                val kind = file.mediaKind()
+                val canOpen = item.localUri.isNotEmpty() && (item.complete || kind == MediaKind.VIDEO)
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (item.complete && kind == MediaKind.IMAGE) MediaThumbnail(model, file, Modifier.size(52.dp), showStatusText = false)
+                        else Icon(painterResource(if (kind == MediaKind.IMAGE) R.drawable.ic_image else if (kind == MediaKind.VIDEO) R.drawable.art_play else R.drawable.ic_download), null,
+                            Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+                        Column(Modifier.weight(1f).clickable(enabled = canOpen) { openDownloaded(context, model, item, kind) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp)) {
+                            Text(item.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(item.sourceLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (item.relativeDirectory.isNotEmpty()) Text(item.relativeDirectory, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
-                        val fraction = if (item.expectedSize > 0) (item.downloaded.toDouble() / item.expectedSize).toFloat().coerceIn(0f, 1f) else 0f
-                        val status = when (item.status) { "completed" -> "已完成"; "queued" -> "等待下载"; "running" -> "正在下载"; "paused" -> "已暂停"; "interrupted" -> "下载中断"; else -> "下载失败" }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(status, style = MaterialTheme.typography.labelMedium, color = if (item.status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(if (item.complete) readableSize(item.expectedSize) else "${(fraction * 100).toInt().coerceAtMost(99)}% · ${readableSize(item.downloaded)} / ${readableSize(item.expectedSize)}", style = MaterialTheme.typography.labelMedium)
-                        }
-                        if (!item.complete) LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(3.dp), gapSize = 0.dp, drawStopIndicator = {})
-                        if (item.active) Text(state.speeds[item.id]?.let { readableSize(it) + "/s" } ?: "正在获取下载速度", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, Modifier.semantics { contentDescription = "打开下载：${item.name}" }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
-                            if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) },
-                                Modifier.semantics { contentDescription = "${if (item.active) "暂停下载" else "继续下载"}：${item.name}" }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
-                            var more by remember(item.id) { mutableStateOf(false) }
-                            Box {
-                                TextButton({ more = true }, enabled = !state.busy) { Text("更多") }
-                                DropdownMenu(more, { more = false }) {
-                                    DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri, item.relativeDirectory) })
-                                    if (item.treeUri.isNotEmpty()) DropdownMenuItem({ Text("重新授权目录") }, {
-                                        more = false; reauthorizing = item.id
-                                        try { recoverFolder.launch(model.downloads.target.directoryUri(item.treeUri)) }
-                                        catch (_: Exception) { reauthorizing = null; model.downloads.reportError("无法打开目录选择器，请检查系统文件管理器") }
-                                    }, enabled = !item.active)
-                                    DropdownMenuItem({ Text("移除记录") }, { more = false; deleteFile = false; remove = item }, enabled = item.complete)
-                                    DropdownMenuItem({ Text("删除文件与记录") }, { more = false; deleteFile = true; remove = item }, enabled = !item.active)
-                                }
+                    }
+                    val fraction = if (item.expectedSize > 0) (item.downloaded.toDouble() / item.expectedSize).toFloat().coerceIn(0f, 1f) else 0f
+                    val status = when (item.status) { "completed" -> "已完成"; "queued" -> "等待下载"; "running" -> "正在下载"; "paused" -> "已暂停"; "interrupted" -> "下载中断"; else -> "下载失败" }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(status, style = MaterialTheme.typography.labelMedium, color = if (item.status == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (item.complete) readableSize(item.expectedSize) else "${(fraction * 100).toInt().coerceAtMost(99)}% · ${readableSize(item.downloaded)} / ${readableSize(item.expectedSize)}", style = MaterialTheme.typography.labelMedium)
+                    }
+                    if (!item.complete) LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(3.dp), gapSize = 0.dp, drawStopIndicator = {})
+                    if (item.active) Text(state.speeds[item.id]?.let { readableSize(it) + "/s" } ?: "正在获取下载速度", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (canOpen) TextButton({ openDownloaded(context, model, item, kind) }, Modifier.semantics { contentDescription = "打开下载：${item.name}" }, enabled = !state.busy) { Text(if (item.complete) "打开" else "边下边播") }
+                        if (!item.complete) TextButton({ if (item.active) model.downloads.pause(item) else model.downloads.resume(item) },
+                            Modifier.semantics { contentDescription = "${if (item.active) "暂停下载" else "继续下载"}：${item.name}" }, enabled = !state.busy) { Text(if (item.active) "暂停" else "继续下载") }
+                        var more by remember(item.id) { mutableStateOf(false) }
+                        Box {
+                            TextButton({ more = true }, enabled = !state.busy) { Text("更多") }
+                            DropdownMenu(more, { more = false }) {
+                                DropdownMenuItem({ Text("打开所在目录") }, { more = false; openFolder(item.treeUri, item.relativeDirectory) })
+                                if (item.treeUri.isNotEmpty()) DropdownMenuItem({ Text("重新授权目录") }, {
+                                    more = false; reauthorizing = item.id
+                                    try { recoverFolder.launch(model.downloads.target.directoryUri(item.treeUri)) }
+                                    catch (_: Exception) { reauthorizing = null; model.downloads.reportError("无法打开目录选择器，请检查系统文件管理器") }
+                                }, enabled = !item.active)
+                                DropdownMenuItem({ Text("移除记录") }, { more = false; deleteFile = false; remove = item }, enabled = item.complete)
+                                DropdownMenuItem({ Text("删除文件与记录") }, { more = false; deleteFile = true; remove = item }, enabled = !item.active)
                             }
                         }
                     }
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 }
+                HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
