@@ -176,7 +176,11 @@ func TestArchiveTaskWireArgsSurviveBoltCloseAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	storage, err = boltstore.NewStorage(db)
 	if err != nil {
 		t.Fatal(err)
