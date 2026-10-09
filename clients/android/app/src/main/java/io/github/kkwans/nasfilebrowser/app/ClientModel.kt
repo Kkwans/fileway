@@ -66,6 +66,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val playbackPreferences = PlaybackPreferences(application)
     val cache = CacheController(application, viewModelScope)
     val downloads = DownloadController(application, viewModelScope)
+    internal val updates = io.github.kkwans.nasfilebrowser.update.AppUpdates(application, viewModelScope)
     val uploads = UploadController(application, viewModelScope) { context === it && generation == it.generation }
     val previewImageLoader get() = cache.thumbnailLoader.value
     fun cacheAccount(): String = context?.account?.key.orEmpty()
@@ -87,6 +88,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     private var transferRefresh: Job? = null
     private var transferRefreshPending = false
     private var foreground = false
+    private var updateReturnTab = "files"
     private var context: SessionContext? = null
     private var lease = ""
     private val subtitleLeases = mutableListOf<PreviewLease>()
@@ -672,6 +674,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (mutable.value.image != null) { closeImage(); return true }
         if (mutable.value.selected != null) { leavePlayer(); return true }
         if (search.state.value.open) { cancel(); search.close(); return true }
+        if (mutable.value.tab == "updates") { tab(updateReturnTab); return true }
         if (mutable.value.tab != "files") { tab("files"); return true }
         if (navigation.isNotEmpty()) { val previous = navigation.removeLast(); browse(previous.first, previous.second); return true }
         if (mutable.value.path != "/") {
@@ -700,7 +703,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun tab(value: String) { if (value in setOf("downloads", "uploads") && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun tab(value: String) { if (value in setOf("downloads", "uploads", "updates") && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun openUpdates() { if (mutable.value.tab != "updates") updateReturnTab = mutable.value.tab; tab("updates") }
     fun openDownloads() {
         if (mutable.value.selected != null || pendingMediaOpen != null) leavePlayer()
         if (mutable.value.image != null) closeImage()

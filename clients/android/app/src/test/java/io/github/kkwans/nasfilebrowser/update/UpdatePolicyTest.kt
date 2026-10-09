@@ -1,0 +1,56 @@
+package io.github.kkwans.nasfilebrowser.update
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class UpdatePolicyTest {
+    private fun release(version: String, preview: Boolean = true, abi: String = ""): AppRelease {
+        val tag = "android-preview-$version-1234567"; val name = "fileway-android-$version-preview$abi.apk"
+        return AppRelease(tag, version, "Owned test notes", preview,
+            listOf(UpdateAsset(100, name, "https://github.com/Kkwans/fileway/releases/download/$tag/$name", 1024)))
+    }
+    @Test fun numericVersionsDoNotSortLexicallyOrOfferDowngrades() {
+        val versions = listOf(release("0.9.0"), release("0.10.0"), release("0.7.2"))
+        assertEquals("0.10.0", UpdatePolicy.latest(versions, "0.7.0-preview", listOf("arm64-v8a"))!!.release.version)
+        assertNull(UpdatePolicy.latest(versions, "0.10.0-preview", listOf("arm64-v8a")))
+        assertNull(UpdatePolicy.latest(versions, "1.0.0-preview", listOf("x86_64")))
+        assertEquals(AppVersion(0, 7, 0), AppVersion.parse("0.7"))
+        assertNull(AppVersion.parse("0.7.evil")); assertNull(AppVersion.parse("9999999999999.1.0"))
+    }
+    @Test fun officialReleaseCanReplaceSameVersionPreviewButNotTheReverse() {
+        val preview = release("0.7.0"); val stable = preview.copy(preview = false)
+        assertFalse(UpdatePolicy.latest(listOf(preview, stable), "0.6.1-preview", listOf("arm64-v8a"))!!.release.preview)
+        assertNotNull(UpdatePolicy.latest(listOf(stable), "0.7.0-preview", listOf("arm64-v8a")))
+        assertNull(UpdatePolicy.latest(listOf(preview), "0.7.0", listOf("arm64-v8a")))
+    }
+    @Test fun eachChannelKeepsItsLatestAndOffersBothWithoutDowngradeChoices() {
+        val stable = release("0.7.2", preview = false)
+        val preview = release("0.8.0")
+        val all = listOf(release("0.7.0", preview = false), release("0.7.1"), stable, preview)
+        assertEquals(listOf(preview, stable), UpdatePolicy.updates(all, "0.6.1-preview", listOf("arm64-v8a")).map { it.release })
+        assertEquals(listOf(preview), UpdatePolicy.updates(all, "0.7.2", listOf("arm64-v8a")).map { it.release })
+        assertTrue(UpdatePolicy.updates(all, "0.9.0-preview", listOf("arm64-v8a")).isEmpty())
+    }
+    @Test fun abiSelectionPrefersCompatibleNativeBuildAndFallsBackToUniversal() {
+        val universal = release("0.7.0"); val arm = release("0.7.0", abi = "-arm64-v8a"); val x64 = release("0.7.0", abi = "-x86_64")
+        val all = universal.copy(assets = universal.assets + arm.assets + x64.assets)
+        assertEquals(arm.assets.single(), UpdatePolicy.compatible(all, listOf("arm64-v8a", "armeabi-v7a")))
+        assertEquals(x64.assets.single(), UpdatePolicy.compatible(all, listOf("x86_64")))
+        assertEquals(universal.assets.single(), UpdatePolicy.compatible(universal, listOf("arm64-v8a")))
+        assertNull(UpdatePolicy.compatible(arm, listOf("x86_64")))
+        assertNull(UpdatePolicy.compatible(universal.copy(tag = "server-0.7.0"), listOf("arm64-v8a")))
+    }
+    @Test fun downloadsMustBeBoundToTheExactOfficialReleaseAndAsset() {
+        val item = release("0.7.0"); val asset = item.assets.single()
+        assertTrue(UpdatePolicy.trusted(asset, item.tag))
+        for (url in listOf(asset.url.replace("https:", "http:"), asset.url.replace("github.com", "github.com.evil.invalid"),
+            asset.url.replace("Kkwans/fileway/", "another/fileway/"), asset.url + "?other=1", asset.url + "#fragment",
+            asset.url.replace("github.com", "user@github.com"), asset.url.replace("0.7.0-1234567", "0.6.1-1234567"))) {
+            assertFalse(url, UpdatePolicy.trusted(asset.copy(url = url), item.tag))
+        }
+        assertFalse(UpdatePolicy.trusted(asset.copy(size = 0), item.tag))
+        assertFalse(UpdatePolicy.trusted(asset.copy(size = UpdatePolicy.MAX_APK_BYTES + 1), item.tag))
+        assertFalse(UpdatePolicy.trusted(asset.copy(id = 0), item.tag))
+        assertNull(UpdatePolicy.compatible(item.copy(assets = listOf(asset.copy(name = "server.exe"))), listOf("arm64-v8a")))
+    }
+}

@@ -117,12 +117,15 @@ import io.github.kkwans.nasfilebrowser.data.*
                     }
                     Button(onClick = connect, enabled = canConnect, shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("连接服务器", fontSize = 16.sp) }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         TextButton(onClick = { focus.clearFocus(); model.saveDraft(profileName, url.trim(), backend, mode) },
                             enabled = canSave, modifier = Modifier.heightIn(min = 48.dp), shape = RoundedCornerShape(10.dp)) {
                             Text("保存服务器档案", fontSize = 14.sp)
                         }
-                        TextButton(onClick = { model.tab("downloads") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("本机下载") }
+                        Row {
+                            TextButton(onClick = { model.tab("downloads") }, modifier = Modifier.heightIn(min = 48.dp)) { Text("本机下载") }
+                            TextButton(onClick = model::openUpdates, modifier = Modifier.heightIn(min = 48.dp)) { Text("检查更新") }
+                        }
                     }
                 }
             }

@@ -49,7 +49,7 @@ import java.util.Locale
             if (uri != null) model.uploads.reselectSource(id, generation, uri) else model.uploads.sourceSelectionCanceled()
         }
     }
-    BackHandler(state.connected || state.image != null || state.selected != null || state.tab in setOf("downloads", "uploads")) { if (!model.back()) activity?.finish() }
+    BackHandler(state.connected || state.image != null || state.selected != null || state.tab in setOf("downloads", "uploads", "updates")) { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
     if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model); UploadSelectionDialog(model) }
     if (state.startupPending) {
@@ -64,6 +64,7 @@ import java.util.Locale
     }
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
+    if (state.tab == "updates") { LibraryTheme { AppUpdatesScreen(model) }; return }
     if (state.tab == "downloads") { LibraryTheme { DownloadsScreen(model) }; return }
     if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) { row ->
         uploadSourceId = row.id; uploadSourceGeneration = row.generation

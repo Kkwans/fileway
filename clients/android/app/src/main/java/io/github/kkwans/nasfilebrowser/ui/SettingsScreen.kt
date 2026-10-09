@@ -136,6 +136,8 @@ import kotlinx.coroutines.launch
                 } }
                 item {
                     SettingsGroup("应用") {
+                        SettingsAction("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}", R.drawable.ic_download, action = model::openUpdates)
+                        HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
                         SettingsAction("关于应用", BuildConfig.VERSION_NAME, R.drawable.ic_info) { about = true }
                     }
                 }
