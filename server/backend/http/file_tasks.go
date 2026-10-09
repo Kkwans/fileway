@@ -276,6 +276,9 @@ var fileTransferTaskHandler = func(runtime *tasks.Runtime) handleFunc {
 
 		args := fileTransferTaskArgs{Items: make([]fileTransferItem, 0, len(request.Items)), Completed: make(map[string]bool)}
 		for index, item := range request.Items {
+			if item.Overwrite && !d.user.Perm.Modify {
+				return http.StatusForbidden, fberrors.ErrPermissionDenied
+			}
 			from, err := resourceOperationPath(item.From, item.FromWirePath, true)
 			if err != nil {
 				return http.StatusBadRequest, err
@@ -314,17 +317,21 @@ var fileTransferTaskHandler = func(runtime *tasks.Runtime) handleFunc {
 			args.Items = append(args.Items, item)
 		}
 
-		encoded, err := json.Marshal(args)
-		if err != nil {
-			return http.StatusInternalServerError, err
-		}
 		taskType := tasks.TypeFileCopy
 		title := fmt.Sprintf("复制 %d 项", len(args.Items))
 		if request.Action == "move" {
 			taskType = tasks.TypeFileMove
 			title = fmt.Sprintf("移动 %d 项", len(args.Items))
 		}
-		task, err := enqueueTask(runtime, d, d.user, taskType, title, encoded, "")
+		current, status, err := validateFileTransferEnqueue(r.Context(), d, &tasks.Task{UserID: d.user.ID, Type: taskType}, args)
+		if err != nil {
+			return status, err
+		}
+		encoded, err := json.Marshal(args)
+		if err != nil {
+			return http.StatusInternalServerError, err
+		}
+		task, err := enqueueTask(runtime, current, current.user, taskType, title, encoded, "")
 		if err != nil {
 			return taskErrorStatus(err), err
 		}
@@ -360,13 +367,100 @@ func lstatResource(afs afero.Fs, name string) (os.FileInfo, error) {
 	return afs.Stat(name)
 }
 
+// This identity belongs to the current in-process attempt. Old persisted tasks
+// do not contain a workspace identity; this does not guess one for historical retry.
+type fileTransferWorkspace struct {
+	scope, serverRoot, fsRoot string
+	paths                     map[string]string
+}
+
+var errFileTransferWorkspaceChanged = errors.New("任务来源目录已变化，请重新创建任务")
+
+func captureFileTransferWorkspace(d *data, args fileTransferTaskArgs) fileTransferWorkspace {
+	identity := fileTransferWorkspace{scope: d.user.Scope, serverRoot: d.server.Root, fsRoot: d.user.FullPath("/"), paths: make(map[string]string)}
+	for _, item := range args.Items {
+		identity.paths[item.From], identity.paths[item.To] = d.user.FullPath(item.From), d.user.FullPath(item.To)
+	}
+	return identity
+}
+
+func (identity fileTransferWorkspace) authorize(ctx context.Context, d *data, task *tasks.Task, item fileTransferItem) (*data, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if d.server.Root != identity.serverRoot {
+		return nil, errFileTransferWorkspaceChanged
+	}
+	actor, err := d.store.Users.Get(d.server.Root, task.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("任务所有者已不可用，请重新创建任务: %w", err)
+	}
+	if actor.Scope != identity.scope || actor.FullPath("/") != identity.fsRoot || actor.FullPath(item.From) != identity.paths[item.From] || actor.FullPath(item.To) != identity.paths[item.To] {
+		return nil, errFileTransferWorkspaceChanged
+	}
+	if !actor.Perm.Create || (task.Type == tasks.TypeFileMove && !actor.Perm.Rename) || (item.Overwrite && !actor.Perm.Modify) {
+		return nil, fmt.Errorf("执行时没有文件操作权限，请检查权限后重试: %w", fberrors.ErrPermissionDenied)
+	}
+	policy, err := d.store.Settings.Get()
+	if err != nil {
+		return nil, fmt.Errorf("无法核验当前文件访问规则，请重试: %w", err)
+	}
+	current := *d
+	current.user, current.settings = actor, policy
+	if !current.Check(item.From) || !current.Check(item.To) {
+		return nil, fmt.Errorf("任务路径已无权访问，请检查规则后重试: %w", fberrors.ErrPermissionDenied)
+	}
+	return &current, nil
+}
+
+// Initial submission and explicit file-task retry share the same current-owner
+// authorization point before Store.New. This does not infer historical scope.
+func validateFileTransferEnqueue(ctx context.Context, d *data, task *tasks.Task, args fileTransferTaskArgs) (*data, int, error) {
+	if len(args.Items) == 0 || len(args.Items) > 1000 {
+		return nil, http.StatusConflict, fmt.Errorf("文件任务参数无有效项目，请重新创建任务")
+	}
+	workspace := captureFileTransferWorkspace(d, args)
+	current := d
+	for _, item := range args.Items {
+		if item.From == "/" || item.To == "/" || item.From == item.To {
+			return nil, http.StatusConflict, fmt.Errorf("文件任务源或目标无效，请重新创建任务")
+		}
+		if err := checkParent(item.From, item.To); err != nil {
+			return nil, http.StatusConflict, err
+		}
+		updated, err := workspace.authorize(ctx, d, task, item)
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, fberrors.ErrPermissionDenied):
+				status = http.StatusForbidden
+			case errors.Is(err, errFileTransferWorkspaceChanged), errors.Is(err, fberrors.ErrNotExist):
+				status = http.StatusConflict
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				status = http.StatusRequestTimeout
+			}
+			return nil, status, err
+		}
+		current = updated
+	}
+	return current, http.StatusAccepted, nil
+}
+
 func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) tasks.Runner {
 	if args.Completed == nil {
 		args.Completed = make(map[string]bool)
 	}
+	workspace := captureFileTransferWorkspace(d, args)
 	return func(ctx context.Context, report tasks.Reporter) (json.RawMessage, error) {
-		fileTransferGate <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case fileTransferGate <- struct{}{}:
+		}
 		defer func() { <-fileTransferGate }()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 
 		result := fileTransferResult{}
 		totalBytes := int64(0)
@@ -388,8 +482,26 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 			if err := ctx.Err(); err != nil {
 				return marshalFileTransferResult(result), err
 			}
-			if completedPath(args.CompletedPaths, item) || completedCheckpoint(d.user.Fs, checkpoint.Completed, item) {
-				if destinationMatchesItem(d.user.Fs, item) {
+			current, err := workspace.authorize(ctx, d, task, item)
+			if err != nil {
+				result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
+				return marshalFileTransferResult(result), err
+			}
+			// Keep temporary-file cleanup tied to the filesystem that created it,
+			// even if a later permission/scope recheck rejects the current actor.
+			itemFS := current.user.Fs
+			authorizationFailed := false
+			verify := func() error {
+				updated, err := workspace.authorize(ctx, d, task, item)
+				if err != nil {
+					authorizationFailed = true
+					return err
+				}
+				current = updated
+				return nil
+			}
+			if completedPath(args.CompletedPaths, item) || completedCheckpoint(itemFS, checkpoint.Completed, item) {
+				if destinationMatchesItem(itemFS, item) {
 					processedItems++
 					processedBytes += item.Size
 					_ = report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: processedBytes, Checkpoint: checkpointJSON()})
@@ -402,7 +514,7 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 					}
 				}
 			}
-			key, info, err := fileTransferIdentity(d.user.Fs, item)
+			key, info, err := fileTransferIdentity(itemFS, item)
 			if err != nil {
 				result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
 				continue
@@ -412,15 +524,19 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 				// A same-filesystem move is an atomic rename. Only an explicit
 				// cross-device error is allowed to fall through to the resumable
 				// copy path below; permission and conflict errors must be reported.
-				if _, destinationErr := lstatResource(d.user.Fs, item.To); errors.Is(destinationErr, os.ErrNotExist) {
-					renamed, renameErr := tryFastMove(d.user.Fs, item.From, item.To)
+				if _, destinationErr := lstatResource(itemFS, item.To); errors.Is(destinationErr, os.ErrNotExist) {
+					if err := verify(); err != nil {
+						result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
+						return marshalFileTransferResult(result), err
+					}
+					renamed, renameErr := tryFastMove(itemFS, item.From, item.To)
 					if renameErr != nil {
 						result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: renameErr.Error()})
 						continue
 					}
 					if renamed {
-						if metadataErr := rewritePathMetadata(d, item.From, item.To); metadataErr != nil {
-							rollbackErr := d.user.Fs.Rename(item.To, item.From)
+						if metadataErr := rewritePathMetadata(current, item.From, item.To); metadataErr != nil {
+							rollbackErr := itemFS.Rename(item.To, item.From)
 							if rollbackErr != nil {
 								metadataErr = errors.Join(metadataErr, fmt.Errorf("元数据更新失败后的回滚失败: %w", rollbackErr))
 							}
@@ -440,38 +556,56 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 			}
 
 			temp := path.Join(path.Dir(item.To), ".nfb-transfer-"+task.ID+fmt.Sprintf("-%d", index))
-			_ = d.user.Fs.RemoveAll(temp)
+			_ = itemFS.RemoveAll(temp)
 			copyBytes := processedBytes
-			err = fileutils.CopyContextProgress(ctx, d.user.Fs, item.From, temp, d.settings.FileMode, d.settings.DirMode, func(delta int64) error {
+			err = fileutils.CopyContextProgress(ctx, itemFS, item.From, temp, current.settings.FileMode, current.settings.DirMode, func(delta int64) error {
 				copyBytes += delta
 				return report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: copyBytes})
 			})
+			destinationExists := false
 			if err == nil {
-				if _, statErr := d.user.Fs.Stat(item.To); statErr == nil {
+				if _, statErr := itemFS.Stat(item.To); statErr == nil {
+					destinationExists = true
 					if !item.Overwrite {
 						err = fmt.Errorf("文件冲突: %s", item.To)
-					} else {
-						err = d.user.Fs.RemoveAll(item.To)
 					}
 				}
 			}
+			// Authorize the publication before its first destructive step. Once
+			// an existing target is removed, finish this authorized publication;
+			// a fresh rejection between RemoveAll and Rename would strand it.
 			if err == nil {
-				err = d.user.Fs.Rename(temp, item.To)
+				err = verify()
+			}
+			if err == nil && destinationExists {
+				err = itemFS.RemoveAll(item.To)
+			}
+			if err == nil {
+				err = itemFS.Rename(temp, item.To)
 			}
 			if err == nil && task.Type == tasks.TypeFileMove {
 				// Update path metadata before deleting the source. A metadata
 				// failure therefore leaves both paths available for inspection
 				// instead of losing the user's original file.
-				err = rewritePathMetadata(d, item.From, item.To)
+				err = verify()
 				if err == nil {
-					err = d.user.Fs.RemoveAll(item.From)
+					err = rewritePathMetadata(current, item.From, item.To)
+				}
+				if err == nil {
+					err = verify()
+					if err == nil {
+						err = itemFS.RemoveAll(item.From)
+					}
 				}
 			}
-			_ = d.user.Fs.RemoveAll(temp)
+			_ = itemFS.RemoveAll(temp)
 			if err != nil {
 				result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 					return marshalFileTransferResult(result), ctx.Err()
+				}
+				if authorizationFailed {
+					return marshalFileTransferResult(result), err
 				}
 				continue
 			}

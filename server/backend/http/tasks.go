@@ -213,6 +213,18 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 			if err != nil {
 				return nil, http.StatusConflict, err
 			}
+			var transferArgs fileTransferTaskArgs
+			if err := json.Unmarshal(args, &transferArgs); err != nil {
+				return nil, http.StatusConflict, fmt.Errorf("任务参数损坏: %w", err)
+			}
+			ownerData := *d
+			ownerData.user = owner
+			current, status, checkErr := validateFileTransferEnqueue(context.Background(), &ownerData, original, transferArgs)
+			if checkErr != nil {
+				return nil, status, checkErr
+			}
+			retry, err = enqueueTask(runtime, current, current.user, original.Type, original.Title, args, original.ID)
+			break
 		}
 		retry, err = enqueueTask(runtime, d, owner, original.Type, original.Title, args, original.ID)
 	}
