@@ -2,6 +2,8 @@ package io.github.kkwans.nasfilebrowser.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,6 +20,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.app.ClientState
 import io.github.kkwans.nasfilebrowser.app.ClientModel
@@ -35,6 +38,17 @@ import java.util.Locale
     val search by model.search.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     val activity = LocalActivity.current
+    // Register before every route/early return, so an external picker result
+    // survives Activity/process recreation and restores its original task.
+    var uploadSourceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var uploadSourceGeneration by rememberSaveable { mutableLongStateOf(0L) }
+    val uploadSource = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val id = uploadSourceId; val generation = uploadSourceGeneration; uploadSourceId = null
+        if (id != null) {
+            model.openUploads()
+            if (uri != null) model.uploads.reselectSource(id, generation, uri) else model.uploads.sourceSelectionCanceled()
+        }
+    }
     BackHandler(state.connected || state.image != null || state.selected != null || state.tab in setOf("downloads", "uploads")) { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
     if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model); UploadSelectionDialog(model) }
@@ -51,7 +65,11 @@ import java.util.Locale
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (state.tab == "downloads") { LibraryTheme { DownloadsScreen(model) }; return }
-    if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) }; return }
+    if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) { row ->
+        uploadSourceId = row.id; uploadSourceGeneration = row.generation
+        try { uploadSource.launch(arrayOf("*/*")) }
+        catch (_: Exception) { uploadSourceId = null; model.uploads.reportError("无法打开系统文件选择器，原任务保留") }
+    } }; return }
     if (!state.connected) { ConnectionScreen(model, state); return }
     pageState.SaveableStateProvider(if (search.open) "search" else if (state.tab == "library") "library/${state.librarySection}" else state.tab) {
         LibraryTheme {

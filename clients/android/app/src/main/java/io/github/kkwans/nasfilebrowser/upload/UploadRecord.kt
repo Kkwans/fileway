@@ -15,6 +15,7 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
     val complete get() = status == "completed"
     val active get() = status in setOf("queued", "running")
     val canResume get() = !complete && status !in setOf("canceled", "canceling", "cancel_failed")
+    val canReselectSource get() = canResume && !active
 }
 
 @Dao interface UploadDao {
@@ -38,5 +39,7 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
     suspend fun beginCancel(id: String, now: Long): Int
     @Query("UPDATE uploads SET status = :status, uploaded = :bytes, error = :error, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'canceling'")
     suspend fun canceled(id: String, generation: Long, status: String, bytes: Long, error: String, now: Long): Int
+    @Query("UPDATE uploads SET sourceUri = :uri, generation = generation + 1, error = '', status = CASE WHEN status = 'expired' THEN 'expired' ELSE 'paused' END, updatedAt = :now WHERE id = :id AND generation = :generation AND status IN ('paused', 'failed', 'interrupted', 'expired')")
+    suspend fun reauthorize(id: String, generation: Long, uri: String, now: Long): Int
     @Query("DELETE FROM uploads WHERE id = :id AND status NOT IN ('queued', 'running')") suspend fun removeRecord(id: String): Int
 }

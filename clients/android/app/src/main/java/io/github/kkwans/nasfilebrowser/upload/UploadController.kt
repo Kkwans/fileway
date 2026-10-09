@@ -204,6 +204,16 @@ class UploadController(private val context: Context, private val scope: Coroutin
         "上传记录已移除，本机原文件和服务器文件保留"
     }
     fun cancel(row: UploadRecord) = change { UploadRuntime.get(context).cancelTask(row.id) }
+    fun reselectSource(id: String, generation: Long, uri: Uri) = change {
+        val item = dao.get(id) ?: error("上传记录不存在")
+        check(item.canReselectSource && item.generation == generation) { "上传任务状态已变化，请重新选择原文件" }
+        withTimeout(30_000) { UploadRuntime.get(context).awaitStopped(item.id) }
+        val source = withContext(Dispatchers.IO) { UploadSources(context).reauthorize(item, uri) }
+        check(dao.reauthorize(item.id, generation, source.uri, System.currentTimeMillis()) == 1) { "上传任务已变化，原进度保留，请重试" }
+        if (item.status == "expired") "原文件读取授权已恢复；服务器片段已过期，请重新开始上传"
+        else "原文件读取授权已恢复，已有进度保留，可继续上传"
+    }
+    fun sourceSelectionCanceled() { mutable.value = mutable.value.copy(notice = "已取消重新选择，原任务和进度保留") }
     private fun change(block: suspend () -> String) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, error = null, notice = null)

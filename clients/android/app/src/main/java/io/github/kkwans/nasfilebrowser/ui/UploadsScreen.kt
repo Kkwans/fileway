@@ -18,7 +18,7 @@ import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.upload.UploadRecord
 
-@Composable internal fun UploadsScreen(model: ClientModel) {
+@Composable internal fun UploadsScreen(model: ClientModel, reselectSource: (UploadRecord) -> Unit) {
     val state by model.uploads.state.collectAsStateWithLifecycle()
     var filter by rememberSaveable { mutableStateOf("全部") }
     var remove by remember { mutableStateOf<UploadRecord?>(null) }
@@ -69,6 +69,8 @@ import io.github.kkwans.nasfilebrowser.upload.UploadRecord
                                 modifier = Modifier.semantics { contentDescription = "重试清理上传：${item.name}" }) { Text("重试清理") }
                             else if (!item.complete && item.status !in setOf("canceled", "canceling")) TextButton({ cancel = item }, enabled = !state.busy,
                                 modifier = Modifier.semantics { contentDescription = "取消上传：${item.name}" }) { Text("取消上传") }
+                            if (item.canReselectSource) TextButton({ reselectSource(item) }, enabled = !state.busy,
+                                modifier = Modifier.semantics { contentDescription = "重新选择上传原文件：${item.name}" }) { Text("重新选择原文件") }
                             if (item.complete) TextButton({ model.openUploadedFile(item) }, enabled = !state.busy) { Text("定位服务器文件") }
                             if (item.complete || item.status == "canceled") TextButton({ remove = item }, enabled = !state.busy) { Text("移除记录") }
                         }

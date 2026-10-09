@@ -14,6 +14,33 @@ data class LocalUploadSource(val uri: String, val name: String, val size: Long, 
 /** Read-only SAF access. Never delete, move or write a selected local file. */
 internal class UploadSources(private val context: Context) {
     private val resolver = context.contentResolver
+    companion object {
+        internal fun sameDocumentUri(first: Uri, second: Uri): Boolean {
+            if (first.scheme != "content" || second.scheme != "content" || first.authority != second.authority ||
+                first.query != second.query || first.fragment != null || second.fragment != null) return false
+            if (first == second) return true
+            return runCatching { DocumentsContract.getDocumentId(first) == DocumentsContract.getDocumentId(second) }.getOrDefault(false)
+        }
+    }
+    private fun document(uri: Uri): Uri = if (uri.authority == MediaStore.AUTHORITY) {
+        runCatching { MediaStore.getDocumentUri(context, uri) }.getOrNull() ?: uri
+    } else uri
+    fun reauthorize(record: UploadRecord, selected: Uri): LocalUploadSource {
+        val original = Uri.parse(record.sourceUri)
+        require(sameDocumentUri(original, selected) || sameDocumentUri(document(original), document(selected))) {
+            "请选择任务原来的文件；同名文件不能代替原文件继续上传"
+        }
+        val source = read(selected)
+        check(source.name == record.name && source.size == record.expectedSize && source.modified == record.sourceModified) {
+            "原文件的名称、大小或修改时间已变化，请明确重新开始上传；已有进度保留"
+        }
+        check(!record.remoteCreated || record.expectedSize == 0L || record.sourceModified > 0) {
+            "该来源没有可靠修改时间，不能安全追加旧片段，请重新开始上传"
+        }
+        resolver.openFileDescriptor(selected, "r")?.use { } ?: throw FileNotFoundException("原文件无法读取，请检查系统授权")
+        retain(selected)
+        return source
+    }
     fun retain(uri: Uri) {
         require(uri.scheme == "content") { "请通过系统文件选择器选择文件" }
         if (uri.authority == MediaStore.AUTHORITY) {
