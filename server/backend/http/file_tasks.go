@@ -531,7 +531,19 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 						result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
 						return marshalFileTransferResult(result), err
 					}
-					renamed, renameErr := tryFastMove(itemFS, item.From, item.To)
+					var renamed bool
+					var renameErr error
+					if info.Mode().IsRegular() {
+						// Stat does not reserve the target. Native no-replace also
+						// protects a file created by another writer after that read.
+						renameErr = files.PublishUpload(itemFS, item.From, item.To, false)
+						renamed = renameErr == nil
+						if errors.Is(renameErr, syscall.EXDEV) {
+							renameErr = nil
+						}
+					} else {
+						renamed, renameErr = tryFastMove(itemFS, item.From, item.To)
+					}
 					if renameErr != nil {
 						result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: renameErr.Error()})
 						continue
@@ -573,17 +585,26 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 					}
 				}
 			}
-			// Authorize the publication before its first destructive step. Once
-			// an existing target is removed, finish this authorized publication;
-			// a fresh rejection between RemoveAll and Rename would strand it.
+			// Keep authorization immediately before publication. Do not split
+			// the authorized commit with another permission check inside it.
 			if err == nil {
 				err = verify()
 			}
-			if err == nil && destinationExists {
-				err = itemFS.RemoveAll(item.To)
-			}
 			if err == nil {
-				err = itemFS.Rename(temp, item.To)
+				if info.Mode().IsRegular() {
+					// Publish the completed file without first unlinking the old
+					// target; a failed native rename leaves its bytes available.
+					err = files.PublishUpload(itemFS, temp, item.To, item.Overwrite)
+				} else {
+					// Directory replacement still uses the legacy publication;
+					// recovery for an interrupted tree replacement is separate work.
+					if destinationExists {
+						err = itemFS.RemoveAll(item.To)
+					}
+					if err == nil {
+						err = itemFS.Rename(temp, item.To)
+					}
+				}
 			}
 			if err == nil && task.Type == tasks.TypeFileMove {
 				// Update path metadata before deleting the source. A metadata

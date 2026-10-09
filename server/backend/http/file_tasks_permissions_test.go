@@ -363,30 +363,29 @@ func TestTransferPermissionsFirstCheckpointSurvivesCancellationOrLaterRevocation
 	}
 }
 
-type transferRemoveHookFS struct {
+type transferCommitHookFS struct {
 	afero.Fs
-	removed func()
+	committing func()
 }
 
-func (fs *transferRemoveHookFS) RemoveAll(name string) error {
-	err := fs.Fs.RemoveAll(name)
-	if err == nil && name == "/target.txt" {
-		fs.removed()
+func (fs *transferCommitHookFS) Rename(from, to string) error {
+	if strings.HasPrefix(path.Base(from), ".nfb-transfer-") && to == "/target.txt" {
+		fs.committing()
 	}
-	return err
+	return fs.Fs.Rename(from, to)
 }
 
-func TestTransferPermissionsAuthorizedPublishDoesNotStrandRemovedTarget(t *testing.T) {
+func TestTransferPermissionsAuthorizedPublicationCompletesWithoutReauthorizingInsideCommit(t *testing.T) {
 	h, d, task, args := permissionTransferFixture(t, "copy", true)
 	called := false
-	wrapped := &transferRemoveHookFS{Fs: d.user.Fs, removed: func() {
+	wrapped := &transferCommitHookFS{Fs: d.user.Fs, committing: func() {
 		called = true
 		updateTransferActor(t, h, d.user.ID, func(a *users.User) { a.Perm.Modify = false })
 	}}
 	h.fs[d.user.ID], d.user.Fs = wrapped, wrapped
 	encoded, err := fileTransferRunner(d, task, args)(context.Background(), func(tasks.Progress) error { return nil })
 	if !called || err != nil {
-		t.Fatalf("already-authorized publication must not strand its removed target: removed=%v err=%v result=%s", called, err, encoded)
+		t.Fatalf("already-authorized publication must finish its commit: committing=%v err=%v result=%s", called, err, encoded)
 	}
 	assertWireOwned(t, wrapped, map[string]string{"/source.txt": "owned-new-content", "/target.txt": "owned-new-content"})
 	assertNoTransferTemp(t, wrapped)
