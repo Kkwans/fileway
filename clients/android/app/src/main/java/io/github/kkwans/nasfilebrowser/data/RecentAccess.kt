@@ -32,12 +32,14 @@ internal fun parseRecentAccessEntry(row: JSONObject): RecentAccessEntry {
         "服务器返回了无效的最近访问记录"
     }
     val wire = if (row.has("wirePath")) row.get("wirePath") as? String ?: error("最近访问原始路径格式无效") else null
+    val verified = if (row.has("pathVerified")) row.get("pathVerified") as? Boolean ?: error("最近访问路径状态无效") else null
     if (wire != null) {
         recentAccessWireIdentity(wire)
         decodeRecentAccessWirePath(wire)?.let { require(it == path) { "最近访问路径与原始路径不一致" } }
     }
-    return RecentAccessEntry(id, path, wire ?: SearchResult.encodePath(path), name, isDir, time,
-        openable = wire != null || !path.contains('\uFFFD'))
+    val openable = verified != false && (wire != null || !path.contains('\uFFFD'))
+    return RecentAccessEntry(id, path, if (openable) wire ?: SearchResult.encodePath(path) else "", name, isDir, time,
+        openable = openable)
 }
 
 internal fun parseRecentAccess(rows: JSONArray): List<RecentAccessEntry> =

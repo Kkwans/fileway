@@ -87,7 +87,7 @@ import java.util.Locale
                                     }
                                     Text("${if (entry.isDir) "文件夹" else "文件"} · $time", style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    if (!entry.openable) Text("旧版服务器未提供原始路径，升级后重新访问此项", style = MaterialTheme.typography.bodySmall,
+                                    if (!entry.openable) Text("原始路径无法确认，请从文件列表重新访问此项", style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.error)
                                 }
                                 if (entry.openable) Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(18.dp),

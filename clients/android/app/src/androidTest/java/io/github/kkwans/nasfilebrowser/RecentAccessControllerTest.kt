@@ -45,6 +45,9 @@ class RecentAccessControllerTest {
         assertNotEquals(entries[0].resource().wirePath, entries[1].resource().wirePath)
         assertFalse(parseRecentAccessEntry(row("old", "/lost�", 30)).openable)
         assertTrue(parseRecentAccessEntry(row("new", "/lost�", 30, "/lost%FF")).openable)
+        assertFalse(parseRecentAccessEntry(row("unverified", "/lost�", 30, "/lost%EF%BF%BD").put("pathVerified", false)).openable)
+        assertEquals("", parseRecentAccessEntry(row("unverified", "/lost�", 30).put("pathVerified", false)).wirePath)
+        assertTrue(parseRecentAccessEntry(row("literal", "/lost�", 30, "/lost%EF%BF%BD").put("pathVerified", true)).openable)
         assertTrue(runCatching { parseRecentAccessEntry(row("bad", "/x", 0)) }.isFailure)
         assertTrue(runCatching { parseRecentAccessEntry(row("bad", "/x", 1).put("isDir", "false")) }.isFailure)
     }
@@ -144,6 +147,24 @@ class RecentAccessControllerTest {
             } }
             val state = withTimeout(5000) { controller.state.first { it.items.isNotEmpty() } }
             assertEquals(2, writes); assertEquals(path, state.items.single().path); assertEquals(456L, state.items.single().accessedAt)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun freshLiteralReplacementCharacterVisitDoesNotMergeUnverifiedHistory(): Unit = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val session = context("replacement-identity") { command ->
+            if (command.getString("method") == "GET") response(body = JSONArray().put(row("legacy", "/lost�", 100).put("pathVerified", false)).toString())
+            else response(body = row("fresh", "/lost�", 200, "/lost%EF%BF%BD").put("pathVerified", true).toString())
+        }
+        try {
+            val controller = withContext(Dispatchers.Main) { RecentAccessController(scope) { it === session }.also { it.bind(session); it.refresh() } }
+            withTimeout(5000) { controller.state.first { it.loaded } }
+            withContext(Dispatchers.Main) { controller.record(ResourceRef("/lost�", "/lost%EF%BF%BD", "lost�", false, "", 0)) }
+            val state = withTimeout(5000) { controller.state.first { it.items.size == 2 } }
+            val legacy = state.items.single { it.id == "legacy" }
+            assertFalse(legacy.openable); assertEquals("", legacy.wirePath)
+            assertTrue(state.items.single { it.id == "fresh" }.openable)
+            assertNull(state.recordWarning)
         } finally { scope.cancel() }
     }
 

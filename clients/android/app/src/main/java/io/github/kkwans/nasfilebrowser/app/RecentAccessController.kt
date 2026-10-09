@@ -96,7 +96,7 @@ class RecentAccessController(private val scope: CoroutineScope, private val isCu
                         // Invalidate pre-write list reads so a late snapshot cannot erase this acknowledged access.
                         reads?.cancel(); revision++
                         val items = (mutable.value.items.filterNot { it.id == entry.id ||
-                            recentAccessWireIdentity(it.wirePath) == recentAccessWireIdentity(entry.wirePath) } + entry)
+                            it.openable && recentAccessWireIdentity(it.wirePath) == recentAccessWireIdentity(entry.wirePath) } + entry)
                             .sortedWith(compareByDescending<RecentAccessEntry> { it.accessedAt }.thenByDescending { it.id })
                             .take(RECENT_ACCESS_LIMIT)
                         mutable.value = mutable.value.copy(items = items, loading = false)
