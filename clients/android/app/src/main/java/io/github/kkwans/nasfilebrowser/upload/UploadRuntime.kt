@@ -64,16 +64,18 @@ class UploadRuntime private constructor(private val context: Context) {
     fun isRunning(id: String) = running[id]?.isCompleted == false
     suspend fun awaitStopped(id: String) { running[id]?.join() }
     internal fun isCanceling(id: String) = cleaning[id]?.isActive == true
-    internal suspend fun cancelTask(id: String): String {
+    internal suspend fun cancelTask(id: String, forRestart: Boolean = false, expectedGeneration: Long? = null): String {
         val owner = currentCoroutineContext()[Job] ?: error("取消请求不可用")
         check(cleaning.putIfAbsent(id, owner) == null) { "此上传正在清理，请稍候" }
         try {
-            check(dao.beginCancel(id, System.currentTimeMillis()) == 1) { "上传已完成、已取消或正在清理，请刷新记录" }
+            val now = System.currentTimeMillis()
+            val claimed = if (expectedGeneration == null) dao.beginCancel(id, now) else dao.beginCancelAtGeneration(id, expectedGeneration, now)
+            check(claimed == 1) { "上传已完成、状态已变化或正在清理，请刷新记录" }
             val item = dao.get(id) ?: error("上传记录不存在")
             UploadScheduler.stop(context, item)
             try {
                 withTimeout(30_000) { awaitStopped(item.id) }
-                val result = cancelRemote(item)
+                val result = cancelRemote(item, forRestart)
                 check(dao.canceled(item.id, item.generation, if (result.completed) "completed" else "canceled",
                     if (result.completed) item.expectedSize else item.uploaded, "", System.currentTimeMillis()) == 1) { "上传记录已变化，请重新核对" }
                 return result.notice
@@ -86,7 +88,7 @@ class UploadRuntime private constructor(private val context: Context) {
     }
     /** Cleanup uses only the durable original destination, never a local source
      * URI or the server currently selected in the browser. */
-    internal suspend fun cancelRemote(record: UploadRecord): UploadCancellation {
+    internal suspend fun cancelRemote(record: UploadRecord, forRestart: Boolean = false): UploadCancellation {
         if (record.protocol != "tus") return UploadCancellation(false, "本机上传已取消，服务器若已收到完整文件会保留")
         val profile = store.profile(record.profileId) ?: error("原服务器档案已移除，未删除服务器文件")
         check(profile.sourceRevision == record.sourceRevision) { "原服务器来源已变化，未向其他服务器发送清理请求" }
@@ -98,7 +100,9 @@ class UploadRuntime private constructor(private val context: Context) {
         val operation = "cleanup-${record.id}-${java.util.UUID.randomUUID()}"
         try {
             api.persistTokens { token -> store.refreshToken(profile, account, token); Unit }
-            check(api.permissions().delete) { "原账号没有清理权限；本机上传已停止，可在权限恢复后重试" }
+            val permissions = api.permissions()
+            check(permissions.delete) { "原账号没有清理权限；本机上传已停止，可在权限恢复后重试" }
+            if (forRestart) check(permissions.create && (!record.overwrite || permissions.modify)) { "原账号没有重新上传或覆盖权限，旧片段保留" }
             val capability = api.upload(record.targetWire, record.expectedSize, "fileway-" + record.id, "tus", record.overwrite, true)
             lease = capability
             val headers = mapOf("Tus-Resumable" to "1.0.0")

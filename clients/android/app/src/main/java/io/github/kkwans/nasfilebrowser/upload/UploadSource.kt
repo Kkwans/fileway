@@ -25,11 +25,21 @@ internal class UploadSources(private val context: Context) {
     private fun document(uri: Uri): Uri = if (uri.authority == MediaStore.AUTHORITY) {
         runCatching { MediaStore.getDocumentUri(context, uri) }.getOrNull() ?: uri
     } else uri
-    fun reauthorize(record: UploadRecord, selected: Uri): LocalUploadSource {
+    private fun originalDocument(record: UploadRecord, selected: Uri) {
         val original = Uri.parse(record.sourceUri)
         require(sameDocumentUri(original, selected) || sameDocumentUri(document(original), document(selected))) {
             "请选择任务原来的文件；同名文件不能代替原文件继续上传"
         }
+    }
+    fun restartSource(record: UploadRecord, selected: Uri): LocalUploadSource {
+        originalDocument(record, selected)
+        val source = read(selected)
+        resolver.openFileDescriptor(selected, "r")?.use { } ?: throw FileNotFoundException("原文件无法读取，请检查系统授权")
+        retain(selected)
+        return source
+    }
+    fun reauthorize(record: UploadRecord, selected: Uri): LocalUploadSource {
+        originalDocument(record, selected)
         val source = read(selected)
         check(source.name == record.name && source.size == record.expectedSize && source.modified == record.sourceModified) {
             "原文件的名称、大小或修改时间已变化，请明确重新开始上传；已有进度保留"

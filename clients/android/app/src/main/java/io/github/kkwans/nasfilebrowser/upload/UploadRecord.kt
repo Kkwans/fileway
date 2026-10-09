@@ -14,8 +14,9 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
     val batchBytes: Long = 0, val folderUpload: Boolean = false) {
     val complete get() = status == "completed"
     val active get() = status in setOf("queued", "running")
-    val canResume get() = !complete && status !in setOf("canceled", "canceling", "cancel_failed")
+    val canResume get() = !complete && status !in setOf("canceled", "canceling", "cancel_failed", "restarted")
     val canReselectSource get() = canResume && !active
+    val canRestart get() = status in setOf("paused", "failed", "interrupted", "expired", "canceled")
 }
 
 @Dao interface UploadDao {
@@ -31,15 +32,19 @@ data class UploadRecord(@PrimaryKey val id: String, val jobId: Int, val accountK
     suspend fun progress(id: String, generation: Long, bytes: Long, now: Long): Int
     @Query("UPDATE uploads SET status = :status, error = :error, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'running'")
     suspend fun finish(id: String, generation: Long, status: String, error: String, now: Long): Int
-    @Query("UPDATE uploads SET status = :status, generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status NOT IN ('completed', 'canceled', 'canceling', 'cancel_failed')")
+    @Query("UPDATE uploads SET status = :status, generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status NOT IN ('completed', 'canceled', 'canceling', 'cancel_failed', 'restarted')")
     suspend fun command(id: String, status: String, now: Long): Int
     @Query("UPDATE uploads SET status = 'paused', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status IN ('queued', 'running', 'interrupted')")
     suspend fun pause(id: String, now: Long): Int
-    @Query("UPDATE uploads SET status = 'canceling', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status NOT IN ('completed', 'canceled', 'canceling')")
+    @Query("UPDATE uploads SET status = 'canceling', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND status NOT IN ('completed', 'canceled', 'canceling', 'restarted')")
     suspend fun beginCancel(id: String, now: Long): Int
+    @Query("UPDATE uploads SET status = 'canceling', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND generation = :generation AND status IN ('paused', 'failed', 'interrupted', 'expired')")
+    suspend fun beginCancelAtGeneration(id: String, generation: Long, now: Long): Int
     @Query("UPDATE uploads SET status = :status, uploaded = :bytes, error = :error, updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'canceling'")
     suspend fun canceled(id: String, generation: Long, status: String, bytes: Long, error: String, now: Long): Int
     @Query("UPDATE uploads SET sourceUri = :uri, generation = generation + 1, error = '', status = CASE WHEN status = 'expired' THEN 'expired' ELSE 'paused' END, updatedAt = :now WHERE id = :id AND generation = :generation AND status IN ('paused', 'failed', 'interrupted', 'expired')")
     suspend fun reauthorize(id: String, generation: Long, uri: String, now: Long): Int
+    @Query("UPDATE uploads SET status = 'restarted', generation = generation + 1, error = '', updatedAt = :now WHERE id = :id AND generation = :generation AND status = 'canceled'")
+    suspend fun restarted(id: String, generation: Long, now: Long): Int
     @Query("DELETE FROM uploads WHERE id = :id AND status NOT IN ('queued', 'running')") suspend fun removeRecord(id: String): Int
 }

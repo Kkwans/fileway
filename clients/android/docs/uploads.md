@@ -32,8 +32,36 @@ license to send the same bytes again blindly.
 Transfer speed/progress come from the current lease's sent bytes plus its start
 offset. Durable progress uses confirmed offsets. The UI stays below100% until
 the response, remote metadata/length and unchanged local-source identity confirm
-completion. Only a completed record can be removed without abandoning partial
-state; removing a record leaves local and server files intact.
+completion. Completed, confirmed-canceled and restarted records can be removed
+without abandoning partial state; removing a record leaves local and server
+files intact.
+
+## Pause, cancel and restart
+
+Pause retains the original session and confirmed position. Continue uses the
+original transfer ID and obtains its current HEAD offset before appending.
+Reauthorizing a lost source grant requires the same document identity, name,
+size and modification identity; selecting an unrelated same-name file is rejected.
+
+Restart is an explicit separate action for paused, failed, interrupted, expired
+or canceled records. The user reselects the original document, which may now have
+changed metadata, and confirms its current name/size and the original target.
+Before confirmation, remote fragments and durable progress are untouched. A source
+change during confirmation is rejected before cleanup.
+
+Confirmed restart stops the old writer and verifies cleanup of its original
+modern TUS session. Missing cleanup capability, permission or acknowledgement
+does not create a replacement task. If the server already completed the original
+upload, its complete file is retained and no duplicate task is created.
+
+After confirmed cleanup, one Room transaction ends the old record as `restarted`
+and creates a new UUID/job/batch from zero. The original account, server revision,
+wire target and explicit overwrite identity remain pinned. Generation and terminal
+state guards reject late source-picker/write/cleanup callbacks and duplicate
+confirmations. The old record keeps its historical confirmed bytes but cannot
+resume. A crash after cleanup leaves a canceled record eligible for explicit
+restart; a crash after the transaction leaves one new task for normal recovery.
+This is a state-value extension, not a Room schema/version change.
 
 ## Acceptance boundaries
 
@@ -45,8 +73,17 @@ pause/resume after a late accepted chunk, exact final/original bytes and notific
 navigation. It intentionally separates system document-picker, real NAS/Tailscale,
 folder/provider, background/process and broader conflict acceptance.
 
-The legacy server's temporary TUS state expires after short inactivity and cannot
-provide reliable long-pause/restart resume; completed HEAD semantics also differ.
-Do not label those behaviors as fixed by this client. Shared-server persistence
-and session-binding changes require Linux/Windows native tests and real service
-acceptance. A preview's packaging or scoped fixture result does not complete them.
+`UploadRestartTest` verifies changed-source confirmation/cancel, different actual
+native TUS session and final bytes, cleanup failure without a new task, retry from
+confirmed cancellation, preservation of an already-completed file, and unchanged
+local contents. `UploadStorageTest` also fences stale restart generations and
+duplicate/late results. These owned fixtures do not replace real server/provider
+and process-recovery acceptance.
+
+The shared server now persists bound TUS sessions with a default seven-day
+retention; its Linux/Windows persistence and completed-HEAD contracts are distinct
+from client UI acceptance. Legacy servers expire temporary state after short
+inactivity and cannot provide reliable long-pause/restart resume. Cleanup refuses
+their unverifiable path-only DELETE behavior. Client changes alone do not fix
+legacy servers. A preview's packaging or scoped fixture result does not complete
+real server, device or upgrade acceptance.

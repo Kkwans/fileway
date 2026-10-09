@@ -12,10 +12,12 @@ import java.util.UUID
 enum class UploadConflict(val label: String) { KEEP_BOTH("保留两份"), SKIP("跳过"), REPLACE("覆盖") }
 data class UploadDraft(val source: LocalUploadSource, val targetPath: String, val targetWire: String,
     val existingIdentity: String? = null, val choice: UploadConflict = UploadConflict.KEEP_BOTH)
+data class UploadRestartDraft(val record: UploadRecord, val source: LocalUploadSource)
 data class UploadsState(val items: List<UploadRecord> = emptyList(), val busy: Boolean = false, val selecting: Boolean = false,
     val targetLabel: String = "", val scanned: Int = 0, val drafts: List<UploadDraft> = emptyList(),
     val folder: Boolean = false, val error: String? = null, val notice: String? = null, val canReplace: Boolean = false,
-    val speeds: Map<String, Long?> = emptyMap(), val sent: Map<String, Long> = emptyMap(), val completedRevision: Long = 0)
+    val speeds: Map<String, Long?> = emptyMap(), val sent: Map<String, Long> = emptyMap(), val completedRevision: Long = 0,
+    val restart: UploadRestartDraft? = null)
 private data class UploadSelection(val binding: SessionContext, val directory: DirectoryCrumb)
 
 class UploadController(private val context: Context, private val scope: CoroutineScope, private val isCurrent: (SessionContext) -> Boolean) {
@@ -199,7 +201,7 @@ class UploadController(private val context: Context, private val scope: Coroutin
     }
     fun remove(row: UploadRecord) = change {
         val item = dao.get(row.id) ?: error("上传记录不存在")
-        check(!item.active && (item.complete || item.status == "canceled")) { "未完成清理请先保留记录并核对服务器片段" }
+        check(!item.active && (item.complete || item.status in setOf("canceled", "restarted"))) { "未完成清理请先保留记录并核对服务器片段" }
         check(dao.removeRecord(item.id) == 1)
         "上传记录已移除，本机原文件和服务器文件保留"
     }
@@ -214,6 +216,49 @@ class UploadController(private val context: Context, private val scope: Coroutin
         else "原文件读取授权已恢复，已有进度保留，可继续上传"
     }
     fun sourceSelectionCanceled() { mutable.value = mutable.value.copy(notice = "已取消重新选择，原任务和进度保留") }
+    fun prepareRestart(id: String, generation: Long, uri: Uri) = change {
+        val item = dao.get(id) ?: error("上传记录不存在")
+        check(item.canRestart && item.generation == generation) { "原任务状态已变化，请重新选择" }
+        val source = withContext(Dispatchers.IO) { UploadSources(context).restartSource(item, uri) }
+        check(dao.get(id)?.let { it.canRestart && it.generation == generation } == true) { "原任务状态已变化，原进度保留" }
+        mutable.value = mutable.value.copy(restart = UploadRestartDraft(item, source))
+        "请确认是否放弃旧片段并重新开始"
+    }
+    fun dismissRestart() { if (!mutable.value.busy) mutable.value = mutable.value.copy(restart = null, notice = "原任务和已有进度保留") }
+    fun restart() {
+        val draft = mutable.value.restart ?: return
+        change {
+            try { restartTask(draft) }
+            catch (failure: Exception) { mutable.value = mutable.value.copy(restart = null); throw failure }
+        }
+    }
+    private suspend fun restartTask(draft: UploadRestartDraft): String {
+        val item = dao.get(draft.record.id) ?: error("原上传记录不存在")
+        check(item.canRestart && item.generation == draft.record.generation) { "原任务已变化，请重新选择原文件" }
+        withTimeout(30_000) { UploadRuntime.get(context).awaitStopped(item.id) }
+        val source = withContext(Dispatchers.IO) { UploadSources(context).restartSource(item, Uri.parse(draft.source.uri)) }
+        check(source == draft.source) { "本机来源在确认期间已变化，请重新选择；旧片段保留" }
+        if (item.status != "canceled") UploadRuntime.get(context).cancelTask(item.id, forRestart = true, expectedGeneration = item.generation)
+        val previous = dao.get(item.id) ?: error("原上传记录已变化")
+        if (previous.complete) {
+            mutable.value = mutable.value.copy(restart = null)
+            return "服务器已完成原任务，完整文件保留；如需更新文件，请从文件页重新上传"
+        }
+        check(previous.status == "canceled") { "旧片段清理未确认，未创建新任务" }
+        val now = System.currentTimeMillis()
+        val next = database.withTransaction {
+            check(dao.restarted(previous.id, previous.generation, now) == 1) { "任务已被重新开始，未重复创建" }
+            val job = dao.lastJobId() + 1; require(job in 7900001..8500000) { "上传任务编号已用完" }
+            previous.copy(id = UUID.randomUUID().toString(), jobId = job, sourceUri = source.uri, name = source.name, mime = source.mime,
+                expectedSize = source.size, sourceModified = source.modified, protocol = if (source.size == 0L) "resources" else "tus",
+                remoteCreated = false, status = "queued", uploaded = 0, createdAt = now, updatedAt = now, generation = 0, error = "",
+                batchId = UUID.randomUUID().toString(), batchName = "重新上传", batchItems = 1, batchBytes = source.size).also { dao.insert(it) }
+        }
+        mutable.value = mutable.value.copy(restart = null)
+        try { UploadScheduler.start(context, next) }
+        catch (failure: Exception) { dao.command(next.id, "failed", System.currentTimeMillis()); error("新任务已建立但未能启动，可从列表继续；原记录保留") }
+        return "已从零建立新上传任务，原目标和账号保持不变"
+    }
     private fun change(block: suspend () -> String) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, error = null, notice = null)

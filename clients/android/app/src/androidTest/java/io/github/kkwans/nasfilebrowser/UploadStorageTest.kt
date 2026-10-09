@@ -16,6 +16,33 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class UploadStorageTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+    @Test fun restartClaimsOnlyTheConfirmedGenerationAndPermanentlyFencesTheOldTask(): Unit = runBlocking {
+        val room = Room.inMemoryDatabaseBuilder(context, ClientDatabase::class.java).build()
+        try {
+            val dao = room.uploads()
+            val row = UploadRecord("owned-restart", 7900001, "owned", "owned", 0, "content://fixture.invalid/source", "owned.bin", "blob", 8, 1,
+                "/owned.bin", "/owned.bin", "/", "Owned", remoteCreated = true, status = "paused", uploaded = 4, createdAt = 1, updatedAt = 1)
+            dao.insert(row)
+            assertEquals(1, dao.command(row.id, "queued", 2))
+            assertEquals(0, dao.beginCancelAtGeneration(row.id, row.generation, 3))
+            assertEquals(1, dao.pause(row.id, 4))
+            val before = dao.get(row.id)!!
+            assertEquals(1, dao.beginCancelAtGeneration(row.id, before.generation, 5))
+            val cleaning = dao.get(row.id)!!
+            assertEquals(0, dao.restarted(row.id, cleaning.generation, 6))
+            assertEquals(1, dao.canceled(row.id, cleaning.generation, "canceled", 4, "", 7))
+            assertEquals(1, dao.restarted(row.id, cleaning.generation, 8))
+            assertEquals(0, dao.restarted(row.id, cleaning.generation, 9))
+            assertEquals(0, dao.beginCancel(row.id, 9)); assertEquals(0, dao.command(row.id, "queued", 9))
+            assertEquals(0, dao.claim(row.id, 9)); assertEquals(0, dao.reauthorize(row.id, cleaning.generation, row.sourceUri, 9))
+            assertEquals(0, dao.progress(row.id, before.generation, 8, 9))
+            assertEquals(0, dao.canceled(row.id, cleaning.generation, "canceled", 8, "", 9))
+            val ended = dao.get(row.id)!!
+            assertEquals("restarted", ended.status); assertEquals(4L, ended.uploaded)
+            assertFalse(ended.canResume); assertFalse(ended.canRestart); assertFalse(ended.canReselectSource)
+            assertEquals(row.targetWire, ended.targetWire); assertEquals(row.accountKey, ended.accountKey)
+        } finally { room.close() }
+    }
     @Test fun cancellationFencesOldWritesPauseAndCleanupAcknowledgements(): Unit = runBlocking {
         val room = Room.inMemoryDatabaseBuilder(context, ClientDatabase::class.java).build()
         try {

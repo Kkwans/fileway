@@ -18,7 +18,7 @@ import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.upload.UploadRecord
 
-@Composable internal fun UploadsScreen(model: ClientModel, reselectSource: (UploadRecord) -> Unit) {
+@Composable internal fun UploadsScreen(model: ClientModel, reselectSource: (UploadRecord, Boolean) -> Unit) {
     val state by model.uploads.state.collectAsStateWithLifecycle()
     var filter by rememberSaveable { mutableStateOf("全部") }
     var remove by remember { mutableStateOf<UploadRecord?>(null) }
@@ -55,24 +55,26 @@ import io.github.kkwans.nasfilebrowser.upload.UploadRecord
                         val transferred = maxOf(item.uploaded, state.sent[item.id] ?: 0).coerceAtMost(item.expectedSize)
                         val fraction = if (item.expectedSize > 0) (transferred.toDouble() / item.expectedSize).toFloat().coerceIn(0f, 1f) else if (item.complete) 1f else 0f
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(when (item.status) { "completed" -> "上传完成"; "queued" -> "等待上传"; "running" -> "正在上传"; "paused" -> "已暂停"; "interrupted" -> "上传中断"; "expired" -> "服务器片段已过期"; "canceling" -> "正在清理未完成片段"; "cancel_failed" -> "已停止，清理待重试"; "canceled" -> "已取消上传"; else -> "上传失败" },
+                            Text(when (item.status) { "completed" -> "上传完成"; "queued" -> "等待上传"; "running" -> "正在上传"; "paused" -> "已暂停"; "interrupted" -> "上传中断"; "expired" -> "服务器片段已过期"; "canceling" -> "正在清理未完成片段"; "cancel_failed" -> "已停止，清理待重试"; "canceled" -> "已取消上传"; "restarted" -> "已重新开始，原任务已结束"; else -> "上传失败" },
                                 style = MaterialTheme.typography.labelMedium, color = if (item.status in setOf("failed", "expired")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(if (item.complete) readableSize(item.expectedSize) else "${(fraction * 100).toInt().coerceAtMost(99)}% · ${readableSize(transferred)} / ${readableSize(item.expectedSize)}", style = MaterialTheme.typography.labelMedium)
                         }
                         if (!item.complete) LinearProgressIndicator(progress = { fraction }, Modifier.fillMaxWidth().height(3.dp), gapSize = 0.dp, drawStopIndicator = {})
                         if (item.active) Text(state.speeds[item.id]?.let { readableSize(it) + "/s" } ?: "正在获取上传速度", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (item.error.isNotEmpty()) Text(item.error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             if (item.canResume) TextButton({ if (item.active) model.uploads.pause(item) else model.uploads.resume(item) }, enabled = !state.busy,
                                 modifier = Modifier.semantics { contentDescription = "${if (item.active) "暂停上传" else "继续上传"}：${item.name}" }) { Text(if (item.active) "暂停" else "继续") }
                             if (item.status == "cancel_failed") TextButton({ model.uploads.cancel(item) }, enabled = !state.busy,
                                 modifier = Modifier.semantics { contentDescription = "重试清理上传：${item.name}" }) { Text("重试清理") }
-                            else if (!item.complete && item.status !in setOf("canceled", "canceling")) TextButton({ cancel = item }, enabled = !state.busy,
+                            else if (!item.complete && item.status !in setOf("canceled", "canceling", "restarted")) TextButton({ cancel = item }, enabled = !state.busy,
                                 modifier = Modifier.semantics { contentDescription = "取消上传：${item.name}" }) { Text("取消上传") }
-                            if (item.canReselectSource) TextButton({ reselectSource(item) }, enabled = !state.busy,
+                            if (item.canReselectSource) TextButton({ reselectSource(item, false) }, enabled = !state.busy,
                                 modifier = Modifier.semantics { contentDescription = "重新选择上传原文件：${item.name}" }) { Text("重新选择原文件") }
+                            if (item.canRestart) TextButton({ reselectSource(item, true) }, enabled = !state.busy,
+                                modifier = Modifier.semantics { contentDescription = "重新开始上传：${item.name}" }) { Text("重新开始") }
                             if (item.complete) TextButton({ model.openUploadedFile(item) }, enabled = !state.busy) { Text("定位服务器文件") }
-                            if (item.complete || item.status == "canceled") TextButton({ remove = item }, enabled = !state.busy) { Text("移除记录") }
+                            if (item.complete || item.status in setOf("canceled", "restarted")) TextButton({ remove = item }, enabled = !state.busy) { Text("移除记录") }
                         }
                     }
                     HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
@@ -80,6 +82,14 @@ import io.github.kkwans.nasfilebrowser.upload.UploadRecord
             }
         }
     }
+    state.restart?.let { draft -> AlertDialog(onDismissRequest = { model.uploads.dismissRestart() }, title = { Text("从零重新开始上传？") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("本机文件：${draft.source.name} · ${readableSize(draft.source.size)}")
+            Text("原服务器：${draft.record.sourceLabel}\n目标：${draft.record.targetPath}")
+            Text("确认后将清理本次未完成片段，放弃原上传进度，从零建立新任务。本机原文件和服务器已发布的完整文件保留。")
+        } },
+        confirmButton = { TextButton(model.uploads::restart, enabled = !state.busy) { Text(if (state.busy) "正在处理" else "确认重新开始") } },
+        dismissButton = { TextButton(model.uploads::dismissRestart, enabled = !state.busy) { Text("保留原任务") } }) }
     remove?.let { item -> AlertDialog(onDismissRequest = { remove = null }, title = { Text("移除上传记录？") }, text = { Text("${item.name}\n\n本机原文件和服务器上的文件均保留。") },
         confirmButton = { TextButton({ model.uploads.remove(item); remove = null }) { Text("移除记录") } }, dismissButton = { TextButton({ remove = null }) { Text("取消") } }) }
     cancel?.let { item -> AlertDialog(onDismissRequest = { cancel = null }, title = { Text("取消这项上传？") },

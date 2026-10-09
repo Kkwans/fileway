@@ -42,11 +42,14 @@ import java.util.Locale
     // survives Activity/process recreation and restores its original task.
     var uploadSourceId by rememberSaveable { mutableStateOf<String?>(null) }
     var uploadSourceGeneration by rememberSaveable { mutableLongStateOf(0L) }
+    var uploadSourceRestart by rememberSaveable { mutableStateOf(false) }
     val uploadSource = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        val id = uploadSourceId; val generation = uploadSourceGeneration; uploadSourceId = null
+        val id = uploadSourceId; val generation = uploadSourceGeneration; val restart = uploadSourceRestart; uploadSourceId = null
         if (id != null) {
             model.openUploads()
-            if (uri != null) model.uploads.reselectSource(id, generation, uri) else model.uploads.sourceSelectionCanceled()
+            if (uri == null) model.uploads.sourceSelectionCanceled()
+            else if (restart) model.uploads.prepareRestart(id, generation, uri)
+            else model.uploads.reselectSource(id, generation, uri)
         }
     }
     BackHandler(state.connected || state.image != null || state.selected != null || state.tab in setOf("downloads", "uploads", "updates")) { if (!model.back()) activity?.finish() }
@@ -66,8 +69,8 @@ import java.util.Locale
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (state.tab == "updates") { LibraryTheme { AppUpdatesScreen(model) }; return }
     if (state.tab == "downloads") { LibraryTheme { DownloadsScreen(model) }; return }
-    if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) { row ->
-        uploadSourceId = row.id; uploadSourceGeneration = row.generation
+    if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) { row, restart ->
+        uploadSourceId = row.id; uploadSourceGeneration = row.generation; uploadSourceRestart = restart
         try { uploadSource.launch(arrayOf("*/*")) }
         catch (_: Exception) { uploadSourceId = null; model.uploads.reportError("无法打开系统文件选择器，原任务保留") }
     } }; return }
