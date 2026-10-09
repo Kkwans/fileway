@@ -14,27 +14,32 @@ are separate from full API35/API37 CI, physical HDR, speaker/Bluetooth continuit
 long-film performance and complete UI acceptance. This preview does not certify
 all formats, server/provider behavior or recovery scenarios.
 
-## Install the 0.7.2 preview
+## Install the 0.7.3 preview
 
-[Android 0.7.2 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.2-7191801/fileway-android-0.7.2-preview.apk)
+[Android 0.7.3 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.3-4862ed0/fileway-android-0.7.3-preview.apk)
 
-Published artifact: `0.7.2-preview`, **signed release**, versionCode **12**, Room **8**.
-Package `io.github.kkwans.nasfilebrowser` and the original signing identity are
-preserved. Source: `71918010a8c2f2e82cd972773184854d6718cc7e`.
-See [0.7.2 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.2-7191801).
+Published artifact: `0.7.3-preview`, **signed release**, versionCode **13**, Room **8**.
+The original package ID and signing identity are preserved. Source:
+`4862ed007b6f49fed02b0f485110a619b925ceac`.
+See [0.7.3 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.3-4862ed0).
 
 Release build/lint and 95 JVM tests in the configured debug host-test variant
-passed. Both ABI and 16 KiB ELF/ZIP checks passed. Xiaomi14 was cover-upgraded to
-code 12; saved-account restore, the retained directory/download records, actual
-network MKV picture/styled subtitles, and local PDF page/zoom and text reading
-were exercised on the release APK. Linux and Windows use the same server source
-and one Web build; 574 Web tests and native backend test/vet passed.
+passed, including both ABI and 16 KiB ELF/ZIP checks. Xiaomi14 was cover-upgraded
+to code 13; saved-login/directory restore and the retained complete 8.6 GB download
+record were observed on the release APK. The diagnostic debug build passed 39
+focused device methods; its missing-control case also passed a separate replay
+with explicit foreground guarding. Linux and Windows run the same pushed server
+source and one Web build, with 582 Web tests and native backend test/vet passing;
+platform and hardware skips remain explicit.
 
-The [complete Android CI](https://github.com/Kkwans/fileway/actions/runs/37990113163)
-is **not green**: API35 ordinary suite has 89 failures out of 270, and API37 has
-11 out of 271. Separate theme prepare passed on both; theme verify failed on both.
-These failures and remaining hardware/media/functional acceptance stay open;
-scoped real-device results do not replace the full suite.
+The [complete Android CI](https://github.com/Kkwans/fileway/actions/runs/38001143310)
+**failed**: both API35 and API37 ordinary suites reached the 1200-second host
+deadline, without complete JUnit totals. Theme prepare/verify were not executed
+in this run. Executed-method observations are not a complete suite result.
+The [previous 0.7.2 CI](https://github.com/Kkwans/fileway/actions/runs/37990113163)
+had 89/270 and 11/271 ordinary failures respectively, plus theme verify failures;
+those historical counts must not be reused as this run's totals. Complete
+functional, hardware/media and UI acceptance remain open.
 
 ### Features available in the 0.7 line
 
@@ -58,6 +63,22 @@ scoped real-device results do not replace the full suite.
 These are implemented feature groups, with scoped verification. Server capabilities
 and versions determine availability; unsupported newer operations request an upgrade.
 The full App-internal download/install/cover-upgrade flow remains a separate gate.
+
+### Core fixes in 0.7.3
+
+- Publish document save/create, atomic batch rename and current-account deletion
+  completion after synchronous local callbacks; retain acknowledged writes and
+  drafts when follow-up work fails, without replaying the remote mutation.
+- Verify that encrypted credentials actually reached the final file before
+  reporting local save success; preserve an existing readable value on failure.
+- Keep both copies automatically for a same-directory COPY, preserving original
+  filename bytes through copy/paste and conflict preflight.
+- Publish regular files without removing an existing destination first, and use
+  no-replace publication when overwrite was not approved.
+
+Server copy/publication fixes require shared server `2026.10.10-v3` on Linux or
+Windows. Directory replacement recovery and legacy PATCH copy are separate open
+items; this preview does not certify those paths as repaired.
 
 ### Core fixes in 0.7.2
 
