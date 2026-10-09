@@ -248,15 +248,16 @@ const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
 const router = useRouter();
 const fileStore = useFileStore();
+const sourceScope = fileStore.scope;
 const layoutStore = useLayoutStore();
 const { closeHovers, showHover } = layoutStore;
 const { req, selectedItems, selectedCount, isListing } = storeToRefs(fileStore);
-const { reload, preselect } = storeToRefs(fileStore);
+const { reload } = storeToRefs(fileStore);
 
 const oldName = computed(() => {
-  if (!isListing.value) return req.value!.name;
+  if (!isListing.value) return req.value?.name ?? "";
   if (selectedCount.value !== 1) return "";
-  return selectedItems.value[0].name;
+  return selectedItems.value[0]?.name ?? "";
 });
 const isBatchRename = computed(
   () => isListing.value && selectedCount.value > 1
@@ -381,6 +382,7 @@ function applyRule() {
 }
 
 async function submitSingle() {
+  if (fileStore.scope !== sourceScope) return;
   if (name.value === "" || name.value === oldName.value || submitting.value)
     return;
   const item = isListing.value ? selectedItems.value[0] : req.value!;
@@ -403,6 +405,7 @@ async function submitSingle() {
 }
 
 async function executeSingleRename() {
+  if (fileStore.scope !== sourceScope) return;
   if (name.value === "" || name.value === oldName.value || submitting.value)
     return;
   submitting.value = true;
@@ -413,12 +416,19 @@ async function executeSingleRename() {
   );
   try {
     await api.move([{ from: oldLink, to: newLink }]);
+    if (fileStore.scope !== sourceScope) return;
     if (!isListing.value) {
       await router.push({ path: newLink });
       closeHovers();
       return;
     }
-    preselect.value = url.canonicalResourcePath(newLink);
+    fileStore.setPreselect(
+      {
+        path: url.canonicalResourcePath(newLink),
+        wirePath: newLink.slice("/files".length),
+      },
+      sourceScope
+    );
     reload.value = true;
     closeHovers();
   } catch (error) {
@@ -429,6 +439,7 @@ async function executeSingleRename() {
 }
 
 async function submitBatch() {
+  if (fileStore.scope !== sourceScope) return;
   if (!canSubmitBatch.value) return;
   if (!preflightPassed.value) {
     await preflightBatch();
@@ -465,6 +476,7 @@ async function submitBatch() {
 }
 
 async function preflightBatch() {
+  if (fileStore.scope !== sourceScope) return;
   submitting.value = true;
   batchError.value = "";
   serverErrors.value = new Map();
@@ -472,6 +484,7 @@ async function preflightBatch() {
   const checkedSignature = JSON.stringify(checkedChanges);
   try {
     const result = await api.batchRename(checkedChanges, true);
+    if (fileStore.scope !== sourceScope) return;
     if (checkedSignature !== changeSignature.value) return;
     const errors = new Map<string, string>();
     result.items.forEach((item) => {
@@ -498,6 +511,7 @@ async function preflightBatch() {
 }
 
 async function executeBatchRename(changes: BatchRenameChange[]) {
+  if (fileStore.scope !== sourceScope) return;
   if (submitting.value) return;
   if (
     JSON.stringify(changes) !== preflightSignature.value ||
@@ -510,11 +524,16 @@ async function executeBatchRename(changes: BatchRenameChange[]) {
   batchError.value = "";
   try {
     const result = await api.batchRename(changes, false);
+    if (fileStore.scope !== sourceScope) return;
     if (!result.executed) {
       batchError.value = result.error || "批量重命名未执行。";
       return;
     }
-    preselect.value = result.items[0]?.to || "";
+    const first = result.items[0];
+    fileStore.setPreselect(
+      first ? { path: first.to, wirePath: first.toWirePath } : null,
+      sourceScope
+    );
     fileStore.clearSelection();
     reload.value = true;
     $showSuccess(`已重命名 ${result.items.length} 项`);

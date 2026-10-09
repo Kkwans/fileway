@@ -518,7 +518,7 @@ async function handleResultAction(
   }
   if (action === "open-location") {
     prepareTagExit();
-    fileStore.preselect = result.path;
+    fileStore.setPreselect(result);
     await router.push(buildResultParentRoute(result.path, result.wirePath));
     return;
   }

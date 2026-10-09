@@ -29,9 +29,10 @@ const $showError = inject<IToastError>("$showError")!;
 const route = useRoute();
 const router = useRouter();
 const fileStore = useFileStore();
+const sourceScope = fileStore.scope;
 const layoutStore = useLayoutStore();
 const authStore = useAuthStore();
-const { selectedItems, reload, preselect } = storeToRefs(fileStore);
+const { selectedItems, reload } = storeToRefs(fileStore);
 const { user } = storeToRefs(authStore);
 const { showHover, closeHovers } = layoutStore;
 
@@ -57,11 +58,19 @@ function buildItems(destination: string): MoveCopyItem[] {
 }
 
 async function submit(items: MoveCopyItem[], destination: string) {
+  if (fileStore.scope !== sourceScope) return;
   buttons.loading("move");
   try {
     await api.move(items, false, false);
+    if (fileStore.scope !== sourceScope) return;
     buttons.success("move");
-    preselect.value = canonicalResourcePath(items[0].to);
+    fileStore.setPreselect(
+      {
+        path: canonicalResourcePath(items[0].to),
+        wirePath: items[0].to.slice("/files".length),
+      },
+      sourceScope
+    );
     reload.value = true;
     if (user.value?.redirectAfterCopyMove) {
       await router.push({ path: encodeResourceRoute(destination) });
@@ -73,6 +82,7 @@ async function submit(items: MoveCopyItem[], destination: string) {
 }
 
 async function moveTo(value: string | string[]) {
+  if (fileStore.scope !== sourceScope) return;
   const destination = firstPath(value);
   if (!destination) return;
   if (
@@ -104,10 +114,12 @@ async function moveTo(value: string | string[]) {
 }
 
 async function resolveMove(items: MoveCopyItem[], destination: string) {
+  if (fileStore.scope !== sourceScope) return;
   const conflict = await upload.checkConflict(
     items,
     encodeResourceRoute(destination)
   );
+  if (fileStore.scope !== sourceScope) return;
   if (conflict.length > 0) {
     showHover({
       prompt: "resolve-conflict",

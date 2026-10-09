@@ -1,3 +1,24 @@
+import { favoriteIdentity } from "./favoritePersistence";
+
+export type ListingResourceRef = {
+  path: string;
+  wirePath?: string;
+  pathVerified?: boolean;
+};
+
+/** Byte identity only; display paths and FileKeys are never request paths. */
+export function fileResourceIdentity(
+  resource: ListingResourceRef
+): string | null {
+  return favoriteIdentity(resource);
+}
+
+export function fileSelectionScope(
+  user: { id: number; scope: string } | null
+): string {
+  return JSON.stringify([user?.id ?? null, user?.scope ?? ""]);
+}
+
 export const FILE_VIEW_MODES = [
   "mosaic",
   "compact-grid",

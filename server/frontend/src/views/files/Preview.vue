@@ -587,9 +587,11 @@ onBeforeUnmount(() => {
 
 // Specify methods
 const deleteFile = () => {
+  const sourceScope = fileStore.scope;
   layoutStore.showHover({
     prompt: "delete",
     confirm: () => {
+      if (fileStore.scope !== sourceScope) return;
       if (listing.value === null) {
         return;
       }
@@ -604,7 +606,7 @@ const deleteFile = () => {
         next();
       } else if (!hasPrevious.value && !hasNext.value) {
         const nearbyItem = listing.value[Math.max(0, index - 1)];
-        fileStore.preselect = nearbyItem?.path;
+        fileStore.setPreselect(nearbyItem, sourceScope);
 
         close();
       } else {

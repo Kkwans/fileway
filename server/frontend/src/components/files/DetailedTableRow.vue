@@ -166,7 +166,7 @@ import * as upload from "@/utils/upload";
 import { enableThumbs } from "@/utils/constants";
 import { filesize } from "@/utils";
 import dayjs from "@/utils/date";
-import { getFileTypeLabel, normalizeFileKey } from "@/utils/fileListing";
+import { getFileTypeLabel } from "@/utils/fileListing";
 import {
   canDropFilePaths,
   clearFileDragPayload,
@@ -214,7 +214,8 @@ const props = defineProps<{
   registerItem?: (key: string, element: HTMLElement | null) => void;
 }>();
 
-const itemKey = computed(() => normalizeFileKey(props.path));
+const sourceScope = fileStore.scope;
+const itemKey = computed(() => fileStore.keyFor(props, sourceScope));
 const itemElement = ref<HTMLElement | null>(null);
 const isSelected = computed(() => fileStore.selected.includes(itemKey.value));
 const touchInteraction = ref(false);
@@ -269,6 +270,7 @@ const fileTypeLabel = computed(() =>
 );
 
 const dragStart = (event: DragEvent) => {
+  if (!itemKey.value) return;
   if (fileStore.selectedCount === 0) {
     fileStore.addSelected(itemKey.value);
   } else if (!isSelected.value) {
@@ -311,10 +313,11 @@ const dragEnd = () => {
 };
 
 const drop = async (event: DragEvent) => {
+  if (fileStore.scope !== sourceScope) return;
   dropTargetActive.value = false;
   const draggedPaths = readFileDragPayload(event.dataTransfer);
   clearFileDragPayload();
-  if (!props.isDir || draggedPaths.length === 0) return;
+  if (!itemKey.value || !props.isDir || draggedPaths.length === 0) return;
   event.preventDefault();
   if (!canDropFilePaths(draggedPaths, props.url)) return;
 
@@ -336,12 +339,14 @@ const drop = async (event: DragEvent) => {
   const action = event.ctrlKey || event.metaKey ? api.copy : api.move;
   try {
     const conflict = await upload.checkConflict(items, destinationRoute);
+    if (fileStore.scope !== sourceScope) return;
     if (conflict.length > 0) {
       layoutStore.showHover({
         prompt: "resolve-conflict",
         props: { conflict },
         confirm: (confirmEvent: Event, result: ConflictingResource[]) => {
           confirmEvent.preventDefault();
+          if (fileStore.scope !== sourceScope) return;
           layoutStore.closeHovers();
           for (let i = result.length - 1; i >= 0; i--) {
             const decision = result[i];
@@ -358,7 +363,9 @@ const drop = async (event: DragEvent) => {
           }
           if (items.length > 0) {
             void action(items, false, false)
-              .then(() => (fileStore.reload = true))
+              .then(() => {
+                if (fileStore.scope === sourceScope) fileStore.reload = true;
+              })
               .catch($showError);
           }
         },
@@ -366,7 +373,7 @@ const drop = async (event: DragEvent) => {
       return;
     }
     await action(items, false, false);
-    fileStore.reload = true;
+    if (fileStore.scope === sourceScope) fileStore.reload = true;
   } catch (error) {
     $showError(error instanceof Error ? error : new Error(String(error)));
   }
@@ -382,6 +389,7 @@ const toggleFav = () => {
     );
 };
 const open = (event?: MouseEvent) => {
+  if (!itemKey.value) return;
   if (event && touchInteraction.value) return;
   const isActionControl = Boolean(
     (event?.target as HTMLElement | null)?.closest(".details-actions-cell")
@@ -405,6 +413,7 @@ const selectForAction = () => {
   fileStore.selectOnly(itemKey.value);
 };
 const showItemAction = (prompt: string) => {
+  if (!itemKey.value) return;
   selectForAction();
   layoutStore.showHover(prompt);
 };
@@ -438,6 +447,7 @@ const runFileAction = (action: FileActionMenuAction) => {
   showItemAction(action);
 };
 const itemClick = (event: Event | KeyboardEvent) => {
+  if (!itemKey.value) return;
   if (touchInteraction.value) return;
   if ((event.target as HTMLElement).closest("button")) return;
   if (
@@ -483,6 +493,10 @@ const itemClick = (event: Event | KeyboardEvent) => {
 };
 const contextMenu = (event: MouseEvent) => {
   event.preventDefault();
+  if (!itemKey.value) {
+    event.stopPropagation();
+    return;
+  }
   if (shouldSuppressTouchContextMenu(touchInteraction.value)) {
     event.stopPropagation();
     return;

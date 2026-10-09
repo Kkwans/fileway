@@ -262,7 +262,7 @@ import {
   shouldRenderListingSize,
   shouldRenderListingTagSlot,
 } from "@/utils/layoutContract";
-import { getFileTypeLabel, normalizeFileKey } from "@/utils/fileListing";
+import { getFileTypeLabel } from "@/utils/fileListing";
 import { resourceOpenRoute } from "@/utils/archivePath";
 import {
   canDropFilePaths,
@@ -340,7 +340,8 @@ const tagPresentation = computed(() =>
 const singleClick = computed(
   () => !props.readOnly && authStore.user?.singleClick
 );
-const itemKey = computed(() => normalizeFileKey(props.path));
+const sourceScope = fileStore.scope;
+const itemKey = computed(() => fileStore.keyFor(props, sourceScope));
 const itemElement = ref<HTMLElement | null>(null);
 const isSelected = computed(() => fileStore.selected.includes(itemKey.value));
 const isDraggable = computed(
@@ -382,6 +383,7 @@ const selectForAction = () => {
 };
 
 const showItemAction = (prompt: string) => {
+  if (!itemKey.value) return;
   selectForAction();
   layoutStore.showHover(prompt);
 };
@@ -482,6 +484,7 @@ const fileTypeLabel = computed(() =>
 );
 
 const dragStart = (event: DragEvent) => {
+  if (!itemKey.value) return;
   if (fileStore.selectedCount === 0) {
     fileStore.addSelected(itemKey.value);
   } else if (!isSelected.value) {
@@ -525,10 +528,11 @@ const dragEnd = () => {
 };
 
 const drop = async (event: DragEvent) => {
+  if (fileStore.scope !== sourceScope) return;
   dropTargetActive.value = false;
   const draggedPaths = readFileDragPayload(event.dataTransfer);
   clearFileDragPayload();
-  if (!props.isDir || draggedPaths.length === 0) return;
+  if (!itemKey.value || !props.isDir || draggedPaths.length === 0) return;
   event.preventDefault();
   if (!canDropFilePaths(draggedPaths, props.url)) return;
 
@@ -553,15 +557,17 @@ const drop = async (event: DragEvent) => {
   const destinationRoute = props.url;
 
   const action = (overwrite?: boolean, rename?: boolean) => {
+    if (fileStore.scope !== sourceScope) return;
     const action = event.ctrlKey || event.metaKey ? api.copy : api.move;
     action(items, overwrite, rename)
       .then(() => {
-        fileStore.reload = true;
+        if (fileStore.scope === sourceScope) fileStore.reload = true;
       })
       .catch($showError);
   };
 
   const conflict = await upload.checkConflict(items, destinationRoute);
+  if (fileStore.scope !== sourceScope) return;
 
   if (conflict.length > 0) {
     layoutStore.showHover({
@@ -595,6 +601,7 @@ const drop = async (event: DragEvent) => {
 };
 
 const itemClick = (event: Event | KeyboardEvent) => {
+  if (!itemKey.value) return;
   // Close pickers on any item click
   showTagPicker.value = false;
 
@@ -626,6 +633,10 @@ const itemClick = (event: Event | KeyboardEvent) => {
 
 const contextMenu = (event: MouseEvent) => {
   event.preventDefault();
+  if (!itemKey.value) {
+    event.stopPropagation();
+    return;
+  }
   if (shouldSuppressTouchContextMenu(touchInteraction.value)) {
     event.stopPropagation();
     return;
@@ -647,6 +658,7 @@ const click = (
     selectedCount: fileStore.selectedCount,
   })
 ) => {
+  if (!itemKey.value) return;
   if (!singleClick.value && fileStore.selectedCount !== 0)
     event.preventDefault();
 
@@ -700,6 +712,7 @@ const click = (
 };
 
 const open = () => {
+  if (!itemKey.value) return;
   router.push(resourceOpenRoute(props));
 };
 

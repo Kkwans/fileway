@@ -24,7 +24,14 @@ describe("媒体预览生命周期契约", () => {
   it("等待新资源元数据后再按资源路径重建预览", () => {
     expect(filesViewSource).toContain(':key="currentViewKey"');
     expect(filesViewSource).not.toContain(':key="route.fullPath"');
-    expect(filesViewSource).toContain("`${fileStore.req.path}:${mode}`");
+    const key = filesViewSource.slice(
+      filesViewSource.indexOf("const currentViewKey"),
+      filesViewSource.indexOf("// Define hooks")
+    );
+    expect(key).toContain("fileResourceIdentity(fileStore.req)");
+    expect(key).toContain("fileStore.scope");
+    expect(key).toContain("mode");
+    expect(key).not.toContain("route.fullPath");
   });
 
   it("先尝试浏览器原生源，明确不支持时再展示兼容播放", () => {

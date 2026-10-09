@@ -45,14 +45,15 @@ describe("file selection identity", () => {
       listing("/docs", [item("/docs/a.txt", 0), item("/docs/b.txt", 1)])
     );
     store.selectOnly("/docs/b.txt");
+    const key = store.keyFor(store.selectedItems[0]);
 
     store.updateRequest(
       listing("/docs/", [item("/docs/b.txt", 0), item("/docs/a.txt", 1)])
     );
 
-    expect(store.selected).toEqual(["/docs/b.txt"]);
-    expect(store.focused).toBe("/docs/b.txt");
-    expect(store.rangeAnchor).toBe("/docs/b.txt");
+    expect(store.selected).toEqual([key]);
+    expect(store.focused).toBe(key);
+    expect(store.rangeAnchor).toBe(key);
     expect(store.selectedItems.map((entry) => entry.name)).toEqual(["b.txt"]);
   });
 
@@ -80,16 +81,17 @@ describe("file selection identity", () => {
         keys.map((path, index) => item(path, index))
       )
     );
+    const identities = store.req!.items.map((entry) => store.keyFor(entry));
     store.selectOnly(keys[1]);
 
     store.selectRange(keys, keys[2]);
-    expect(store.selected).toEqual([keys[1], keys[2]]);
-    expect(store.focused).toBe(keys[2]);
-    expect(store.rangeAnchor).toBe(keys[1]);
+    expect(store.selected).toEqual([identities[1], identities[2]]);
+    expect(store.focused).toBe(identities[2]);
+    expect(store.rangeAnchor).toBe(identities[1]);
 
     store.selectRange(keys, keys[0]);
-    expect(store.selected).toEqual([keys[0], keys[1]]);
-    expect(store.focused).toBe(keys[0]);
-    expect(store.rangeAnchor).toBe(keys[1]);
+    expect(store.selected).toEqual([identities[0], identities[1]]);
+    expect(store.focused).toBe(identities[0]);
+    expect(store.rangeAnchor).toBe(identities[1]);
   });
 });

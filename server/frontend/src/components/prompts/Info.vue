@@ -193,10 +193,11 @@ const route = useRoute();
 const router = useRouter();
 
 const fileStore = useFileStore();
+const sourceScope = fileStore.scope;
 const layoutStore = useLayoutStore();
 const { closeHovers } = layoutStore;
 
-const { req, selectedItems, selectedCount, isListing, reload, preselect } =
+const { req, selectedItems, selectedCount, isListing, reload } =
   storeToRefs(fileStore);
 
 const editableName = ref("");
@@ -249,7 +250,7 @@ const humanTime = computed(() => {
 
 const name = computed(() => {
   return selectedCount.value === 0
-    ? req.value!.name
+    ? (req.value?.name ?? "")
     : selectedItems.value[0].name;
 });
 
@@ -368,6 +369,7 @@ const copyFullPath = async () => {
 };
 
 const renameFromInfo = async () => {
+  if (fileStore.scope !== sourceScope) return;
   const nextName = editableName.value.trim();
   if (
     !nextName ||
@@ -386,10 +388,17 @@ const renameFromInfo = async () => {
   renaming.value = true;
   try {
     await api.move([{ from: oldLink, to: newLink }]);
+    if (fileStore.scope !== sourceScope) return;
     if (!isListing.value) {
       await router.push({ path: newLink });
     } else {
-      preselect.value = url.canonicalResourcePath(newLink);
+      fileStore.setPreselect(
+        {
+          path: url.canonicalResourcePath(newLink),
+          wirePath: newLink.slice("/files".length),
+        },
+        sourceScope
+      );
       reload.value = true;
     }
     closeHovers();

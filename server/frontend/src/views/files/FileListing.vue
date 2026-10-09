@@ -1062,7 +1062,6 @@ import { enableExec } from "@/utils/constants";
 import * as upload from "@/utils/upload";
 import {
   cycleListingSort,
-  normalizeFileKey,
   normalizeViewMode,
   parseFileViewMode,
   selectForContextMenu,
@@ -1157,6 +1156,7 @@ const $showError = inject<IToastError>("$showError")!;
 const clipboardStore = useClipboardStore();
 const authStore = useAuthStore();
 const fileStore = useFileStore();
+const listingScope = fileStore.scope;
 const layoutStore = useLayoutStore();
 const listingPreferencesStore = useListingPreferencesStore();
 const accountPreferencesStore = useAccountPreferencesStore();
@@ -1327,12 +1327,12 @@ const listing = ref<HTMLElement | null>(null);
 let listingResizeObserver: ResizeObserver | null = null;
 const itemElements = new Map<string, HTMLElement>();
 const registerItem = (key: string, element: HTMLElement | null) => {
-  const normalized = normalizeFileKey(key);
+  const normalized = key;
   if (element) itemElements.set(normalized, element);
   else itemElements.delete(normalized);
 };
 const scrollItemIntoView = (key: string, block: ScrollLogicalPosition) => {
-  itemElements.get(normalizeFileKey(key))?.scrollIntoView({ block });
+  itemElements.get(key)?.scrollIntoView({ block });
 };
 
 const items = computed(() => {
@@ -1387,7 +1387,7 @@ const renderedSections = computed(() =>
 );
 
 const visibleItemKeys = computed(() =>
-  navigableItems.value.map((item) => normalizeFileKey(item.path))
+  navigableItems.value.map((item) => fileStore.keyFor(item)).filter(Boolean)
 );
 
 const togglePrefixSection = async (prefix: string) => {
@@ -1395,6 +1395,7 @@ const togglePrefixSection = async (prefix: string) => {
     (candidate) => candidate.prefix === prefix
   );
   if (!section) return;
+  const selectionScope = fileStore.scope;
   const selectionSnapshot = {
     selected: [...fileStore.selected],
     focused: fileStore.focused,
@@ -1402,7 +1403,7 @@ const togglePrefixSection = async (prefix: string) => {
   };
   if (section.expanded) {
     const hiddenKeys = new Set(
-      section.items.map((item) => normalizeFileKey(item.path))
+      section.items.map((item) => fileStore.keyFor(item))
     );
     fileStore.setSelected(
       fileStore.selected.filter((key) => !hiddenKeys.has(key))
@@ -1413,7 +1414,7 @@ const togglePrefixSection = async (prefix: string) => {
       expanded: !section.expanded,
     });
   } catch (error) {
-    fileStore.$patch(selectionSnapshot);
+    if (fileStore.scope === selectionScope) fileStore.$patch(selectionSnapshot);
     $showError(error instanceof Error ? error : new Error("分组偏好保存失败"));
   }
 };
@@ -1593,6 +1594,7 @@ watch(listing, (next, previous) => {
 const base64 = (name: string) => Base64.encodeURI(name);
 
 const keyEvent = (event: KeyboardEvent) => {
+  if (fileStore.scope !== listingScope) return;
   if (isEditableKeyboardTarget(event.target)) return;
 
   // No prompts are shown
@@ -1608,12 +1610,14 @@ const keyEvent = (event: KeyboardEvent) => {
   // Arrow key navigation
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
-    const allItems = navigableItems.value;
+    const allItems = navigableItems.value.filter((item) =>
+      fileStore.keyFor(item)
+    );
     if (allItems.length === 0) return;
 
     const currentKey = fileStore.focused ?? fileStore.selected.at(-1);
     const currentPosition = currentKey
-      ? allItems.findIndex((item) => normalizeFileKey(item.path) === currentKey)
+      ? allItems.findIndex((item) => fileStore.keyFor(item) === currentKey)
       : -1;
     const newPosition =
       event.key === "ArrowDown"
@@ -1621,11 +1625,11 @@ const keyEvent = (event: KeyboardEvent) => {
         : currentPosition < 0
           ? allItems.length - 1
           : Math.max(currentPosition - 1, 0);
-    const newKey = normalizeFileKey(allItems[newPosition].path);
+    const newKey = fileStore.keyFor(allItems[newPosition]);
 
     // Shift+Arrow for range selection
     if (event.shiftKey) {
-      const orderedKeys = allItems.map((item) => normalizeFileKey(item.path));
+      const orderedKeys = allItems.map((item) => fileStore.keyFor(item));
       fileStore.selectRange(
         orderedKeys,
         newKey,
@@ -1658,10 +1662,12 @@ const keyEvent = (event: KeyboardEvent) => {
   // Home - jump to first item
   if (event.key === "Home" && !event.ctrlKey && !event.metaKey) {
     event.preventDefault();
-    const allItems = navigableItems.value;
+    const allItems = navigableItems.value.filter((item) =>
+      fileStore.keyFor(item)
+    );
     if (allItems.length > 0) {
-      const targetKey = normalizeFileKey(allItems[0].path);
-      const orderedKeys = allItems.map((item) => normalizeFileKey(item.path));
+      const targetKey = fileStore.keyFor(allItems[0]);
+      const orderedKeys = allItems.map((item) => fileStore.keyFor(item));
       if (event.shiftKey) fileStore.selectRange(orderedKeys, targetKey);
       else fileStore.selectOnly(targetKey);
       nextTick(() => scrollItemIntoView(targetKey, "nearest"));
@@ -1672,10 +1678,12 @@ const keyEvent = (event: KeyboardEvent) => {
   // End - jump to last item
   if (event.key === "End" && !event.ctrlKey && !event.metaKey) {
     event.preventDefault();
-    const allItems = navigableItems.value;
+    const allItems = navigableItems.value.filter((item) =>
+      fileStore.keyFor(item)
+    );
     if (allItems.length > 0) {
-      const targetKey = normalizeFileKey(allItems[allItems.length - 1].path);
-      const orderedKeys = allItems.map((item) => normalizeFileKey(item.path));
+      const targetKey = fileStore.keyFor(allItems[allItems.length - 1]);
+      const orderedKeys = allItems.map((item) => fileStore.keyFor(item));
       if (event.shiftKey) fileStore.selectRange(orderedKeys, targetKey);
       else fileStore.selectOnly(targetKey);
       showLimit.value = allItems.length;
@@ -1687,7 +1695,9 @@ const keyEvent = (event: KeyboardEvent) => {
   // Page Up / Page Down - jump by visible page size
   if (event.key === "PageDown" || event.key === "PageUp") {
     event.preventDefault();
-    const allItems = navigableItems.value;
+    const allItems = navigableItems.value.filter((item) =>
+      fileStore.keyFor(item)
+    );
     if (allItems.length === 0) return;
 
     // Estimate visible items from viewport height
@@ -1696,7 +1706,7 @@ const keyEvent = (event: KeyboardEvent) => {
 
     // Find position in allItems array
     const pos = currentKey
-      ? allItems.findIndex((item) => normalizeFileKey(item.path) === currentKey)
+      ? allItems.findIndex((item) => fileStore.keyFor(item) === currentKey)
       : -1;
     let newPos: number;
     if (event.key === "PageDown") {
@@ -1708,10 +1718,10 @@ const keyEvent = (event: KeyboardEvent) => {
 
     const target = allItems[newPos];
     if (target) {
-      const targetKey = normalizeFileKey(target.path);
+      const targetKey = fileStore.keyFor(target);
       if (event.shiftKey) {
         fileStore.selectRange(
-          allItems.map((item) => normalizeFileKey(item.path)),
+          allItems.map((item) => fileStore.keyFor(item)),
           targetKey,
           event.ctrlKey || event.metaKey
         );
@@ -1756,6 +1766,7 @@ const keyEvent = (event: KeyboardEvent) => {
             size: item.size,
             modified: item.modified,
             path: item.path,
+            wirePath: item.wirePath,
             extension: item.extension || "",
           },
           items: navigableItems.value,
@@ -1787,7 +1798,7 @@ const keyEvent = (event: KeyboardEvent) => {
     case "a":
       event.preventDefault();
       for (const item of navigableItems.value) {
-        fileStore.addSelected(normalizeFileKey(item.path));
+        fileStore.addSelected(fileStore.keyFor(item));
       }
       break;
     case "s":
@@ -1804,6 +1815,7 @@ const preventDefault = (event: DragEvent) => {
 };
 
 const copyCut = (event: Event | KeyboardEvent): void => {
+  if (fileStore.scope !== listingScope) return;
   if ((event.target as HTMLElement).tagName?.toLowerCase() === "input") return;
 
   if (fileStore.req === null) return;
@@ -1824,7 +1836,7 @@ const copyCut = (event: Event | KeyboardEvent): void => {
     return;
   }
 
-  clipboardStore.$patch({
+  clipboardStore.setClipboard({
     key: (event as KeyboardEvent).key,
     items,
     path: route.path,
@@ -1832,6 +1844,8 @@ const copyCut = (event: Event | KeyboardEvent): void => {
 };
 
 const paste = async (event: Event) => {
+  const sourceScope = listingScope;
+  if (fileStore.scope !== sourceScope) return;
   if ((event.target as HTMLElement).tagName?.toLowerCase() === "input") return;
 
   // TODO router location should it be
@@ -1856,13 +1870,18 @@ const paste = async (event: Event) => {
     return;
   }
 
-  const preselect = removePrefix(route.path) + items[0].name;
+  const preselect = {
+    path: removePrefix(route.path) + items[0].name,
+    wirePath: removePrefix(items[0].to),
+  };
 
   let action = (overwrite?: boolean, rename?: boolean) => {
+    if (fileStore.scope !== sourceScope) return;
     api
       .copy(items, overwrite, rename)
       .then(() => {
-        fileStore.preselect = preselect;
+        if (fileStore.scope !== sourceScope) return;
+        fileStore.setPreselect(preselect, sourceScope);
         fileStore.reload = true;
       })
       .catch($showError);
@@ -1870,11 +1889,13 @@ const paste = async (event: Event) => {
 
   if (clipboardStore.key === "x") {
     action = (overwrite, rename) => {
+      if (fileStore.scope !== sourceScope) return;
       api
         .move(items, overwrite, rename)
         .then(() => {
+          if (fileStore.scope !== sourceScope) return;
           clipboardStore.resetClipboard();
-          fileStore.preselect = preselect;
+          fileStore.setPreselect(preselect, sourceScope);
           fileStore.reload = true;
         })
         .catch($showError);
@@ -1883,6 +1904,7 @@ const paste = async (event: Event) => {
 
   const path = route.path.endsWith("/") ? route.path : route.path + "/";
   const conflict = await upload.checkConflict(items as PasteItem[], path);
+  if (fileStore.scope !== sourceScope) return;
 
   if (conflict.length > 0) {
     layoutStore.showHover({
@@ -1892,6 +1914,7 @@ const paste = async (event: Event) => {
       },
       confirm: (event: Event, result: Array<ConflictingResource>) => {
         event.preventDefault();
+        if (fileStore.scope !== sourceScope) return;
         layoutStore.closeHovers();
         for (let i = result.length - 1; i >= 0; i--) {
           const item = result[i];
@@ -1958,6 +1981,8 @@ const dragLeave = (event: DragEvent) => {
 };
 
 const drop = async (event: DragEvent) => {
+  const sourceScope = listingScope;
+  if (fileStore.scope !== sourceScope) return;
   const dt = event.dataTransfer;
   if (!isExternalFileDrag(dt?.types)) return;
   event.preventDefault();
@@ -1975,6 +2000,7 @@ const drop = async (event: DragEvent) => {
   }
 
   const files: UploadList = (await upload.scanFiles(dt)) as UploadList;
+  if (fileStore.scope !== sourceScope) return;
   let path = route.path.endsWith("/") ? route.path : route.path + "/";
 
   if (
@@ -1995,6 +2021,7 @@ const drop = async (event: DragEvent) => {
 
   const conflict = await upload.checkConflict(files, path);
 
+  if (fileStore.scope !== sourceScope) return;
   const preselect = removePrefix(path) + (files[0].fullPath || files[0].name);
 
   if (conflict.length > 0) {
@@ -2006,6 +2033,7 @@ const drop = async (event: DragEvent) => {
       },
       confirm: (event: Event, result: Array<ConflictingResource>) => {
         event.preventDefault();
+        if (fileStore.scope !== sourceScope) return;
         layoutStore.closeHovers();
         for (let i = result.length - 1; i >= 0; i--) {
           const item = result[i];
@@ -2019,7 +2047,7 @@ const drop = async (event: DragEvent) => {
         }
         if (files.length > 0) {
           upload.handleFiles(files, path, true);
-          fileStore.preselect = preselect;
+          fileStore.setPreselect(preselect, sourceScope);
         }
       },
     });
@@ -2028,7 +2056,7 @@ const drop = async (event: DragEvent) => {
   }
 
   upload.handleFiles(files, path);
-  fileStore.preselect = preselect;
+  fileStore.setPreselect(preselect, sourceScope);
 };
 
 const uploadInput = (event: Event) => {
@@ -2099,13 +2127,13 @@ const runContextAnalysis = () => {
 
 const selectAll = () => {
   fileStore.setSelected(
-    navigableItems.value.map((item) => normalizeFileKey(item.path))
+    navigableItems.value.map((item) => fileStore.keyFor(item))
   );
 };
 
 const invertSelection = () => {
   const allKeys = new Set<string>(
-    navigableItems.value.map((item) => normalizeFileKey(item.path))
+    navigableItems.value.map((item) => fileStore.keyFor(item))
   );
   const selectedSet = new Set(fileStore.selected);
   fileStore.setSelected([...allKeys].filter((key) => !selectedSet.has(key)));
@@ -2349,15 +2377,18 @@ const revealPreviousItem = () => {
 
 const showContextMenu = (event: MouseEvent) => {
   event.preventDefault();
+  isContextMenuVisible.value = false;
+  if (fileStore.scope !== listingScope) return;
 
   const target = event.target;
   if (target instanceof HTMLElement) {
     const item = target.closest<HTMLElement>(".item");
     const targetKey = item?.dataset.key;
+    if (item && (!targetKey || !fileStore.itemForKey(targetKey))) return;
     if (targetKey) {
       fileStore.setSelected(
-        selectForContextMenu(fileStore.selected, normalizeFileKey(targetKey)),
-        normalizeFileKey(targetKey)
+        selectForContextMenu(fileStore.selected, targetKey),
+        targetKey
       );
     }
   }

@@ -57,6 +57,7 @@ import { useRoute, useRouter } from "vue-router";
 import FileListing from "@/views/files/FileListing.vue";
 import { StatusError } from "@/api/utils";
 import { name } from "../utils/constants";
+import { fileResourceIdentity } from "@/utils/fileListing";
 const Editor = defineAsyncComponent(() => import("@/views/files/Editor.vue"));
 const Preview = defineAsyncComponent(() => import("@/views/files/Preview.vue"));
 
@@ -77,6 +78,7 @@ const router = useRouter();
 const navigation = useNavigationStore();
 
 let fetchDataController = new AbortController();
+let fetchGeneration = 0;
 let lastRecordedPath = "";
 
 const error = ref<StatusError | null>(null);
@@ -110,7 +112,11 @@ const currentView = computed(() => {
 const currentViewKey = computed(() => {
   if (!fileStore.req) return "loading";
   const mode = route.query.edit === "true" ? "edit" : "view";
-  return `${fileStore.req.path}:${mode}`;
+  return JSON.stringify([
+    fileStore.scope,
+    fileResourceIdentity(fileStore.req),
+    mode,
+  ]);
 });
 
 // Define hooks
@@ -121,6 +127,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  fetchGeneration++;
+  fetchDataController.abort();
   window.removeEventListener("keydown", keyEvent);
 });
 
@@ -139,37 +147,30 @@ watch([() => route.path, () => route.query.edit], () => {
 watch(reload, (newValue) => {
   newValue && fetchData();
 });
+watch(
+  () => fileStore.scope,
+  () => {
+    fetchGeneration++;
+    fetchDataController.abort();
+    layoutStore.loading = false;
+    layoutStore.closeHovers();
+    lastRecordedPath = "";
+    fileStore.isFiles = true;
+    if (authStore.user) void fetchData();
+  },
+  { flush: "sync" }
+);
 
 // Define functions
 
 const applyPreSelection = () => {
-  const preselect = fileStore.preselect;
-  fileStore.preselect = null;
-
-  if (!fileStore.req?.isDir || fileStore.oldReq === null) return;
-
-  let index = -1;
-  if (preselect) {
-    // Find item with the specified path
-    index = fileStore.req.items.findIndex((item) => item.path === preselect);
-  } else if (fileStore.oldReq.path.startsWith(fileStore.req.path)) {
-    // Get immediate child folder of the previous path
-    const name = fileStore.oldReq.path
-      .substring(fileStore.req.path.length)
-      .split("/")
-      .shift();
-
-    index = fileStore.req.items.findIndex(
-      (val) => val.path == fileStore.req!.path + name
-    );
-  }
-
-  if (index === -1) return;
-  fileStore.selectOnly(fileStore.req.items[index].path);
+  fileStore.applyPreSelection();
 };
 
 const fetchData = async () => {
   const requestedRoute = route.fullPath;
+  const sourceScope = fileStore.scope;
+  const generation = ++fetchGeneration;
   // Reset view information.
   fileStore.reload = false;
   layoutStore.closeHovers();
@@ -186,7 +187,13 @@ const fetchData = async () => {
   fetchDataController = new AbortController();
   try {
     const res = await api.fetch(url, fetchDataController.signal);
-    fileStore.updateRequest(res);
+    if (
+      generation !== fetchGeneration ||
+      sourceScope !== fileStore.scope ||
+      requestedRoute !== route.fullPath
+    )
+      return;
+    if (!fileStore.updateRequest(res, sourceScope)) return;
     document.title = `${res.name || "我的文件"} - 文件 - ${name}`;
     layoutStore.loading = false;
 
@@ -200,6 +207,12 @@ const fetchData = async () => {
     // Selects the post-reload target item or the previously visited child folder
     applyPreSelection();
   } catch (err) {
+    if (
+      generation !== fetchGeneration ||
+      sourceScope !== fileStore.scope ||
+      requestedRoute !== route.fullPath
+    )
+      return;
     if (err instanceof StatusError && err.is_canceled) {
       return;
     }

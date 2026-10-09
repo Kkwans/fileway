@@ -23,9 +23,10 @@ import buttons from "@/utils/buttons";
 const $showError = inject<IToastError>("$showError")!;
 const router = useRouter();
 const fileStore = useFileStore();
+const sourceScope = fileStore.scope;
 const layoutStore = useLayoutStore();
 const authStore = useAuthStore();
-const { selectedItems, reload, preselect } = storeToRefs(fileStore);
+const { selectedItems, reload } = storeToRefs(fileStore);
 const { user } = storeToRefs(authStore);
 const { showHover, closeHovers } = layoutStore;
 
@@ -47,11 +48,19 @@ function buildItems(destination: string): MoveCopyItem[] {
 }
 
 async function submit(items: MoveCopyItem[], destination: string) {
+  if (fileStore.scope !== sourceScope) return;
   buttons.loading("copy");
   try {
     await api.copy(items, false, false);
+    if (fileStore.scope !== sourceScope) return;
     buttons.success("copy");
-    preselect.value = canonicalResourcePath(items[0].to);
+    fileStore.setPreselect(
+      {
+        path: canonicalResourcePath(items[0].to),
+        wirePath: items[0].to.slice("/files".length),
+      },
+      sourceScope
+    );
     reload.value = true;
     if (user.value?.redirectAfterCopyMove) {
       await router.push({ path: encodeResourceRoute(destination) });
@@ -63,6 +72,7 @@ async function submit(items: MoveCopyItem[], destination: string) {
 }
 
 async function copyTo(value: string | string[]) {
+  if (fileStore.scope !== sourceScope) return;
   const destination = firstPath(value);
   if (!destination) return;
   const items = buildItems(destination);
@@ -72,6 +82,7 @@ async function copyTo(value: string | string[]) {
     items,
     encodeResourceRoute(destination)
   );
+  if (fileStore.scope !== sourceScope) return;
   if (conflict.length > 0) {
     showHover({
       prompt: "resolve-conflict",
