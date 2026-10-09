@@ -74,7 +74,7 @@ func (d *DriveFs) Mkdir(name string, perm os.FileMode) error {
 
 func (d *DriveFs) MkdirAll(path string, perm os.FileMode) error {
 	cleaned := NormalizeVirtualPath(path)
-	if cleaned == "/" {
+	if cleaned == "/" && d.globalRoot() {
 		return nil
 	}
 	real, err := d.resolve(cleaned)
