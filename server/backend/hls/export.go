@@ -48,11 +48,12 @@ func (service *Service) Export(ctx context.Context, prepare func() (Job, error),
 	if err != nil {
 		return err
 	}
+	relative = filepath.ToSlash(relative)
 	if strings.ContainsAny(relative, ":|[]'\\") {
 		return fmt.Errorf("转码缓存路径包含不支持的封装字符")
 	}
 	job.report = func(p Progress) error { p.PlayableSeconds = PlayableSeconds(preview); return report(p) }
-	command := exec.CommandContext(ctx, service.ffmpegPath, exportTeeArgs(job, filepath.Base(output), filepath.ToSlash(relative))...)
+	command := exec.CommandContext(ctx, service.ffmpegPath, exportTeeArgs(job, filepath.Base(output), relative)...)
 	command.Dir = filepath.Dir(output)
 	stderr := cappedBuffer{limit: maxFFmpegError}
 	command.Stderr = &stderr
