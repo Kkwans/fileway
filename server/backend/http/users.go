@@ -51,6 +51,9 @@ func getUser(_ http.ResponseWriter, r *http.Request) (*modifyUserRequest, error)
 	if req.What != "user" {
 		return nil, fberrors.ErrInvalidDataType
 	}
+	if req.Data == nil {
+		return nil, fberrors.ErrInvalidRequestParams
+	}
 
 	return req, nil
 }
@@ -146,6 +149,9 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 
 	if len(req.Which) != 0 {
 		return http.StatusBadRequest, fmt.Errorf("请求参数无效")
+	}
+	if err := validateSubmittedRules(req.Data.Rules); err != nil {
+		return http.StatusBadRequest, err
 	}
 
 	if req.Data.Password == "" {
@@ -271,6 +277,11 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	if submitsUserRules(req.Which) {
+		if err := validateSubmittedRules(req.Data.Rules); err != nil {
+			return http.StatusBadRequest, err
+		}
+	}
 	err = d.store.Users.Update(req.Data, req.Which...)
 	if err != nil {
 		return http.StatusInternalServerError, err

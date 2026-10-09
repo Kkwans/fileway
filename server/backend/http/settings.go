@@ -59,6 +59,9 @@ var settingsPutHandler = withAdmin(func(_ http.ResponseWriter, r *http.Request, 
 	if _, err = parseTokenExpirationTime(req.TokenExpirationTime); err != nil {
 		return http.StatusBadRequest, err
 	}
+	if err := validateSubmittedRules(req.Rules); err != nil {
+		return http.StatusBadRequest, err
+	}
 
 	d.settings.Signup = req.Signup
 	d.settings.CreateUserDir = req.CreateUserDir
