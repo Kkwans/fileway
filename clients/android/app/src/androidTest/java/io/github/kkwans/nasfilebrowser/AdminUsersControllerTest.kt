@@ -247,6 +247,93 @@ class AdminUsersControllerTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun ownDeleteKeepsSavingAndDraftUntilItsCallbackHasFinished(): Unit = runBlocking {
+        val authority = AdminUsersAuthority(); val context = authority.context("delete-callback-order")
+        authority.users[2]!!.getJSONObject("perm").put("admin", true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val checked = CompletableDeferred<Result<Unit>>(); var callbacks = 0
+        lateinit var controller: AdminUsersController
+        controller = AdminUsersController(scope, { it === context }, onOwnAccountDeleted = { owner ->
+            callbacks++
+            checked.complete(runCatching {
+                assertSame(context, owner)
+                assertEquals("The remote DELETE is already acknowledged", 1, authority.writes)
+                assertFalse(authority.users.containsKey(1))
+                assertTrue("Do not publish completion before local account cleanup", controller.state.value.saving)
+                assertEquals(1L, controller.state.value.draft!!.id)
+                assertEquals("delete", controller.state.value.confirmation)
+                assertNull(controller.state.value.notice)
+                controller.confirm(); controller.requestDelete(); controller.closeEditor()
+                assertTrue(controller.state.value.saving)
+                assertEquals(1, authority.writes)
+            })
+        })
+        try {
+            main { controller.bind(context); controller.refresh() }; ready(controller)
+            main { controller.select(1) }; editor(controller)
+            main { controller.requestDelete(); controller.currentPassword("owned-operator-password"); controller.confirm() }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertEquals(1, callbacks); assertEquals(1, authority.writes)
+            assertNull(controller.state.value.draft); assertNull(controller.state.value.confirmation)
+            assertFalse(controller.state.value.authorized); assertFalse(controller.state.value.unknown)
+            assertTrue(controller.state.value.notice.orEmpty().contains("当前账号已删除"))
+        } finally { scope.cancel() }
+    }
+
+    @Test fun ownDeleteCallbackMayUnbindOrSwitchOwnerWithoutRestoringOldCompletion(): Unit = runBlocking {
+        for (switchOwner in listOf(false, true)) {
+            val authority = AdminUsersAuthority(); val context = authority.context("delete-old-$switchOwner")
+            authority.users[2]!!.getJSONObject("perm").put("admin", true)
+            val nextAuthority = AdminUsersAuthority(); val next = nextAuthority.context("delete-next-$switchOwner")
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main); var active = context
+            val checked = CompletableDeferred<Result<Unit>>()
+            lateinit var controller: AdminUsersController
+            controller = AdminUsersController(scope, { it === active }, onOwnAccountDeleted = { owner ->
+                checked.complete(runCatching {
+                    assertSame(context, owner); assertTrue(controller.state.value.saving)
+                    if (switchOwner) { active = next; controller.bind(next) } else controller.bind(null)
+                })
+            })
+            try {
+                main { controller.bind(context); controller.refresh() }; ready(controller)
+                main { controller.select(1) }; editor(controller)
+                main { controller.requestDelete(); controller.currentPassword("owned-operator-password"); controller.confirm() }
+                withTimeout(5000) { checked.await() }.getOrThrow(); main { }
+                assertEquals(if (switchOwner) next.owner else "", controller.state.value.scope)
+                assertNull(controller.state.value.notice); assertNull(controller.state.value.error)
+                assertNull(controller.state.value.draft); assertFalse(controller.state.value.saving)
+                assertFalse(controller.state.value.unknown); assertTrue(controller.state.value.users.isEmpty())
+                assertEquals(1, authority.writes); assertEquals(0, nextAuthority.writes)
+            } finally { scope.cancel() }
+        }
+    }
+
+    @Test fun acknowledgedOwnDeleteCallbackFailureKeepsDraftAndCannotReplayDelete(): Unit = runBlocking {
+        val authority = AdminUsersAuthority(); val context = authority.context("delete-callback-failure")
+        authority.users[2]!!.getJSONObject("perm").put("admin", true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val checked = CompletableDeferred<Result<Unit>>(); var callbacks = 0
+        lateinit var controller: AdminUsersController
+        controller = AdminUsersController(scope, { it === context }, onOwnAccountDeleted = {
+            callbacks++
+            checked.complete(runCatching { assertTrue(controller.state.value.saving); assertNull(controller.state.value.notice) })
+            throw IllegalStateException("Owned local account cleanup failed after remote acknowledgement")
+        })
+        try {
+            main { controller.bind(context); controller.refresh() }; ready(controller)
+            main { controller.select(1) }; editor(controller)
+            main { controller.requestDelete(); controller.currentPassword("owned-operator-password"); controller.confirm() }
+            withTimeout(5000) { checked.await() }.getOrThrow(); settled(controller)
+            assertEquals(1, callbacks); assertEquals(1, authority.writes); assertFalse(authority.users.containsKey(1))
+            assertTrue(controller.state.value.unknown); assertEquals(1L, controller.state.value.draft!!.id)
+            assertEquals("delete", controller.state.value.confirmation); assertNull(controller.state.value.notice)
+            assertTrue(controller.state.value.error.orEmpty().contains("服务器已接受"))
+            main { controller.confirm(); controller.requestDelete(); controller.requestSave(); controller.closeEditor(); controller.refresh() }; ready(controller)
+            assertTrue(controller.state.value.unknown); assertEquals(1L, controller.state.value.draft!!.id)
+            assertEquals(1, authority.writes); assertEquals(1, callbacks)
+        } finally { scope.cancel() }
+    }
+
     @Test fun acceptedOwnWriteCannotDeliverLateFollowUpReadToAnotherAccount(): Unit = runBlocking {
         val old = AdminUsersAuthority(); val oldContext = old.context("accepted-old")
         val next = AdminUsersAuthority(); next.users[1]!!.put("username", "next-operator")

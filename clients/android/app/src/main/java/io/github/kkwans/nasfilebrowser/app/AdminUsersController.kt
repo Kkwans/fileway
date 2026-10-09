@@ -155,9 +155,11 @@ class AdminUsersController(private val scope: CoroutineScope, private val isCurr
                 accepted = true
                 if (!current(context, epoch)) return@launch
                 if (action == "delete" && draft.id == context.account.userId) {
+                    onOwnAccountDeleted(context)
+                    if (!current(context, epoch)) return@launch
                     mutable.value = mutable.value.copy(saving = false, confirmation = null, currentPassword = "", draft = null,
                         authorized = false, notice = "当前账号已删除，需要重新连接")
-                    onOwnAccountDeleted(context); return@launch
+                    return@launch
                 }
                 if (action != "delete" && !draft.creating && draft.id == context.account.userId) {
                     val fresh = ManagedUser.from(context.api.request("GET", "/api/users/${draft.id}"))
