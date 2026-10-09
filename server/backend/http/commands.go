@@ -2,6 +2,7 @@ package fbhttp
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -39,6 +40,16 @@ func wsErr(ws *websocket.Conn, r *http.Request, status int, err error) {
 }
 
 var commandsHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+	if !d.Check(r.URL.Path) {
+		return http.StatusForbidden, fmt.Errorf("没有访问工作目录的权限")
+	}
+	info, err := d.user.Fs.Stat(r.URL.Path)
+	if err != nil {
+		return errToStatus(err), err
+	}
+	if !info.IsDir() {
+		return http.StatusBadRequest, fmt.Errorf("工作目录不是文件夹")
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return http.StatusInternalServerError, err
