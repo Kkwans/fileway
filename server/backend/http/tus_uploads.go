@@ -219,6 +219,9 @@ func tusExpire(d *data, row *uploads.Session) error {
 	return uploads.ErrExpired
 }
 func tusPublish(d *data, row *uploads.Session) error {
+	if err := tusWritePermission(d, row); err != nil {
+		return err
+	}
 	if row.Offset != row.Length {
 		return uploads.ErrConflict
 	}
@@ -264,6 +267,16 @@ func tusPublish(d *data, row *uploads.Session) error {
 	row.Modified = info.ModTime().UnixNano()
 	row.Identity = files.FileIdentity(d.user.Fs, target)
 	return d.store.Uploads.Save(row)
+}
+
+func tusWritePermission(d *data, row *uploads.Session) error {
+	if !d.user.Perm.Create {
+		return fmt.Errorf("%w: 没有上传权限，已保存的片段保留", os.ErrPermission)
+	}
+	if row.Overwrite && !d.user.Perm.Modify {
+		return fmt.Errorf("%w: 没有覆盖权限，原文件和已保存的片段保留", os.ErrPermission)
+	}
+	return nil
 }
 
 // The existing server owns lifecycle and shutdown; no independent daemon or

@@ -99,6 +99,86 @@ func ownedTusRow(t *testing.T, h *trashHTTPHarness, target, id string) *uploads.
 	return row
 }
 
+func TestTusRechecksOverwritePermissionWhenResumingAndPublishing(t *testing.T) {
+	for _, method := range []string{"POST", "PATCH", "HEAD"} {
+		t.Run(method, func(t *testing.T) {
+			h := nativeTusHarness(t)
+			const target, id = "/owned.bin", "overwrite-revoked"
+			if err := afero.WriteFile(h.fs[1], target, []byte("old"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			expectTus(t, tusRequest(t, h, 1, "POST", target+"?override=true", id, 4, 0, nil), 201)
+			expectTus(t, tusRequest(t, h, 1, "PATCH", target, id, 4, 0, []byte("ab")), 204)
+			row := ownedTusRow(t, h, target, id)
+			part := mustUploadPath(row.PartWire)
+			if method == "HEAD" {
+				// Model a durable final chunk before a process stopped prior to
+				// publication. HEAD must apply the current account permissions too.
+				if err := afero.WriteFile(h.fs[1], part, []byte("abcd"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				info, err := h.fs[1].Stat(part)
+				if err != nil {
+					t.Fatal(err)
+				}
+				row.Offset, row.Modified = 4, info.ModTime().UnixNano()
+				if err := h.storage.Uploads.Save(row); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := afero.ReadFile(h.fs[1], part)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := h.users[1]
+			owner.Perm.Modify = false
+			if err := h.storage.Users.Update(owner, "Perm"); err != nil {
+				t.Fatal(err)
+			}
+			body := []byte(nil)
+			if method == "PATCH" {
+				body = []byte("cd")
+			}
+			expectTus(t, tusRequest(t, h, 1, method, target, id, 4, row.Offset, body), 403)
+			original, err := afero.ReadFile(h.fs[1], target)
+			if err != nil || string(original) != "old" {
+				t.Fatalf("revoked overwrite changed original: %q %v", original, err)
+			}
+			after, err := afero.ReadFile(h.fs[1], part)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("denied request changed retained progress: %q %v", after, err)
+			}
+			owner.Perm.Modify = true
+			if err := h.storage.Users.Update(owner, "Perm"); err != nil {
+				t.Fatal(err)
+			}
+			if method != "HEAD" {
+				expectTus(t, tusRequest(t, h, 1, "PATCH", target, id, 4, 2, []byte("cd")), 204)
+			}
+			expectTus(t, tusRequest(t, h, 1, "HEAD", target, id, 4, 0, nil), 200)
+			complete, err := afero.ReadFile(h.fs[1], target)
+			if err != nil || string(complete) != "abcd" {
+				t.Fatalf("restored permission did not resume retained upload: %q %v", complete, err)
+			}
+		})
+	}
+}
+
+func TestTusCreateOnlyPermissionStillAllowsNewFiles(t *testing.T) {
+	h := nativeTusHarness(t)
+	owner := h.users[1]
+	owner.Perm.Modify = false
+	if err := h.storage.Users.Update(owner, "Perm"); err != nil {
+		t.Fatal(err)
+	}
+	expectTus(t, tusRequest(t, h, 1, "POST", "/new.bin", "create-only", 4, 0, nil), 201)
+	expectTus(t, tusRequest(t, h, 1, "PATCH", "/new.bin", "create-only", 4, 0, []byte("abcd")), 204)
+	value, err := afero.ReadFile(h.fs[1], "/new.bin")
+	if err != nil || string(value) != "abcd" {
+		t.Fatalf("create-only new upload failed: %q %v", value, err)
+	}
+}
+
 func TestTusPrivatePartsRetainPauseAndBindAccountTargetLength(t *testing.T) {
 	h := nativeTusHarness(t)
 	target := "/目录 +% #/owned.bin"

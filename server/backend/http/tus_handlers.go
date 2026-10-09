@@ -53,6 +53,11 @@ func tusPostHandler(_ UploadCache) handleFunc {
 				return 409, fmt.Errorf("原上传的目标或长度已变化")
 			}
 			if old.State == uploads.Active || old.State == uploads.Completed {
+				if old.State == uploads.Active {
+					if err := tusWritePermission(d, old); err != nil {
+						return tusErrorStatus(err), err
+					}
+				}
 				if err := tusState(d, old); err != nil {
 					return tusErrorStatus(err), err
 				}
@@ -225,6 +230,11 @@ func tusPatchHandler(_ UploadCache) handleFunc {
 		if err != nil {
 			return status, err
 		}
+		if row.State == uploads.Active {
+			if err := tusWritePermission(d, row); err != nil {
+				return tusErrorStatus(err), err
+			}
+		}
 		if err := tusState(d, row); err != nil {
 			return tusErrorStatus(err), err
 		}
@@ -366,6 +376,9 @@ func tusFinish(d *data, row *uploads.Session, target string) {
 	recordHistory(d, "file.upload", target, "", history.StatusSuccess)
 }
 func tusErrorStatus(err error) int {
+	if errors.Is(err, os.ErrPermission) {
+		return http.StatusForbidden
+	}
 	if errors.Is(err, uploads.ErrConflict) || errors.Is(err, os.ErrExist) {
 		return 409
 	}
