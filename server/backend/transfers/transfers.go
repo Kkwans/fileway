@@ -324,6 +324,19 @@ func (storage *Storage) Update(item *Item) error {
 }
 
 func (storage *Storage) Progress(id string, userID uint, transferred int64) (*Item, error) {
+	return storage.progress(id, userID, -1, transferred)
+}
+
+// DownloadRange advances only a contiguous confirmed prefix. Fetching a tail
+// index or overlapping ranges must not fabricate bytes missing before it.
+func (storage *Storage) DownloadRange(id string, userID uint, start, count int64) (*Item, error) {
+	if start < 0 || count < 0 || start > (1<<63-1)-count {
+		return nil, ErrInvalid
+	}
+	return storage.progress(id, userID, start, count)
+}
+
+func (storage *Storage) progress(id string, userID uint, start, transferred int64) (*Item, error) {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
 	item, err := storage.back.GetByID(id)
@@ -332,6 +345,15 @@ func (storage *Storage) Progress(id string, userID uint, transferred int64) (*It
 	}
 	if item.UserID != userID {
 		return nil, ErrNotExist
+	}
+	if start >= 0 {
+		if item.Kind != KindDownload {
+			return nil, ErrInvalid
+		}
+		if start > item.BytesTransferred {
+			return item.Clone(), nil
+		}
+		transferred += start
 	}
 	if transferred < item.BytesTransferred {
 		transferred = item.BytesTransferred
@@ -351,6 +373,16 @@ func (storage *Storage) Progress(id string, userID uint, transferred int64) (*It
 }
 
 func (storage *Storage) SetStatus(id string, userID uint, status Status, message string) (*Item, error) {
+	return storage.setStatus(id, userID, status, message, false)
+}
+
+// Finish records a stream exit without letting a late callback undo a known
+// completion or cancellation. An explicit new request can start it again.
+func (storage *Storage) Finish(id string, userID uint, status Status, message string) (*Item, error) {
+	return storage.setStatus(id, userID, status, message, true)
+}
+
+func (storage *Storage) setStatus(id string, userID uint, status Status, message string, finishing bool) (*Item, error) {
 	if !validStatus(status) {
 		return nil, ErrInvalid
 	}
@@ -363,11 +395,17 @@ func (storage *Storage) SetStatus(id string, userID uint, status Status, message
 	if item.UserID != userID {
 		return nil, ErrNotExist
 	}
+	if finishing && (item.Status == StatusCompleted || item.Status == StatusCanceled) {
+		return item.Clone(), nil
+	}
 	item.Status = status
 	item.Error = message
 	now := time.Now().UnixMilli()
 	if status == StatusRunning && item.StartedAt == 0 {
 		item.StartedAt = now
+	}
+	if status == StatusRunning {
+		item.FinishedAt = 0
 	}
 	if status == StatusCompleted && item.BytesTotal > 0 {
 		item.BytesTransferred = item.BytesTotal

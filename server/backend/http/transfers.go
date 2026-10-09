@@ -1,18 +1,137 @@
 package fbhttp
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 
 	"github.com/Kkwans/nas-file-browser/backend/events"
+	"github.com/Kkwans/nas-file-browser/backend/storage"
 	"github.com/Kkwans/nas-file-browser/backend/transfers"
 )
+
+var errTransferCanceled = errors.New("传输已停止，未完成的上传片段保留")
+
+type transferStreamKey struct {
+	store *storage.Storage
+	owner uint
+	id    string
+}
+type transferStreamGroup struct {
+	canceled bool
+	streams  map[*http.Request]func()
+}
+
+var transferStreams = struct {
+	sync.Mutex
+	groups map[transferStreamKey]*transferStreamGroup
+}{groups: make(map[transferStreamKey]*transferStreamGroup)}
+
+// Only live, authenticated requests are cancellable here. TUS session deletion
+// remains the separate DELETE protocol; stopping a PATCH retains its part.
+func withTransferCancellation(fn handleFunc, kind transfers.Kind) handleFunc {
+	return withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		id := strings.TrimSpace(r.URL.Query().Get("transfer"))
+		if kind == transfers.KindUpload {
+			header := strings.TrimSpace(r.Header.Get("X-Transfer-ID"))
+			if id != "" && header != "" && id != header {
+				return http.StatusConflict, fmt.Errorf("传输标识不一致")
+			}
+			if header != "" {
+				id = header
+			}
+		}
+		if id == "" || d.store.Transfers == nil {
+			return fn(w, r, d)
+		}
+		if item, lookupErr := d.store.Transfers.Get(d.user.ID, id, false); lookupErr == nil && (item.Kind != kind || item.Target != r.URL.Path) {
+			return fn(w, r, d) // A reused tracking ID grants no control over another resource.
+		}
+		ctx, cancel := context.WithCancelCause(r.Context())
+		defer cancel(nil)
+		r = r.WithContext(ctx)
+		if kind == transfers.KindUpload {
+			r.Body = &transferRequestBody{ReadCloser: r.Body, ctx: ctx, start: func() {
+				if item, err := d.store.Transfers.Get(d.user.ID, id, false); err == nil && item.Kind == kind && item.Status != transfers.StatusCompleted {
+					_, _ = d.store.Transfers.SetStatus(id, d.user.ID, transfers.StatusRunning, "")
+				}
+			}}
+		}
+		key := transferStreamKey{d.store, d.user.ID, id}
+		transferStreams.Lock()
+		group := transferStreams.groups[key]
+		if group == nil {
+			group = &transferStreamGroup{streams: make(map[*http.Request]func())}
+			transferStreams.groups[key] = group
+		}
+		if group.canceled {
+			transferStreams.Unlock()
+			return http.StatusConflict, errTransferCanceled
+		}
+		group.streams[r] = func() {
+			cancel(errTransferCanceled)
+			controller := http.NewResponseController(w)
+			if kind == transfers.KindUpload {
+				_ = controller.SetReadDeadline(time.Now())
+				_ = r.Body.Close()
+			} else {
+				_ = controller.SetWriteDeadline(time.Now())
+			}
+		}
+		transferStreams.Unlock()
+		released := false
+		release := func() {
+			if released {
+				return
+			}
+			released = true
+			transferStreams.Lock()
+			delete(group.streams, r)
+			if len(group.streams) == 0 {
+				if group.canceled {
+					if item, finishErr := d.store.Transfers.Finish(id, d.user.ID, transfers.StatusCanceled, errTransferCanceled.Error()); finishErr == nil {
+						publishTransfer(item)
+					}
+				}
+				delete(transferStreams.groups, key)
+			}
+			transferStreams.Unlock()
+		}
+		defer release()
+		status, err := fn(w, r, d)
+		release()
+		return status, err
+	})
+}
+
+type transferRequestBody struct {
+	io.ReadCloser
+	ctx   context.Context
+	start func()
+	once  sync.Once
+}
+
+func (body *transferRequestBody) Read(data []byte) (int, error) {
+	if err := body.ctx.Err(); err != nil {
+		return 0, err
+	}
+	body.once.Do(body.start)
+	count, err := body.ReadCloser.Read(data)
+	if body.ctx.Err() != nil {
+		return count, body.ctx.Err()
+	}
+	return count, err
+}
 
 const (
 	defaultTransferPageSize = 10
@@ -144,12 +263,23 @@ var transferCancelHandler = withUser(func(w http.ResponseWriter, r *http.Request
 	if item.Status != transfers.StatusQueued && item.Status != transfers.StatusRunning {
 		return http.StatusConflict, fmt.Errorf("传输已结束，无法取消")
 	}
-	updated, err := d.store.Transfers.SetStatus(item.ID, item.UserID, transfers.StatusCanceled, "")
-	if err != nil {
-		return http.StatusInternalServerError, err
+	key := transferStreamKey{d.store, item.UserID, item.ID}
+	transferStreams.Lock()
+	group := transferStreams.groups[key]
+	if group == nil || len(group.streams) == 0 {
+		transferStreams.Unlock()
+		return http.StatusConflict, fmt.Errorf("当前没有可停止的运行流；未改变记录或删除上传片段，请使用原上传的取消清理操作")
 	}
-	publishTransfer(updated)
-	return renderJSONStatus(w, updated, http.StatusAccepted)
+	group.canceled = true
+	stops := make([]func(), 0, len(group.streams))
+	for _, stop := range group.streams {
+		stops = append(stops, stop)
+	}
+	transferStreams.Unlock()
+	for _, stop := range stops {
+		stop()
+	}
+	return renderJSONStatus(w, item, http.StatusAccepted)
 })
 
 var transferDeleteHandler = withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {

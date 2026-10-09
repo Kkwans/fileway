@@ -16,6 +16,50 @@ func newMemoryBackend() *memoryBackend {
 	return &memoryBackend{items: make(map[string]*Item)}
 }
 
+func TestLateStreamFinishCannotUndoTerminalStateAndExplicitResumeWorks(t *testing.T) {
+	store := NewStorage(newMemoryBackend())
+	for _, terminal := range []Status{StatusCanceled, StatusCompleted} {
+		item, err := store.New(1, KindDownload, "owned.bin", "/owned.bin", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.SetStatus(item.ID, 1, terminal, ""); err != nil {
+			t.Fatal(err)
+		}
+		for _, late := range []Status{StatusInterrupted, StatusFailed, StatusCompleted, StatusCanceled} {
+			latest, err := store.Finish(item.ID, 1, late, "late callback")
+			if err != nil || latest.Status != terminal {
+				t.Fatal("late callback undid terminal state", latest, err)
+			}
+		}
+		latest, err := store.SetStatus(item.ID, 1, StatusRunning, "")
+		if err != nil || latest.Status != StatusRunning || latest.FinishedAt != 0 {
+			t.Fatal("explicit resume retained terminal marker", latest, err)
+		}
+		latest, err = store.Finish(item.ID, 1, StatusCompleted, "")
+		if err != nil || latest.Status != StatusCompleted {
+			t.Fatal("resumed request could not complete", latest, err)
+		}
+	}
+}
+
+func TestDownloadRangesRequireActualContiguousCoverage(t *testing.T) {
+	store := NewStorage(newMemoryBackend())
+	item, err := store.New(1, KindDownload, "owned.bin", "/owned.bin", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range []struct{ start, count, prefix int64 }{{5, 5, 0}, {0, 4, 4}, {1, 2, 4}, {4, 6, 10}} {
+		latest, err := store.DownloadRange(item.ID, 1, span.start, span.count)
+		if err != nil || latest.BytesTransferred != span.prefix {
+			t.Fatal("unconfirmed bytes counted", span, latest, err)
+		}
+	}
+	if _, err := store.DownloadRange(item.ID, 2, 0, 10); !errors.Is(err, ErrNotExist) {
+		t.Fatal("another owner altered progress", err)
+	}
+}
+
 func (backend *memoryBackend) GetAll() ([]*Item, error) {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Kkwans/nas-file-browser/backend/transfers"
@@ -128,5 +129,49 @@ func TestUploadBatchMetadataIsStored(t *testing.T) {
 	}
 	if item.BatchID != "folder-1" || item.BatchName != "测试文件夹" || item.BatchItems != 4 || item.BatchBytes != 1234 || !item.IsFolderUpload {
 		t.Fatalf("metadata = %#v", item)
+	}
+}
+
+func TestCancelTransferWithoutRunningInstanceDoesNotForgeCanceledState(t *testing.T) {
+	h := newTrashHTTPHarness(t, users.User{ID: 1, Username: "owner"})
+	item, err := h.storage.Transfers.New(1, transfers.KindUpload, "part.bin", "/part.bin", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := h.request(t, 1, transferCancelHandler, http.MethodPost, "/cancel", nil, map[string]string{"id": item.ID})
+	if response.Code != http.StatusConflict {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	latest, err := h.storage.Transfers.Get(1, item.ID, false)
+	if err != nil || latest.Status != transfers.StatusQueued || latest.FinishedAt != 0 {
+		t.Fatal("idle transfer was falsely canceled", latest, err)
+	}
+}
+
+func TestRejectedTusResumeDoesNotReactivateCanceledTransfer(t *testing.T) {
+	h := nativeTusHarness(t)
+	const id, target = "owned-rejected-resume", "/resume.bin"
+	expectTus(t, tusRequest(t, h, 1, http.MethodPost, target, id, 8, 0, nil), 201)
+	if _, err := h.storage.Transfers.SetStatus(id, 1, transfers.StatusCanceled, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	owner := h.users[1]
+	owner.Perm.Create = false
+	if err := h.storage.Users.Update(owner, "Perm"); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPatch, target+"?transfer="+id, strings.NewReader("abcd"))
+	r.Header.Set("X-Auth", signedTrashHTTPToken(t, 1))
+	r.Header.Set("Tus-Resumable", "1.0.0")
+	r.Header.Set("Content-Type", "application/offset+octet-stream")
+	r.Header.Set("Upload-Offset", "0")
+	w := httptest.NewRecorder()
+	handle(withTransferCancellation(tusPatchHandler(nil), transfers.KindUpload), "", h.storage, h.server).ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	item, err := h.storage.Transfers.Get(1, id, false)
+	if err != nil || item.Status != transfers.StatusCanceled || item.BytesTransferred != 0 {
+		t.Fatal("rejected resume changed transfer", item, err)
 	}
 }

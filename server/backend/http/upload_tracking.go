@@ -1,6 +1,8 @@
 package fbhttp
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -119,7 +121,9 @@ func (tracker *uploadTracker) finish(status int, responseErr error) {
 	}
 	final := transfers.StatusCompleted
 	message := ""
-	if tracker.request != nil && tracker.request.Context().Err() != nil {
+	if tracker.request != nil && errors.Is(context.Cause(tracker.request.Context()), errTransferCanceled) {
+		return // The owning wrapper confirms cancellation after releasing its slot.
+	} else if tracker.request != nil && tracker.request.Context().Err() != nil {
 		final = transfers.StatusInterrupted
 		message = tracker.request.Context().Err().Error()
 	} else if responseErr != nil || status >= http.StatusBadRequest {
@@ -130,7 +134,7 @@ func (tracker *uploadTracker) finish(status int, responseErr error) {
 			message = http.StatusText(status)
 		}
 	}
-	updated, err := tracker.data.store.Transfers.SetStatus(tracker.item.ID, tracker.data.user.ID, final, message)
+	updated, err := tracker.data.store.Transfers.Finish(tracker.item.ID, tracker.data.user.ID, final, message)
 	if err == nil {
 		events.Default.PublishForUser(updated.UserID, "transfer.changed", updated)
 	}
