@@ -134,6 +134,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         onOpened = { bound, file -> if (context === bound) recentAccess.record(file) },
         onTaskAccepted = { bound, _ -> if (context === bound) tasks.refresh() })
     val serverSettings = ServerSettingsController(viewModelScope) { context === it && generation == it.generation }
+    val shell = ShellController(viewModelScope) { context === it && generation == it.generation }
     val documentEdits = DocumentEditController(application, viewModelScope, { context === it && generation == it.generation },
         onSaved = { bound, _ -> if (context === bound) { documents.retry(); transferRefreshPending = true; refreshTransferDirectoryIfVisible() } },
         onCreated = { bound, _ -> if (context === bound) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
@@ -275,6 +276,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 documents.bind(bound)
                 archives.bind(bound)
                 serverSettings.bind(bound)
+                shell.bind(bound)
                 documentEdits.bind(bound)
                 accountSettings.bind(bound)
                 adminUsers.bind(bound)
@@ -360,6 +362,10 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         val operations = fileOperations.state.value
         if (operations.changing || operations.creation != null || operations.transfer != null || operations.batchRename != null) return
         documentEdits.startCreate(DirectoryCrumb("当前目录", mutable.value.path, mutable.value.wirePath), sourceScope)
+    }
+    fun openShell() {
+        val bound = context ?: return
+        shell.open(DirectoryCrumb("当前目录", mutable.value.path, mutable.value.wirePath), bound.api.id)
     }
     fun verifyDocumentDirectory(parent: DirectoryCrumb) { tab("files"); browse(parent.path, parent.wirePath ?: SearchResult.encodePath(parent.path)) }
     fun openRemotePath(path: String) = openRemotePathWithWire(path, "")
@@ -750,6 +756,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     }
     fun back(): Boolean {
         if (documents.state.value.file != null) { documents.close(); return true }
+        if (shell.state.value.open) { shell.close(); return true }
         if (archives.state.value.file != null) { archives.close(); return true }
         if (mutable.value.image != null) { closeImage(); return true }
         if (mutable.value.selected != null) { leavePlayer(); return true }
@@ -1062,6 +1069,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         documents.bind(null)
         archives.bind(null)
         serverSettings.bind(null)
+        shell.bind(null)
         documentEdits.bind(null)
         accountSettings.bind(null)
         adminUsers.bind(null)

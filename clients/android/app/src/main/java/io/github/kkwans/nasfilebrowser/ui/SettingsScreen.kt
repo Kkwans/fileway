@@ -112,6 +112,7 @@ import kotlinx.coroutines.launch
                         SettingsAction("账户设置", "共享偏好与修改密码", R.drawable.ic_person) { model.tab("account") }
                         if (state.permissions.admin) SettingsAction("用户管理", "账号、权限与访问规则", R.drawable.ic_person) { model.tab("admin-users") }
                         if (state.permissions.admin) SettingsAction("服务器设置", "全局配置与默认账户策略", R.drawable.ic_storage) { model.tab("server-settings") }
+                        if (state.permissions.execute) SettingsAction("服务器命令", "在当前目录执行允许的单条命令", R.drawable.ic_storage, action = model::openShell)
                     }
                 }
                 item {

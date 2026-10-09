@@ -43,6 +43,7 @@ import java.util.Locale
     val document by model.documents.state.collectAsStateWithLifecycle()
     val documentEdit by model.documentEdits.state.collectAsStateWithLifecycle()
     val archive by model.archives.state.collectAsStateWithLifecycle()
+    val shell by model.shell.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     // Local queue filters/scroll survive connecting or changing the server.
     val localTaskState = rememberSaveableStateHolder()
@@ -102,6 +103,7 @@ import java.util.Locale
     if (state.tab == "server-settings" && state.connected) { LibraryTheme {
         ServerSettingsScreen(model.serverSettings, { model.tab("settings") }, model::disconnect)
     }; return }
+    if (shell.open && state.connected) { LibraryTheme { ShellScreen(model.shell, {}) }; return }
     if (state.tab == "updates") { LibraryTheme { AppUpdatesScreen(model) }; return }
     val taskGroup = TaskCenterSection.forRoute(state.tab)
     if (taskGroup != null) {
