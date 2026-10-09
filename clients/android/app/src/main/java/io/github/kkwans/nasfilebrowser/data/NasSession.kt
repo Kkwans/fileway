@@ -34,6 +34,8 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
         token
     }
     suspend fun permissions(): ServerPermissions = parseIdentity(token()).permissions
+    fun command(path: String, wirePath: String, command: String): Flow<ShellOutput> =
+        shellCommandFlow(path, wirePath, command, identity = { token(); Unit }) { request -> native(request.put("session", id)) }
     suspend fun accountProfile(): AccountProfile = AccountProfile.from(request("GET", "/api/users/${identity.id}")).also {
         check(it.id == identity.id) { "服务器返回了其他账号的资料" }
     }
@@ -169,7 +171,7 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
                 return AccountIdentity(id, name, payload.optJSONObject("instance")?.optString("hostname").orEmpty(),
                     ServerPermissions(perm != null, perm?.optBoolean("admin") == true, perm?.optBoolean("create") == true,
                         perm?.optBoolean("delete") == true, perm?.optBoolean("modify") == true, perm?.optBoolean("download") == true,
-                        perm?.optBoolean("rename") == true))
+                        perm?.optBoolean("rename") == true, perm?.optBoolean("execute") == true))
             } catch (_: Exception) { error("服务器返回了不支持的账号格式") }
         }
         suspend fun login(profile: ServerProfile, username: String, password: String,

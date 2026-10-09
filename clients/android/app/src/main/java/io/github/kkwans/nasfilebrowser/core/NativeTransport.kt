@@ -41,6 +41,7 @@ object NativeTransport {
                         "open" -> JSONObject().put("op", "close_session").put("session", result)
                         "lease", "asset", "preview", "upload_lease" -> JSONObject().put("op", "revoke").put("url", result)
                         "search_start" -> JSONObject().put("op", "search_cancel").put("session", request.optString("session")).put("search", result)
+                        "command_start" -> JSONObject().put("op", "command_cancel").put("session", request.optString("session")).put("commandHandle", result)
                         else -> null
                     }
                     cleanup?.let { nativeCall(it.toString().toByteArray(Charsets.UTF_8)) }

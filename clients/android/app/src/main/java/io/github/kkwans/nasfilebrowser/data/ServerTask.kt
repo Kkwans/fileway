@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class ServerPermissions(val known: Boolean = false, val admin: Boolean = false, val create: Boolean = false,
-    val delete: Boolean = false, val modify: Boolean = false, val download: Boolean = false, val rename: Boolean = false)
+    val delete: Boolean = false, val modify: Boolean = false, val download: Boolean = false, val rename: Boolean = false, val execute: Boolean = false)
 
 val SERVER_TASK_TYPES = linkedMapOf("file.copy" to "复制文件", "file.move" to "移动文件", "file.delete.permanent" to "永久删除文件",
     "trash.delete.permanent" to "删除回收站项目", "trash.clear" to "清空回收站", "trash.size" to "统计回收站大小",
