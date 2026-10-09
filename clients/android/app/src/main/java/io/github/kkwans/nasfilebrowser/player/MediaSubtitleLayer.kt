@@ -34,7 +34,7 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
     private val tracks = mutableMapOf<String, AssTrack>()
     private val headers = mutableMapOf<String, List<ByteArray>>()
     private val cues = mutableMapOf<String, MutableList<CuesWithTiming>>()
-    private class PgsPacket(val timeUs: Long, val bytes: ByteArray)
+    private class PgsPacket(val timeUs: Long, val bytes: ByteArray = byteArrayOf(), val external: ExternalPgs.DisplaySet? = null)
     private val pgs = mutableMapOf<String, java.util.TreeMap<Long, PgsPacket>>()
     private val cueDecoder = CueDecoder()
     private var lastPgsPacket: PgsPacket? = null
@@ -116,6 +116,7 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
                         value.startTimeUs <= atUs && (if (value.durationUs == C.TIME_UNSET) value === indefinite else atUs < value.endTimeUs), value))
                 }
                 for ((id, values) in pgs) {
+                    if (id.startsWith("external:")) continue
                     // Empty packets are display sets too: retaining the floor
                     // event prevents an earlier caption surviving its clear.
                     val floor = values.floorKey(atUs)
@@ -137,6 +138,16 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         post { if (!closed.get()) ready() }
     }
     fun externalText(id: String, values: List<CuesWithTiming>, ready: () -> Unit) = externalTexts(mapOf(id to values), ready)
+    fun externalPgs(id: String, values: List<ExternalPgs.DisplaySet>, ready: () -> Unit) = submit {
+        val size = ExternalPgs.encodedBytes(values)
+        check(size <= 32L * 1024 * 1024 && values.size <= 20_000)
+        check(cueBytes + size <= 32L * 1024 * 1024 && cueCount() + values.size <= 20_000)
+        pgs[id] = java.util.TreeMap<Long, PgsPacket>().apply {
+            values.forEach { put(it.startTimeUs, PgsPacket(it.startTimeUs, external = it)) }
+        }
+        cueBytes += size
+        post { if (!closed.get()) ready() }
+    }
     fun externalTexts(values: Map<String, List<CuesWithTiming>>, ready: () -> Unit) = submit {
         val count = values.values.sumOf { it.size }
         val size = values.values.sumOf { items -> items.sumOf(::bytes) }
@@ -170,7 +181,8 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
                 // empty clear event. Only the selected display set is decoded.
                 val packet = if (at < 0) null else pgs[selectedText]?.floorEntry(at * 1000)?.value
                 if (packet !== lastPgsPacket) {
-                    decodedPgs = packet?.let { cueDecoder.decode(it.timeUs, it.bytes, 0, it.bytes.size) }
+                    decodedPgs = packet?.let { value -> value.external?.let(ExternalPgs::decode)
+                        ?: cueDecoder.decode(value.timeUs, value.bytes, 0, value.bytes.size) }
                     lastPgsPacket = packet
                 }
                 val text = decodedPgs?.takeIf { it.durationUs == C.TIME_UNSET || at * 1000 < it.endTimeUs }?.cues ?: ordinary

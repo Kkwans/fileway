@@ -8,33 +8,39 @@ import androidx.media3.extractor.text.CuesWithTiming
 import androidx.media3.extractor.text.SubtitleParser
 import androidx.media3.extractor.text.pgs.PgsParser
 import java.io.ByteArrayOutputStream
+import java.util.IdentityHashMap
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 /** SUP framing and display-set state only; Media3 still decodes PGS palettes/RLE. */
 @androidx.annotation.OptIn(UnstableApi::class)
 internal object ExternalPgs {
+    private const val MAX_BITMAP_BYTES = 32L * 1024 * 1024
+    internal class PictureData(val width: Int, val height: Int, val segments: List<ByteArray>)
+    internal class Crop(val x: Int, val y: Int, val width: Int, val height: Int)
+    internal class ObjectData(val picture: PictureData, val reference: ByteArray, val crop: Crop?)
+    internal class DisplaySet(val startTimeUs: Long, val header: ByteArray, val palette: ByteArray?, val objects: List<ObjectData>)
     private class Picture(val version: Int, val width: Int, val height: Int, val expected: Int) {
         val segments = mutableListOf<ByteArray>()
         var received = 0
         var complete = false
+        var snapshot: PictureData? = null
     }
     private fun u16(data: ByteArray, at: Int) = ((data[at].toInt() and 255) shl 8) or (data[at + 1].toInt() and 255)
     private fun u32(data: ByteArray, at: Int) = (0..3).fold(0L) { n, i -> (n shl 8) or (data[at + i].toLong() and 255) }
     private fun segment(type: Int, data: ByteArray): ByteArray = byteArrayOf(type.toByte(), (data.size shr 8).toByte(), data.size.toByte()) + data
 
-    suspend fun parse(data: ByteArray): List<CuesWithTiming> {
+    /** Validate the complete timeline, retaining shared compressed objects. */
+    suspend fun parse(data: ByteArray): List<DisplaySet> {
         require(data.size in 13..16 * 1024 * 1024) { "Invalid SUP size" }
         val pictures = mutableMapOf<Int, Picture>()
         val palettes = mutableMapOf<Int, MutableMap<Int, ByteArray>>()
-        val output = mutableListOf<CuesWithTiming>()
-        val decoder = PgsParser()
+        val output = mutableListOf<DisplaySet>()
         var presentation: ByteArray? = null
         var offset = 0
         var ptsUs = 0L
         var lastPts = -1L
         var wraps = 0L
-        var bitmapBytes = 0L
         while (offset < data.size) {
             currentCoroutineContext().ensureActive()
             require(data.size - offset >= 13 && data[offset] == 'P'.code.toByte() && data[offset + 1] == 'G'.code.toByte()) { "Invalid SUP header" }
@@ -83,7 +89,9 @@ internal object ExternalPgs {
                 0x80 -> {
                     require(size == 0)
                     val pcs = requireNotNull(presentation)
-                    val cues = mutableListOf<Cue>()
+                    val objects = mutableListOf<ObjectData>()
+                    var bitmapBytes = 0L
+                    var paletteData: ByteArray? = null
                     var at = 11
                     repeat(pcs[10].toInt() and 255) {
                         require(at + 8 <= pcs.size)
@@ -92,37 +100,32 @@ internal object ExternalPgs {
                         require(picture.complete)
                         val paletteId = pcs[9].toInt() and 255
                         val palette = requireNotNull(palettes[paletteId])
-                        val paletteData = ByteArrayOutputStream().apply {
+                        if (paletteData == null) paletteData = ByteArrayOutputStream().apply {
                             write(byteArrayOf(paletteId.toByte(), 0)); palette.toSortedMap().values.forEach { write(it) }
                         }.toByteArray()
-                        val header = pcs.copyOfRange(0, 11).apply { this[10] = 1 }
                         val cropped = ref[3].toInt() and 0x80 != 0
                         ref[3] = 0
-                        val packet = ByteArrayOutputStream().apply {
-                            write(segment(0x16, header + ref)); write(segment(0x14, paletteData))
-                            picture.segments.forEach { write(it) }; write(segment(0x80, byteArrayOf()))
-                        }.toByteArray()
-                        var cue: Cue? = null
-                        decoder.parse(packet, SubtitleParser.OutputOptions.allCues()) { cue = it.cues.singleOrNull() }
-                        var value = requireNotNull(cue) { "Invalid PGS bitmap" }
                         at += 8
-                        if (cropped) {
+                        val crop = if (cropped) {
                             require(at + 8 <= pcs.size)
                             val x = u16(pcs, at); val y = u16(pcs, at + 2)
                             val w = u16(pcs, at + 4); val h = u16(pcs, at + 6)
                             require(w > 0 && h > 0 && x + w <= picture.width && y + h <= picture.height)
-                            val original = requireNotNull(value.bitmap)
-                            value = value.buildUpon().setBitmap(Bitmap.createBitmap(original, x, y, w, h))
-                                .setSize(w.toFloat() / u16(pcs, 0)).setBitmapHeight(h.toFloat() / u16(pcs, 2)).build()
                             at += 8
-                        }
-                        bitmapBytes += requireNotNull(value.bitmap).byteCount
-                        require(bitmapBytes <= 32L * 1024 * 1024) { "SUP exceeds subtitle memory budget" }
-                        cues.add(value)
+                            Crop(x, y, w, h)
+                        } else null
+                        // Bound each visible display set and the transient full
+                        // object needed to decode a crop, rather than film length.
+                        val fullBytes = picture.width.toLong() * picture.height * 4
+                        val visibleBytes = crop?.let { it.width.toLong() * it.height * 4 } ?: fullBytes
+                        require(bitmapBytes + fullBytes + (if (crop != null) visibleBytes else 0) <= MAX_BITMAP_BYTES) { "SUP display set exceeds subtitle memory budget" }
+                        bitmapBytes += visibleBytes
+                        val image = picture.snapshot ?: PictureData(picture.width, picture.height, picture.segments.toList()).also { picture.snapshot = it }
+                        objects.add(ObjectData(image, ref, crop))
                     }
                     require(at == pcs.size)
                     if (output.lastOrNull()?.startTimeUs == ptsUs) output.removeAt(output.lastIndex)
-                    output.add(CuesWithTiming(cues, ptsUs, C.TIME_UNSET))
+                    output.add(DisplaySet(ptsUs, pcs.copyOfRange(0, 11).apply { this[10] = 1 }, paletteData, objects))
                     require(output.size <= 20_000)
                     presentation = null
                 }
@@ -133,5 +136,39 @@ internal object ExternalPgs {
         }
         require(presentation == null && output.isNotEmpty()) { "Incomplete SUP display set" }
         return output
+    }
+
+    /** Count shared object bytes once, including headers and palette snapshots. */
+    fun encodedBytes(values: List<DisplaySet>): Long {
+        val arrays = IdentityHashMap<ByteArray, Boolean>()
+        fun remember(bytes: ByteArray?) { if (bytes != null) arrays[bytes] = true }
+        values.forEach { value ->
+            remember(value.header); remember(value.palette)
+            value.objects.forEach { item -> remember(item.reference); item.picture.segments.forEach(::remember) }
+        }
+        return arrays.keys.sumOf { it.size.toLong() }
+    }
+
+    /** Only the current display set is expanded; Media3 owns palette/RLE decoding. */
+    fun decode(value: DisplaySet): CuesWithTiming {
+        val decoder = PgsParser()
+        val cues = value.objects.map { item ->
+            val packet = ByteArrayOutputStream().apply {
+                write(segment(0x16, value.header + item.reference)); write(segment(0x14, requireNotNull(value.palette)))
+                item.picture.segments.forEach { write(it) }; write(segment(0x80, byteArrayOf()))
+            }.toByteArray()
+            var decoded: Cue? = null
+            decoder.parse(packet, SubtitleParser.OutputOptions.allCues()) { decoded = it.cues.singleOrNull() }
+            val cue = requireNotNull(decoded) { "Invalid PGS bitmap" }
+            val crop = item.crop
+            if (crop == null) cue else {
+                val original = requireNotNull(cue.bitmap)
+                val image = Bitmap.createBitmap(original, crop.x, crop.y, crop.width, crop.height)
+                if (image !== original) original.recycle()
+                cue.buildUpon().setBitmap(image).setSize(crop.width.toFloat() / u16(value.header, 0))
+                    .setBitmapHeight(crop.height.toFloat() / u16(value.header, 2)).build()
+            }
+        }
+        return CuesWithTiming(cues, value.startTimeUs, C.TIME_UNSET)
     }
 }

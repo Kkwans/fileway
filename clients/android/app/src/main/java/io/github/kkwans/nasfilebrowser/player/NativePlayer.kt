@@ -512,10 +512,14 @@ class NativePlayer(context: Context) {
                     subtitle(id)
                 }
                 if (mime == MimeTypes.TEXT_SSA) currentLayer.externalAss("external:$id", bytes, ::ready)
+                else if (mime == MimeTypes.APPLICATION_PGS) {
+                    val values = withContext(Dispatchers.IO) { ExternalPgs.parse(bytes) }
+                    ensureActive()
+                    if (session.accepts(epoch) && externalRequest == request) currentLayer.externalPgs("external:$id", values, ::ready)
+                }
                 else {
                     val values = withContext(Dispatchers.IO) {
-                        if (mime == MimeTypes.APPLICATION_PGS) ExternalPgs.parse(bytes)
-                        else buildList {
+                        buildList {
                             val parser = DefaultSubtitleParserFactory().create(Format.Builder().setSampleMimeType(mime).build())
                             parser.parse(bytes, SubtitleParser.OutputOptions.allCues()) { add(it) }
                         }
