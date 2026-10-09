@@ -9,10 +9,13 @@ import (
 	"math"
 	"os"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 	"github.com/mholt/archives"
 	"github.com/spf13/afero"
 )
@@ -73,11 +76,12 @@ func (limits Limits) normalized() Limits {
 }
 
 type Entry struct {
-	Path     string `json:"path"`
-	Name     string `json:"name"`
-	IsDir    bool   `json:"isDir"`
-	Size     int64  `json:"size"`
-	Modified int64  `json:"modified"`
+	Path           string `json:"path"`
+	Name           string `json:"name"`
+	IsDir          bool   `json:"isDir"`
+	Size           int64  `json:"size"`
+	Modified       int64  `json:"modified"`
+	PathUnverified bool   `json:"-"`
 }
 
 type BlockedEntry struct {
@@ -99,6 +103,7 @@ type Listing struct {
 	MaxEntries      int            `json:"maxEntries"`
 	MaxFileBytes    int64          `json:"maxFileBytes"`
 	MaxExtractBytes int64          `json:"maxExtractBytes"`
+	PathUnverified  bool           `json:"-"`
 }
 
 type ExtractOptions struct {
@@ -121,20 +126,22 @@ type ExtractProgress struct {
 }
 
 type SkippedEntry struct {
-	Path   string `json:"path"`
-	Reason string `json:"reason"`
+	Path           string `json:"path"`
+	Reason         string `json:"reason"`
+	PathUnverified bool   `json:"-"`
 }
 
 type ExtractReport struct {
-	ArchivePath    string         `json:"archivePath"`
-	Destination    string         `json:"destination"`
-	Selected       []string       `json:"selected"`
-	ExtractedFiles int            `json:"extractedFiles"`
-	ExtractedDirs  int            `json:"extractedDirs"`
-	ExtractedBytes int64          `json:"extractedBytes"`
-	SkippedCount   int            `json:"skippedCount"`
-	Skipped        []SkippedEntry `json:"skipped,omitempty"`
-	CompletedAt    int64          `json:"completedAt"`
+	ArchivePath     string         `json:"archivePath"`
+	Destination     string         `json:"destination"`
+	Selected        []string       `json:"selected"`
+	ExtractedFiles  int            `json:"extractedFiles"`
+	ExtractedDirs   int            `json:"extractedDirs"`
+	ExtractedBytes  int64          `json:"extractedBytes"`
+	SkippedCount    int            `json:"skippedCount"`
+	Skipped         []SkippedEntry `json:"skipped,omitempty"`
+	CompletedAt     int64          `json:"completedAt"`
+	PathsUnverified bool           `json:"-"`
 }
 
 type openedArchive struct {
@@ -157,6 +164,10 @@ func List(ctx context.Context, filesystem afero.Fs, archivePath string, limits L
 		return nil, fmt.Errorf("文件系统不能为空")
 	}
 	limits = limits.normalized()
+	archivePath, err := NormalizeFilesystemPath(archivePath)
+	if err != nil {
+		return nil, err
+	}
 	opened, err := openArchive(ctx, filesystem, archivePath)
 	if err != nil {
 		return nil, err
@@ -256,9 +267,13 @@ func Extract(
 	if err != nil {
 		return nil, err
 	}
-	destination := cleanFilesystemPath(options.Destination)
-	if destination == "/" && options.Destination != "/" {
-		return nil, fmt.Errorf("解压目标路径无效")
+	destination, err := NormalizeFilesystemPath(options.Destination)
+	if err != nil {
+		return nil, err
+	}
+	options.ArchivePath, err = NormalizeFilesystemPath(options.ArchivePath)
+	if err != nil {
+		return nil, err
 	}
 	if options.Checker != nil && !options.Checker.Check(destination) {
 		return nil, fmt.Errorf("没有访问解压目标的权限")
@@ -381,7 +396,10 @@ func Extract(
 }
 
 func openArchive(ctx context.Context, filesystem afero.Fs, archivePath string) (*openedArchive, error) {
-	archivePath = cleanFilesystemPath(archivePath)
+	archivePath, err := NormalizeFilesystemPath(archivePath)
+	if err != nil {
+		return nil, err
+	}
 	info, err := filesystem.Stat(archivePath)
 	if err != nil {
 		return nil, err
@@ -424,28 +442,36 @@ func supportedFormatName(format archives.Format) (string, bool) {
 	}
 }
 
-func cleanFilesystemPath(value string) string {
-	return path.Clean("/" + strings.TrimSpace(strings.ReplaceAll(value, "\\", "/")))
+func NormalizeFilesystemPath(value string) (string, error) {
+	if value == "" || strings.ContainsRune(value, '\x00') || runtime.GOOS == "windows" &&
+		(!utf8.ValidString(value) || strings.ContainsRune(value, '\\')) {
+		return "", fmt.Errorf("%w: 文件系统路径无效", ErrUnsafeEntry)
+	}
+	return pathmeta.Clean(value), nil
 }
 
 func cleanEntryPath(value string) (string, error) {
 	if value == "" || strings.ContainsRune(value, '\x00') {
 		return "", ErrUnsafeEntry
 	}
-	normalized := strings.ReplaceAll(value, "\\", "/")
-	if strings.HasPrefix(normalized, "/") {
+	if runtime.GOOS == "windows" && (!utf8.ValidString(value) || strings.ContainsRune(value, '\\')) {
 		return "", ErrUnsafeEntry
 	}
-	for _, segment := range strings.Split(normalized, "/") {
+	// Inspect Windows-style traversal without converting a legal Linux filename.
+	portable := strings.ReplaceAll(value, "\\", "/")
+	if strings.HasPrefix(portable, "/") {
+		return "", ErrUnsafeEntry
+	}
+	for _, segment := range strings.Split(portable, "/") {
 		if segment == ".." {
 			return "", ErrUnsafeEntry
 		}
 	}
-	cleaned := path.Clean(normalized)
+	cleaned := path.Clean(value)
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", ErrUnsafeEntry
 	}
-	first := strings.SplitN(cleaned, "/", 2)[0]
+	first := strings.SplitN(portable, "/", 2)[0]
 	if strings.Contains(first, ":") {
 		return "", ErrUnsafeEntry
 	}
