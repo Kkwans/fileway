@@ -4,12 +4,124 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/recent"
 	"github.com/Kkwans/nas-file-browser/backend/users"
 )
+
+func TestRecentHTTPPreservesOpaquePathsAndDoesNotMergeDisplayNameSiblings(t *testing.T) {
+	h := newTrashHTTPHarness(t, users.User{Username: "owner"}, users.User{Username: "other"})
+	owner := trashHTTPUserByName(t, h, "owner")
+	other := trashHTTPUserByName(t, h, "other")
+	paths := []string{"/\xd6\xd0\xce\xc4", "/中文", "/100% +?#", "/a%2Fb"}
+	expectedPaths := make([]string, 0, len(paths))
+	for index, resourcePath := range paths {
+		if index < 2 {
+			if err := h.fs[owner.ID].MkdirAll(resourcePath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			file, err := h.fs[owner.ID].Create(resourcePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		body, _ := json.Marshal(map[string]string{"wirePath": files.EncodeWirePath(resourcePath)})
+		response := h.request(t, owner.ID, recentRecordHandler, http.MethodPost, "/recent", bytes.NewReader(body), nil)
+		if runtime.GOOS == "windows" && !utf8.ValidString(resourcePath) {
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("Windows must reject lossy UTF-16 path %q: status=%d body=%s", resourcePath, response.Code, response.Body.String())
+			}
+			entries, err := h.storage.Recent.List(owner.ID, 100)
+			if err != nil || len(entries) != len(expectedPaths) {
+				t.Fatalf("rejected Windows path changed recent history: %#v %v", entries, err)
+			}
+			continue
+		}
+		if response.Code != http.StatusOK {
+			t.Fatalf("record %q status = %d body=%s", resourcePath, response.Code, response.Body.String())
+		}
+		var row struct {
+			Path     string `json:"path"`
+			WirePath string `json:"wirePath"`
+			IsDir    bool   `json:"isDir"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Path != files.DisplayPath(resourcePath) || row.WirePath != files.EncodeWirePath(resourcePath) || row.IsDir != (index < 2) {
+			t.Fatalf("path identity lost for %q: %#v", resourcePath, row)
+		}
+		expectedPaths = append(expectedPaths, resourcePath)
+	}
+	stored, err := h.storage.Recent.List(owner.ID, 100)
+	if err != nil || len(stored) != len(expectedPaths) {
+		t.Fatalf("stored entries = %#v, %v", stored, err)
+	}
+	for _, expected := range expectedPaths {
+		found := false
+		for _, row := range stored {
+			if row.Path == expected {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("raw bytes absent for %q", expected)
+		}
+	}
+	response := h.request(t, owner.ID, recentListHandler, http.MethodGet, "/recent", nil, nil)
+	var rows []struct {
+		WirePath   string `json:"wirePath"`
+		AccessedAt int64  `json:"accessedAt"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &rows) != nil || len(rows) != len(expectedPaths) {
+		t.Fatalf("list status = %d body=%s", response.Code, response.Body.String())
+	}
+	for index := 1; index < len(rows); index++ {
+		if rows[index-1].AccessedAt < rows[index].AccessedAt {
+			t.Fatal("list is not ordered by server access time")
+		}
+	}
+	response = h.request(t, other.ID, recentListHandler, http.MethodGet, "/recent", nil, nil)
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != "[]" {
+		t.Fatalf("recent leaked across accounts: %s", response.Body.String())
+	}
+}
+
+func TestRecentHTTPRejectsConflictingAndMalformedWirePathsBeforeRecording(t *testing.T) {
+	h := newTrashHTTPHarness(t, users.User{Username: "owner"})
+	owner := firstTrashHTTPUser(h)
+	if err := h.fs[owner.ID].MkdirAll("/existing", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"path":"/other","wirePath":"/existing"}`,
+		`{"wirePath":"/bad%"}`, `{"wirePath":"/a%2Fb"}`, `{"wirePath":"/bad%00"}`,
+		`{"wirePath":"//host/existing"}`, `{"wirePath":"/existing?query"}`,
+	} {
+		response := h.request(t, owner.ID, recentRecordHandler, http.MethodPost, "/recent", strings.NewReader(body), nil)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, response.Code)
+		}
+	}
+	entries, err := h.storage.Recent.List(owner.ID, 100)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid requests recorded entries: %#v %v", entries, err)
+	}
+	// Supplying both matching fields remains compatible with Web and old clients.
+	response := h.request(t, owner.ID, recentRecordHandler, http.MethodPost, "/recent", strings.NewReader(`{"path":"/existing","wirePath":"/existing"}`), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("matching fields status=%d body=%s", response.Code, response.Body.String())
+	}
+}
 
 func TestRecentHTTPRecordsExistingPathsAndStaysPrivate(t *testing.T) {
 	h := newTrashHTTPHarness(t,

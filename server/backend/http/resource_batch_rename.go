@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/spf13/afero"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/history"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 )
@@ -28,8 +30,10 @@ type batchRenameRequest struct {
 }
 
 type batchRenameRequestItem struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From         string `json:"from"`
+	To           string `json:"to"`
+	FromWirePath string `json:"fromWirePath,omitempty"`
+	ToWirePath   string `json:"toWirePath,omitempty"`
 }
 
 type batchRenameResponse struct {
@@ -40,10 +44,41 @@ type batchRenameResponse struct {
 }
 
 type batchRenameResponseItem struct {
+	// Keep raw filesystem bytes for execution/history. JSON alone presents
+	// safe Unicode plus authoritative wire paths below.
 	From   string `json:"from"`
 	To     string `json:"to"`
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
+}
+
+func (item batchRenameResponseItem) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		From         string `json:"from"`
+		To           string `json:"to"`
+		FromWirePath string `json:"fromWirePath"`
+		ToWirePath   string `json:"toWirePath"`
+		Status       string `json:"status"`
+		Error        string `json:"error,omitempty"`
+	}{From: files.DisplayPath(item.From), To: files.DisplayPath(item.To), FromWirePath: files.EncodeWirePath(item.From),
+		ToWirePath: files.EncodeWirePath(item.To), Status: item.Status, Error: item.Error})
+}
+
+func batchRenamePath(display, wire string) (string, error) {
+	if strings.ContainsRune(display, '\x00') {
+		return "", fmt.Errorf("路径不能包含空字节")
+	}
+	if wire == "" {
+		return pathmeta.Clean(display), nil
+	}
+	raw, err := decodeResourceWirePath(wire)
+	if err != nil {
+		return "", err
+	}
+	if display != "" && pathmeta.Clean(display) != files.DisplayPath(raw) {
+		return raw, fmt.Errorf("显示路径与原始路径不一致")
+	}
+	return raw, nil
 }
 
 type plannedBatchRename struct {
@@ -115,8 +150,8 @@ func planBatchRename(d *data, requested []batchRenameRequestItem) (batchRenameRe
 	commonDirectory := ""
 
 	for index, item := range requested {
-		from := pathmeta.Clean(item.From)
-		to := pathmeta.Clean(item.To)
+		from, fromError := batchRenamePath(item.From, item.FromWirePath)
+		to, toError := batchRenamePath(item.To, item.ToWirePath)
 		plan[index] = plannedBatchRename{From: from, To: to}
 		response.Items[index] = batchRenameResponseItem{From: from, To: to, Status: "ready"}
 		setError := func(message string) {
@@ -125,7 +160,11 @@ func planBatchRename(d *data, requested []batchRenameRequestItem) (batchRenameRe
 			response.Items[index].Error = message
 		}
 
-		if item.From == "" || item.To == "" || from == "/" || to == "/" {
+		if fromError != nil || toError != nil {
+			setError("原始路径无效或与显示路径不一致")
+			continue
+		}
+		if (item.From == "" && item.FromWirePath == "") || (item.To == "" && item.ToWirePath == "") || from == "/" || to == "/" {
 			setError("源名称和目标名称不能为空或根目录")
 			continue
 		}
@@ -149,13 +188,13 @@ func planBatchRename(d *data, requested []batchRenameRequestItem) (batchRenameRe
 		if !d.Check(from) || !d.Check(to) {
 			setError("没有访问源路径或目标路径的权限")
 		}
-		if previous, exists := sources[from]; exists {
+		if previous, exists := batchRenamePathIndex(sources, from); exists {
 			setError(fmt.Sprintf("源项目与第 %d 项重复", previous+1))
 			markBatchRenameError(&response, previous, fmt.Sprintf("源项目与第 %d 项重复", index+1))
 		} else {
 			sources[from] = index
 		}
-		if previous, exists := destinations[to]; exists {
+		if previous, exists := batchRenamePathIndex(destinations, to); exists {
 			setError(fmt.Sprintf("目标名称与第 %d 项重复", previous+1))
 			markBatchRenameError(&response, previous, fmt.Sprintf("目标名称与第 %d 项重复", index+1))
 		} else {
@@ -187,6 +226,25 @@ func planBatchRename(d *data, requested []batchRenameRequestItem) (batchRenameRe
 		}
 	}
 	return response, plan
+}
+
+// Windows may resolve differently cased names to the same file even when
+// both destinations do not exist yet. Reject ambiguous batches before the
+// replace-capable native Rename can overwrite an earlier result. This is
+// intentionally conservative for directories with unknown case sensitivity.
+// Original map keys remain intact for the existing-target ownership check.
+func batchRenamePathIndex(paths map[string]int, value string) (int, bool) {
+	if index, found := paths[value]; found {
+		return index, true
+	}
+	if runtime.GOOS == "windows" {
+		for candidate, index := range paths {
+			if strings.EqualFold(candidate, value) {
+				return index, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func markBatchRenameError(response *batchRenameResponse, index int, message string) {

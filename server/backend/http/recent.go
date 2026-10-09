@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/Kkwans/nas-file-browser/backend/files"
 	"github.com/Kkwans/nas-file-browser/backend/pathmeta"
 	"github.com/Kkwans/nas-file-browser/backend/recent"
 	"github.com/Kkwans/nas-file-browser/backend/trash"
 )
 
 type recentRecordRequest struct {
-	Path string `json:"path"`
+	Path     string `json:"path"`
+	WirePath string `json:"wirePath"`
 }
 
 var recentListHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
@@ -48,8 +51,11 @@ var recentRecordHandler = withUser(func(w http.ResponseWriter, r *http.Request, 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		return http.StatusBadRequest, fmt.Errorf("最近访问参数无效: %w", err)
 	}
-	resourcePath := pathmeta.Clean(request.Path)
-	if request.Path == "" || trash.IsInternalPath(resourcePath) {
+	resourcePath, err := recentResourcePath(request)
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
+	if trash.IsInternalPath(resourcePath) {
 		return http.StatusBadRequest, fmt.Errorf("最近访问路径无效")
 	}
 	if !d.Check(resourcePath) {
@@ -72,3 +78,21 @@ var recentRecordHandler = withUser(func(w http.ResponseWriter, r *http.Request, 
 	}
 	return renderJSON(w, r, entry)
 })
+
+func recentResourcePath(request recentRecordRequest) (string, error) {
+	if request.WirePath == "" {
+		if request.Path == "" || strings.ContainsRune(request.Path, '\x00') {
+			return "", fmt.Errorf("最近访问路径无效")
+		}
+		// Old clients send canonical JSON paths, never URI-decode these values.
+		return pathmeta.Clean(request.Path), nil
+	}
+	resourcePath, err := decodeResourceWirePath(request.WirePath)
+	if err != nil {
+		return "", fmt.Errorf("最近访问%w", err)
+	}
+	if request.Path != "" && pathmeta.Clean(request.Path) != files.DisplayPath(resourcePath) {
+		return "", fmt.Errorf("最近访问路径与原始路径不一致")
+	}
+	return resourcePath, nil
+}
