@@ -166,7 +166,7 @@ import io.github.kkwans.nasfilebrowser.data.*
     if (passwordOpen) ModalBottomSheet(onDismissRequest = {
         if (!state.saving) { passwordOpen = false; if (!state.passwordUnknown) controller.clearPasswordDraft() }
     }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        LazyColumn(Modifier.fillMaxWidth().imePadding(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+        LazyColumn(Modifier.fillMaxWidth().imePadding().semantics { contentDescription = "密码修改内容" }, contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { Text("修改密码", style = MaterialTheme.typography.titleLarge) }
             item { Text("至少 ${state.capabilities?.minimumPasswordLength ?: "—"} 字节；密码只用于本次提交。", style = MaterialTheme.typography.bodySmall) }
