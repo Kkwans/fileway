@@ -457,6 +457,11 @@ class NativePlayer(context: Context) {
         if (!canAddExternalSubtitle) return false
         val currentLayer = layer ?: return false
         val epoch = session.generation; val request = ++externalRequest; val id = nextId++
+        fun externalFailure() {
+            if (!session.accepts(epoch) || externalRequest != request) return
+            externalJob = null
+            mutable.value = mutable.value.copy(subtitleLoading = false, operationError = "字幕渲染失败，请重试或选择其他字幕")
+        }
         externalJob?.cancel()
         mutable.value = mutable.value.copy(subtitleLoading = true, operationError = null)
         externalJob = scope.launch {
@@ -490,7 +495,7 @@ class NativePlayer(context: Context) {
                     ensureActive()
                     if (!session.accepts(epoch) || externalRequest != request) return@launch
                     val ids = tracks.mapIndexed { index, _ -> if (index == 0) id else nextId++ }
-                    currentLayer.externalTexts(tracks.mapIndexed { index, (_, values) -> "external:${ids[index]}" to values }.toMap()) {
+                    currentLayer.externalTexts(tracks.mapIndexed { index, (_, values) -> "external:${ids[index]}" to values }.toMap(), onFailure = ::externalFailure) {
                         if (!session.accepts(epoch) || externalRequest != request) return@externalTexts
                         tracks.forEachIndexed { index, (track, _) ->
                             external[ids[index]] = NativeTrack(ids[index], if (tracks.size == 1) name else "$name · ${track.title}", "application/x-sami", track.language)
@@ -516,11 +521,11 @@ class NativePlayer(context: Context) {
                     mutable.value = mutable.value.copy(subtitleLoading = false)
                     subtitle(id)
                 }
-                if (mime == MimeTypes.TEXT_SSA) currentLayer.externalAss("external:$id", bytes, ::ready)
+                if (mime == MimeTypes.TEXT_SSA) currentLayer.externalAss("external:$id", bytes, ::externalFailure, ::ready)
                 else if (mime == MimeTypes.APPLICATION_PGS) {
                     val values = withContext(Dispatchers.IO) { ExternalPgs.parse(bytes) }
                     ensureActive()
-                    if (session.accepts(epoch) && externalRequest == request) currentLayer.externalPgs("external:$id", values, ::ready)
+                    if (session.accepts(epoch) && externalRequest == request) currentLayer.externalPgs("external:$id", values, ::externalFailure, ::ready)
                 }
                 else {
                     val values = withContext(Dispatchers.IO) {
@@ -530,7 +535,7 @@ class NativePlayer(context: Context) {
                         }
                     }
                     ensureActive()
-                    if (session.accepts(epoch) && externalRequest == request) currentLayer.externalText("external:$id", values, ::ready)
+                    if (session.accepts(epoch) && externalRequest == request) currentLayer.externalText("external:$id", values, ::externalFailure, ::ready)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {

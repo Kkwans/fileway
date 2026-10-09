@@ -57,10 +57,10 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
     var showText: (List<Cue>) -> Unit = {}
     var failed: () -> Unit = {}
 
-    private fun submit(action: () -> Unit) = synchronized(submissions) {
+    private fun submit(onFailure: (() -> Unit)? = null, action: () -> Unit) = synchronized(submissions) {
         if (!closed.get()) worker.execute {
             if (!closed.get()) try { action() }
-            catch (_: Exception) { post { if (!closed.get()) failed() } }
+            catch (_: Exception) { post { if (!closed.get()) (onFailure ?: failed)() } }
         }
     }
     private fun ass() = library ?: Ass().also { library = it }
@@ -132,13 +132,14 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
             }
         }
     }
-    fun externalAss(id: String, data: ByteArray, ready: () -> Unit) = submit {
+    fun externalAss(id: String, data: ByteArray, onFailure: (() -> Unit)? = null, ready: () -> Unit) = submit(onFailure) {
         tracks.remove(id)?.release()
         tracks[id] = ass().createTrack().also { it.readBuffer(data) }
         post { if (!closed.get()) ready() }
     }
-    fun externalText(id: String, values: List<CuesWithTiming>, ready: () -> Unit) = externalTexts(mapOf(id to values), ready)
-    fun externalPgs(id: String, values: List<ExternalPgs.DisplaySet>, ready: () -> Unit) = submit {
+    fun externalText(id: String, values: List<CuesWithTiming>, onFailure: (() -> Unit)? = null, ready: () -> Unit) =
+        externalTexts(mapOf(id to values), onFailure, ready)
+    fun externalPgs(id: String, values: List<ExternalPgs.DisplaySet>, onFailure: (() -> Unit)? = null, ready: () -> Unit) = submit(onFailure) {
         val size = ExternalPgs.encodedBytes(values)
         check(size <= 32L * 1024 * 1024 && values.size <= 20_000)
         check(cueBytes + size <= 32L * 1024 * 1024 && cueCount() + values.size <= 20_000)
@@ -148,7 +149,7 @@ internal class MediaSubtitleLayer(context: Context) : View(context), MediaSubtit
         cueBytes += size
         post { if (!closed.get()) ready() }
     }
-    fun externalTexts(values: Map<String, List<CuesWithTiming>>, ready: () -> Unit) = submit {
+    fun externalTexts(values: Map<String, List<CuesWithTiming>>, onFailure: (() -> Unit)? = null, ready: () -> Unit) = submit(onFailure) {
         val count = values.values.sumOf { it.size }
         val size = values.values.sumOf { items -> items.sumOf(::bytes) }
         check(count <= 20_000 && size <= 32L * 1024 * 1024)
