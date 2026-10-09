@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.os.Bundle
+import android.net.Uri
 import android.view.PixelCopy
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.SurfaceView
@@ -23,6 +24,9 @@ import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
+import io.github.kkwans.nasfilebrowser.player.NativePlayer
+import io.github.kkwans.nasfilebrowser.player.PlayerViewport
+import io.github.kkwans.nasfilebrowser.player.PlaybackTraceAction
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -35,6 +39,7 @@ import androidx.media3.common.MediaLibraryInfo
 import android.media.AudioManager
 import kotlin.math.roundToInt
 import java.io.Closeable
+import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -49,6 +54,95 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class NativePlaybackTest {
     @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+
+    @Test fun endedMkvReplaysOnOneToggleWithFreshPixelsAndTheSameSurfaceAndTracks(): Unit = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val file = File.createTempFile("owned-video-replay-", ".mkv", context.cacheDir)
+        var player: NativePlayer? = null
+        var ownedViewport: PlayerViewport? = null
+        suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
+        try {
+            withContext(Dispatchers.IO) { instrumentation.context.assets.open("media/fixture.mkv").use { input -> file.outputStream().use { input.copyTo(it) } } }
+            activity.scenario.onActivity { owner ->
+                val viewport = PlayerViewport(owner).also { ownedViewport = it }
+                (owner.window.decorView as ViewGroup).addView(viewport, ViewGroup.LayoutParams(384, 216))
+                player = NativePlayer(context).also { it.attach(viewport) }
+            }
+            val native = requireNotNull(player)
+            val viewport = requireNotNull(ownedViewport)
+            suspend fun pixels(): IntArray? {
+                val surface = viewport.video
+                if (surface.width <= 0 || surface.height <= 0 || !surface.holder.surface.isValid) return null
+                val bitmap = Bitmap.createBitmap(144, 81, Bitmap.Config.ARGB_8888)
+                val copied = CompletableDeferred<Int>(); var requested = false
+                try {
+                    main { PixelCopy.request(surface, bitmap, { copied.complete(it) }, Handler(Looper.getMainLooper())); requested = true }
+                    if (withTimeout(5000) { copied.await() } != PixelCopy.SUCCESS) return null
+                    return IntArray(144 * 81).also { bitmap.getPixels(it, 0, 144, 0, 0, 144, 81) }
+                } finally { if (!requested || copied.isCompleted) bitmap.recycle() else copied.invokeOnCompletion { bitmap.recycle() } }
+            }
+            suspend fun await(stage: String, predicate: suspend () -> Boolean) {
+                try {
+                    withTimeout(20_000) {
+                        while (true) {
+                            check(native.state.value.error == null) { "Replay video error at $stage: ${native.state.value.error}" }
+                            if (predicate()) break
+                            delay(50)
+                        }
+                    }
+                } catch (error: TimeoutCancellationException) {
+                    val state = native.state.value
+                    throw AssertionError("Replay video timeout at $stage: phase=${state.phase}, playing=${state.playing}, position=${state.positionMs}, " +
+                        "duration=${state.durationMs}, videoDecoder=${state.videoDecoder}, audioDecoder=${state.audioDecoder}, trace=${native.diagnosticSnapshot()}", error)
+                }
+            }
+            fun hasPattern(frame: IntArray) = frame.count {
+                maxOf(Color.red(it), Color.green(it), Color.blue(it)) - minOf(Color.red(it), Color.green(it), Color.blue(it)) > 30
+            } > frame.size / 5
+            main { native.rate(1.5f); native.open(Uri.fromFile(file).toString(), autoplay = true) }
+            await("initial audio/video output") { native.state.value.let { it.playing && it.firstFrameRendered && it.seekable && it.selectedAudio >= 0 &&
+                it.videoDecoder != "未知" && it.audioDecoder != "未知" } && pixels()?.let(::hasPattern) == true }
+            val initial = native.state.value
+            val surface = viewport.video.holder.surface
+            main { native.seek((initial.durationMs - 250).coerceAtLeast(0)) }
+            await("MKV reaches end") { native.state.value.let { it.phase == "播放完毕" && !it.playing && it.positionMs >= it.durationMs - 100 } }
+            var endedPixels: IntArray? = null
+            await("last decoded frame") { endedPixels = pixels(); endedPixels?.let(::hasPattern) == true }
+            val finalFrame = requireNotNull(endedPixels)
+            val trace = native.diagnosticSnapshot()
+            assertEquals("Replay evidence requires one original media open", 1, trace.count { it.action == PlaybackTraceAction.MEDIA_SET })
+            main { native.toggle() }
+            await("one toggle restarts MKV at beginning") { native.state.value.let { it.playing && it.positionMs in 100..1500 } }
+            await("replay produces pixels different from the ended frame") {
+                pixels()?.let { frame -> hasPattern(frame) && frame.indices.count { index ->
+                    val before = finalFrame[index]; val after = frame[index]
+                    maxOf(kotlin.math.abs(Color.red(before) - Color.red(after)), kotlin.math.abs(Color.green(before) - Color.green(after)),
+                        kotlin.math.abs(Color.blue(before) - Color.blue(after))) > 20
+                } > frame.size / 50 } == true
+            }
+            val resumed = native.state.value.positionMs
+            await("replayed audio/video clock advances") { native.state.value.let { it.playing && it.positionMs >= resumed + 250 } }
+            val replayed = native.state.value
+            assertEquals(initial.mediaGeneration, replayed.mediaGeneration)
+            assertEquals(initial.selectedAudio, replayed.selectedAudio)
+            assertEquals(initial.selectedSubtitle, replayed.selectedSubtitle)
+            assertEquals(1.5f, replayed.rate, .001f)
+            assertEquals(initial.audioDecoder, replayed.audioDecoder)
+            assertEquals(initial.videoDecoder, replayed.videoDecoder)
+            assertSame("Replay must retain the existing video surface", surface, viewport.video.holder.surface)
+            for (action in listOf(PlaybackTraceAction.OPEN_REQUEST, PlaybackTraceAction.MEDIA_SET, PlaybackTraceAction.ATTACH,
+                PlaybackTraceAction.DETACH, PlaybackTraceAction.PAUSE_REQUEST)) {
+                assertEquals("Replay must not emit $action", trace.count { it.action == action }, native.diagnosticSnapshot().count { it.action == action })
+            }
+        } finally {
+            withContext(NonCancellable + Dispatchers.Main) {
+                player?.release()
+                ownedViewport?.let { (it.parent as? ViewGroup)?.removeView(it) }
+            }
+            withContext(Dispatchers.IO) { file.delete() }
+        }
+    }
 
     @Test fun mkvResumeSeekPauseRecentAndReplacementUseRealNativePlayer() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

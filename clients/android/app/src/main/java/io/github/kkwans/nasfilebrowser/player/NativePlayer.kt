@@ -348,7 +348,12 @@ class NativePlayer(context: Context) {
     }
     fun toggle() {
         val player = engine ?: return
-        if (player.playWhenReady) pause() else { session.play(); trace.record(PlaybackTraceAction.PLAY_REQUEST); player.play(); publish() }
+        val ended = player.playbackState == Player.STATE_ENDED
+        if (player.playWhenReady && !ended) pause() else {
+            session.play()
+            if (ended) seek(0)
+            trace.record(PlaybackTraceAction.PLAY_REQUEST); player.play(); publish()
+        }
     }
     fun pause() {
         session.pause(); temporaryRate = null

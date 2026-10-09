@@ -36,6 +36,14 @@ class NativeAudioPlaybackTest {
     private fun pcm(seconds: Int): ByteArray = ByteBuffer.allocate(48_000 * seconds * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
         repeat(48_000 * seconds) { sample -> putShort((sin(2 * Math.PI * 440 * sample / 48_000) * 1000).roundToInt().toShort()) }
     }.array()
+    private fun wav(seconds: Int): ByteArray {
+        val data = pcm(seconds)
+        return ByteBuffer.allocate(44 + data.size).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII)); putInt(36 + data.size); put("WAVEfmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16); putShort(1); putShort(1); putInt(48_000); putInt(96_000); putShort(2); putShort(16)
+            put("data".toByteArray(Charsets.US_ASCII)); putInt(data.size); put(data)
+        }.array()
+    }
     private suspend fun await(player: NativePlayer, stage: String, predicate: () -> Boolean) {
         try {
             withTimeout(10_000) {
@@ -58,14 +66,7 @@ class NativeAudioPlaybackTest {
         assertTrue("The test must never attach a video surface", player.diagnosticSnapshot().none { it.action == PlaybackTraceAction.ATTACH || it.action == PlaybackTraceAction.VIDEO_OUTPUT })
     }
     @Test fun ownedPcmWavAdvancesPausesSeeksRestoresRateAndReleasesWithoutVideoSurface(): Unit = runBlocking {
-        val wave = withContext(Dispatchers.Default) {
-            val data = pcm(8)
-            ByteBuffer.allocate(44 + data.size).order(ByteOrder.LITTLE_ENDIAN).apply {
-                put("RIFF".toByteArray(Charsets.US_ASCII)); putInt(36 + data.size); put("WAVEfmt ".toByteArray(Charsets.US_ASCII))
-                putInt(16); putShort(1); putShort(1); putInt(48_000); putInt(96_000); putShort(2); putShort(16)
-                put("data".toByteArray(Charsets.US_ASCII)); putInt(data.size); put(data)
-            }.array()
-        }
+        val wave = withContext(Dispatchers.Default) { wav(8) }
         val file = File.createTempFile("owned-audio-", ".wav", context.cacheDir)
         var player: NativePlayer? = null
         try {
@@ -104,6 +105,34 @@ class NativeAudioPlaybackTest {
             delay(350)
             assertEquals("Released audio must not restart from a late callback", released, native.state.value)
         } finally { main { player?.release() }; withContext(Dispatchers.IO) { file.delete() } }
+    }
+    @Test fun naturallyEndedWavReplaysOnOneToggleWithoutReopeningOrLosingRateAndTrack(): Unit = runBlocking {
+        val wave = withContext(Dispatchers.Default) { wav(3) }
+        val file = File.createTempFile("owned-audio-replay-", ".wav", context.cacheDir)
+        var player: NativePlayer? = null
+        try {
+            withContext(Dispatchers.IO) { file.writeBytes(wave) }
+            val native = main { NativePlayer(context) }; player = native
+            main { native.rate(1.25f); native.open(Uri.fromFile(file).toString(), autoplay = true) }
+            await(native, "WAV before natural end") { native.state.value.let { it.playing && it.positionMs >= 150 && it.selectedAudio >= 0 } }
+            val initial = native.state.value
+            await(native, "WAV natural end") { native.state.value.let { it.phase == "播放完毕" && !it.playing && it.positionMs >= 2950 } }
+            val trace = native.diagnosticSnapshot()
+            assertEquals("Replay evidence requires one original media open", 1, trace.count { it.action == PlaybackTraceAction.MEDIA_SET })
+            main { native.toggle() }
+            await(native, "one toggle restarts WAV at beginning") { native.state.value.let { it.playing && it.positionMs in 100..1500 } }
+            val resumed = native.state.value.positionMs
+            await(native, "replayed WAV clock advances") { native.state.value.let { it.playing && it.positionMs >= resumed + 250 } }
+            val replayed = native.state.value
+            assertEquals(initial.mediaGeneration, replayed.mediaGeneration)
+            assertEquals(initial.selectedAudio, replayed.selectedAudio)
+            assertEquals(initial.selectedSubtitle, replayed.selectedSubtitle)
+            assertEquals(1.25f, replayed.rate, .001f)
+            for (action in listOf(PlaybackTraceAction.OPEN_REQUEST, PlaybackTraceAction.MEDIA_SET, PlaybackTraceAction.PAUSE_REQUEST)) {
+                assertEquals("Replay must not emit $action", trace.count { it.action == action }, native.diagnosticSnapshot().count { it.action == action })
+            }
+            assertNoVideo(native)
+        } finally { withContext(NonCancellable + Dispatchers.Main) { player?.release() }; withContext(Dispatchers.IO) { file.delete() } }
     }
     private fun encodeAac(data: ByteArray): ByteArray {
         val codec = try { MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC) }
