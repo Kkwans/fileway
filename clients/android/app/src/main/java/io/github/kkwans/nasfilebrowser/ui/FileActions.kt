@@ -77,9 +77,12 @@ import io.github.kkwans.nasfilebrowser.R
                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
         if (client.permissions.delete && file.path != "/") FileActionIcon(R.drawable.ic_trash, "移入回收站", enabled && !tags.changing) { moving = true }
-        if (file.path != "/" && (client.permissions.rename || client.permissions.create || client.permissions.download && !file.directory)) Box {
+        if (file.path != "/" && (client.permissions.rename || client.permissions.create || client.permissions.download)) Box {
             FileActionIcon(R.drawable.ic_more_vert, "更多文件操作", enabled && operations.transfer == null) { more = true }
             DropdownMenu(more, { more = false }) {
+                if (client.permissions.download) DropdownMenuItem({ Text("打包下载为 ZIP") }, {
+                    more = false; model.startZipExport(listOf(file), client.previewScope); onMoved()
+                }, leadingIcon = { Icon(painterResource(R.drawable.ic_download), null) })
                 if (client.permissions.download && !file.directory) DropdownMenuItem({ Text("校验文件") }, {
                     more = false; model.fileChecksum.open(file, client.previewScope)
                 }, leadingIcon = { Icon(painterResource(R.drawable.ic_info), null) })

@@ -363,6 +363,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         if (operations.changing || operations.creation != null || operations.transfer != null || operations.batchRename != null) return
         documentEdits.startCreate(DirectoryCrumb("当前目录", mutable.value.path, mutable.value.wirePath), sourceScope)
     }
+    fun startZipExport(files: List<ResourceRef>, sourceScope: String) {
+        val bound = context ?: return
+        if (sourceScope != bound.api.id) return
+        downloads.enqueueZip(bound, files) { context === bound && generation == bound.generation }
+        tab("downloads")
+    }
     fun openShell() {
         val bound = context ?: return
         shell.open(DirectoryCrumb("当前目录", mutable.value.path, mutable.value.wirePath), bound.api.id)

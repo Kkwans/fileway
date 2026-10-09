@@ -152,6 +152,7 @@ import io.github.kkwans.nasfilebrowser.data.DirectoryCrumb
                             batchKind = "rename"
                             model.fileOperations.startBatchRename(chosen, DirectoryCrumb("原目录", state.path, state.wirePath), state.previewScope)
                         }
+                        if (state.permissions.download) FileActionIcon(R.drawable.ic_folder, "打包下载为 ZIP", !state.busy && !selectionBusy && chosen.isNotEmpty()) { model.startZipExport(chosen, state.previewScope) }
                         FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !selectionBusy && downloads.folderPlan == null && chosen.isNotEmpty() && state.permissions.download) {
                             batchKind = "download"
                             model.downloadFiles(chosen) { file -> selected = selected - key(file) }
