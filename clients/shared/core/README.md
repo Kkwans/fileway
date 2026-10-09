@@ -31,3 +31,20 @@ Windows 绑定。`mobile` 导出 C 控制接口，但 Windows DLL 构建、调�
 go test ./transport ./bridge
 go vet ./transport ./bridge
 ```
+
+## 原生上传数据通道
+
+`upload_lease` 是添加的控制命令：指定固定session、path/wirePath和upload选项
+（resources/tus、size、transferId、overwrite、resume与允许的批次metadata）。
+返回无token的随机loopback URL；上传字节通过HTTP body发送，不进入JSON/JNI。
+普通播放/预览lease继续只允许读取。写入只使用原session的HTTP client，不能跟随
+其他来源或目标的Location；原始路径只解码一次，旧编码wire字节保持不变。
+
+resources只允许POST；tus保留原HEAD/POST/PATCH/DELETE接口和offset语义。
+客户端必须先检查权限、源身份与冲突；核心不会自动重放写入。撤销/关闭session
+取消实际上游及等待中的输入流。`upload_stats`区分sentBytes与acceptedOffset：
+前者是Go送入网络传输的字节，后者只来自已确认的成功响应，不是接收端速度证明。
+Upload-Length/Offset/Content-Type、固定长度与64MiB块上限检查位于写入通道。
+
+当前服务端TUS仍有临时片段过期和完成后HEAD语义限制。核心兼容不等于App上传
+队列、持久续传或真机/NAS验收已完成；后端行为不得通过伪造成功/版本头掩盖。

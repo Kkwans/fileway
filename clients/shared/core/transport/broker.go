@@ -36,6 +36,7 @@ type Session struct {
 }
 
 type Lease struct {
+	upload    *uploadCapability
 	telemetry leaseTelemetry
 	cacheKey  string
 	prefetch  chan struct{}
@@ -260,6 +261,10 @@ func (b *Broker) Token(id string) (string, error) {
 }
 
 func (b *Broker) Lease(id, endpoint string, media bool) (string, error) {
+	return b.lease(id, endpoint, media, nil)
+}
+
+func (b *Broker) lease(id, endpoint string, media bool, upload *uploadCapability) (string, error) {
 	s, err := b.session(id)
 	if err != nil {
 		return "", err
@@ -278,7 +283,7 @@ func (b *Broker) Lease(id, endpoint string, media bool) (string, error) {
 		cancel()
 		return "", errors.New("session closed")
 	}
-	b.leases[key] = &Lease{session: s, endpoint: endpoint, media: media, ctx: ctx, cancel: cancel}
+	b.leases[key] = &Lease{session: s, endpoint: endpoint, media: media, ctx: ctx, cancel: cancel, upload: upload}
 	return "http://" + b.listener.Addr().String() + "/stream/" + key, nil
 }
 
@@ -345,16 +350,20 @@ func (b *Broker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid host", http.StatusBadRequest)
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "read only", http.StatusMethodNotAllowed)
-		return
-	}
 	b.mu.RLock()
 	l := b.leases[strings.TrimPrefix(r.URL.Path, "/stream/")]
 	b.mu.RUnlock()
 	if l == nil || l.ctx.Err() != nil {
 		http.Error(w, "stream closed", http.StatusGone)
+		return
+	}
+	if l.upload != nil {
+		b.serveUpload(w, r, l)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "read only", http.StatusMethodNotAllowed)
 		return
 	}
 	ctx, done := combined(r.Context(), l.ctx)

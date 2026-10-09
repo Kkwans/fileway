@@ -39,6 +39,7 @@ type Command struct {
 	Scope           string                  `json:"scope"`
 	Search          string                  `json:"search"`
 	PlatformNetwork tailnet.PlatformNetwork `json:"platformNetwork"`
+	Upload          transport.UploadOptions `json:"upload"`
 }
 
 type Envelope struct {
@@ -249,6 +250,10 @@ func (e *Engine) execute(c Command) (any, error) {
 		return b.CleanCache(c.Clear)
 	case "lease_stats":
 		return b.LeaseStats(c.Session, c.URL)
+	case "upload_lease":
+		return b.UploadLease(c.Session, c.Path, c.WirePath, c.Upload)
+	case "upload_stats":
+		return b.UploadStats(c.Session, c.URL)
 	case "lease":
 		endpoint, err := transport.RawEndpoint(c.Path, c.WirePath)
 		if err != nil {

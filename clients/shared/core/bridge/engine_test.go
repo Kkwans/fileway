@@ -10,7 +10,57 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Kkwans/nas-file-browser-client/core/transport"
 )
+
+func TestNativeUploadControlDoesNotCarryBytesOrExposeCredentials(t *testing.T) {
+	data := bytes.Repeat([]byte{7, 9, 13}, 600000)
+	wire := "/%FF/owned%20%2B%25%23.bin"
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/nas/api/resources"+wire || r.Header.Get("X-Auth") != "owned.upload.token" || r.Method != "POST" {
+			t.Error("bridge lost original upload context")
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !bytes.Equal(body, data) {
+			t.Error("binary upload changed", err)
+		}
+		w.Write([]byte("200 OK"))
+	}))
+	defer source.Close()
+	e := &Engine{}
+	defer e.Call([]byte(`{"op":"shutdown"}`))
+	opened := command(t, e, Command{Op: "open", BaseURL: source.URL + "/nas", Token: "owned.upload.token"})
+	var session string
+	if json.Unmarshal(opened["result"], &session) != nil {
+		t.Fatal(opened)
+	}
+	out := command(t, e, Command{Op: "upload_lease", Session: session, WirePath: wire,
+		Upload: transport.UploadOptions{Protocol: "resources", Size: int64(len(data)), TransferID: "owned-transfer"}})
+	var lease string
+	if string(out["ok"]) != "true" || json.Unmarshal(out["result"], &lease) != nil || !bytes.HasPrefix([]byte(lease), []byte("http://127.0.0.1:")) {
+		t.Fatal("upload control did not issue a local capability", out)
+	}
+	response, err := http.Post(lease, "application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != 200 {
+		t.Fatal(response.StatusCode)
+	}
+	out = command(t, e, Command{Op: "upload_stats", Session: session, URL: lease})
+	var stats transport.UploadStatistics
+	if json.Unmarshal(out["result"], &stats) != nil || stats.AcceptedOffset != int64(len(data)) || stats.SentBytes != int64(len(data)) {
+		t.Fatal(out)
+	}
+	command(t, e, Command{Op: "close_session", Session: session})
+	out = command(t, e, Command{Op: "upload_stats", Session: session, URL: lease})
+	if string(out["ok"]) != "false" {
+		t.Fatal("closed account still owns an upload", out)
+	}
+}
 
 func TestPreviewLeaseStreamsAuthenticatedImageAndRevokesWithSession(t *testing.T) {
 	var encoded bytes.Buffer
