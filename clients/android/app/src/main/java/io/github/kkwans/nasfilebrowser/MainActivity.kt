@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() { super.onStart(); model.foreground(true) }
     private fun openIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("open_downloads", false)) { intent.removeExtra("open_downloads"); model.openDownloads() }
+        if (intent.getBooleanExtra("open_uploads", false)) { intent.removeExtra("open_uploads"); model.openUploads() }
     }
     override fun onNewIntent(intent: android.content.Intent) { super.onNewIntent(intent); setIntent(intent); openIntent(intent) }
     override fun onStop() { model.foreground(false); model.pausePlayback(); super.onStop() }

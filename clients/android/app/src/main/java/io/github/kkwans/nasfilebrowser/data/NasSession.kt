@@ -96,6 +96,20 @@ class NasSession private constructor(val profile: ServerProfile, val id: String,
     }
     suspend fun close() { native(JSONObject().put("op", "close_session").put("session", id)) }
 
+    suspend fun upload(wirePath: String, size: Long, transferId: String, protocol: String, overwrite: Boolean, resume: Boolean,
+        metadata: JSONObject = JSONObject()): PreviewLease {
+        token()
+        val options = JSONObject().put("protocol", protocol).put("size", size).put("transferId", transferId)
+            .put("overwrite", overwrite).put("resume", resume).put("metadata", metadata)
+        val url = native(JSONObject().put("op", "upload_lease").put("session", id).put("wirePath", wirePath).put("upload", options)) as String
+        return PreviewLease(url, id) { native(JSONObject().put("op", "revoke").put("url", url)); Unit }
+    }
+    suspend fun uploadStatistics(lease: PreviewLease): JSONObject {
+        check(lease.scope == id) { "上传来源已切换" }
+        token()
+        return native(JSONObject().put("op", "upload_stats").put("session", id).put("url", lease.url)) as JSONObject
+    }
+
     companion object {
         internal fun issuedAt(token: String): Long = runCatching {
             val payload = token.split('.')[1]

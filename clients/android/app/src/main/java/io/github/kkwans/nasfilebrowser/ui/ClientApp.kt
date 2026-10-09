@@ -35,9 +35,9 @@ import java.util.Locale
     val search by model.search.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     val activity = LocalActivity.current
-    BackHandler(state.connected || state.image != null || state.selected != null || state.tab == "downloads") { if (!model.back()) activity?.finish() }
+    BackHandler(state.connected || state.image != null || state.selected != null || state.tab in setOf("downloads", "uploads")) { if (!model.back()) activity?.finish() }
     BackHandler(state.startupPending) { model.cancel() }
-    if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model) }
+    if (state.connected) LibraryTheme { FileTransferSheet(model); CreateDirectoryDialog(model); FolderDownloadDialog(model); UploadSelectionDialog(model) }
     if (state.startupPending) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -51,6 +51,7 @@ import java.util.Locale
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
     if (state.tab == "downloads") { LibraryTheme { DownloadsScreen(model) }; return }
+    if (state.tab == "uploads") { LibraryTheme { UploadsScreen(model) }; return }
     if (!state.connected) { ConnectionScreen(model, state); return }
     pageState.SaveableStateProvider(if (search.open) "search" else if (state.tab == "library") "library/${state.librarySection}" else state.tab) {
         LibraryTheme {

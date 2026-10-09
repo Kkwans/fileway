@@ -72,6 +72,7 @@ import kotlinx.coroutines.withContext
         Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("本机下载", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton(model::openUploads) { Text("上传") }
                 TextButton({ settings = true }) { Text("下载目录") }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

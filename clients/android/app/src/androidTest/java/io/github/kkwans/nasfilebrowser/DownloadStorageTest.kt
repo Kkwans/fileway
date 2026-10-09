@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.kkwans.nasfilebrowser.data.*
 import io.github.kkwans.nasfilebrowser.download.*
+import io.github.kkwans.nasfilebrowser.upload.UploadMigration
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -47,7 +48,7 @@ class DownloadStorageTest {
                 old.execSQL("INSERT INTO active_session VALUES (1,'owned-account','owned-session')")
                 old.version = 5
             }
-            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadMigration(), DownloadFolderMigration()).build()
+            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadMigration(), DownloadFolderMigration(), UploadMigration()).build()
             assertEquals("unused-owned-reference", room.profiles().account("owned-account")?.credentialRef)
             assertEquals("/%ed%a0%80%2B", room.profiles().directory("owned-account")?.wirePath)
             assertEquals(FileLayout.UNBOUNDED, room.profiles().directory("owned-account")?.fileLayout)
@@ -93,7 +94,7 @@ class DownloadStorageTest {
                 old.execSQL("INSERT INTO downloads VALUES ('owned-id',7300001,'owned-account','owned-profile',2,'/owned.mkv','/%FF.mkv','owned.mkv','video',8,'owned-modified','8/owned-modified','Owned fixture','content://fixture.invalid/tree/owned','content://fixture.invalid/document/partial','paused',4,1,2,3,'owned-error',42000,60000)")
                 old.version = 6
             }
-            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadFolderMigration()).build()
+            room = Room.databaseBuilder(context, ClientDatabase::class.java, name).addMigrations(DownloadFolderMigration(), UploadMigration()).build()
             val saved = room.downloads().get("owned-id")!!
             assertEquals("paused", saved.status); assertEquals(4L, saved.downloaded); assertEquals(3L, saved.generation)
             assertEquals(42000L, saved.positionMs); assertEquals(60000L, saved.durationMs); assertEquals("/%FF.mkv", saved.wirePath)

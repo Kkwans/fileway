@@ -8,6 +8,9 @@ import io.github.kkwans.nasfilebrowser.download.DownloadRecord
 import io.github.kkwans.nasfilebrowser.download.DownloadDao
 import io.github.kkwans.nasfilebrowser.download.DownloadMigration
 import io.github.kkwans.nasfilebrowser.download.DownloadFolderMigration
+import io.github.kkwans.nasfilebrowser.upload.UploadRecord
+import io.github.kkwans.nasfilebrowser.upload.UploadDao
+import io.github.kkwans.nasfilebrowser.upload.UploadMigration
 
 enum class BackendKind { NAS, WINDOWS }
 enum class ConnectionMode { DIRECT, TAILNET }
@@ -89,18 +92,19 @@ data class PlaybackSnapshot(
     @Query("DELETE FROM server_profiles WHERE id = :id") suspend fun deleteProfile(id: String)
 }
 
-@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class, DownloadRecord::class], version = 7, exportSchema = true)
+@Database(entities = [ServerProfile::class, AccountRecord::class, DirectoryState::class, PlaybackSnapshot::class, AppPreference::class, ActiveSession::class, DownloadRecord::class, UploadRecord::class], version = 8, exportSchema = true)
 abstract class ClientDatabase : RoomDatabase() {
     abstract fun profiles(): ProfileDao
     abstract fun playback(): PlaybackDao
     abstract fun preferences(): PreferenceDao
     abstract fun downloads(): DownloadDao
+    abstract fun uploads(): UploadDao
     companion object {
         @Volatile private var instance: ClientDatabase? = null
         /** One upgrade chain for the app and isolated historical-database checks. */
         internal fun migrations(backups: java.io.File): Array<androidx.room.migration.Migration> = arrayOf(
             HistoryMigration(backups), AppearanceMigration(backups), FileLayoutMigration(backups),
-            ActiveSessionMigration(backups), DownloadMigration(), DownloadFolderMigration(),
+            ActiveSessionMigration(backups), DownloadMigration(), DownloadFolderMigration(), UploadMigration(),
         )
         fun get(context: Context): ClientDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, ClientDatabase::class.java, "nfb-client.db")

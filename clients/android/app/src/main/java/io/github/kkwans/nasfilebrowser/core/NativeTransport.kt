@@ -39,7 +39,7 @@ object NativeTransport {
                 if (!continuation.isActive && result is String) {
                     val cleanup = when (request.optString("op")) {
                         "open" -> JSONObject().put("op", "close_session").put("session", result)
-                        "lease", "asset", "preview" -> JSONObject().put("op", "revoke").put("url", result)
+                        "lease", "asset", "preview", "upload_lease" -> JSONObject().put("op", "revoke").put("url", result)
                         "search_start" -> JSONObject().put("op", "search_cancel").put("session", request.optString("session")).put("search", result)
                         else -> null
                     }

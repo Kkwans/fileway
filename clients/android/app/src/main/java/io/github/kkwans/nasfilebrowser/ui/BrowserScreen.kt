@@ -68,6 +68,14 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
     val downloads by model.downloads.state.collectAsStateWithLifecycle()
     val trash by model.trash.state.collectAsStateWithLifecycle()
     val operations by model.fileOperations.state.collectAsStateWithLifecycle()
+    val uploads by model.uploads.state.collectAsStateWithLifecycle()
+    var uploadMenu by remember(state.previewScope) { mutableStateOf(false) }
+    val uploadFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) model.uploads.prepare(files = uris) else model.uploads.cancelSelection()
+    }
+    val uploadFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) model.uploads.prepare(tree = uri) else model.uploads.cancelSelection()
+    }
     LaunchedEffect(operations.lastTask?.id) { selected = selected - operations.lastSources.map(::key).toSet() }
     var batchKind by remember(state.previewScope, state.wirePath) { mutableStateOf("") }
     var pendingTrash by remember(state.previewScope, state.wirePath) { mutableStateOf<List<ResourceRef>?>(null) }
@@ -81,6 +89,23 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
             Column(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("文件", modifier = Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleLarge, color = colors.onBackground)
+                    if (state.permissions.create) Box {
+                        IconButton({ uploadMenu = true }, enabled = !state.busy && !uploads.busy && !uploads.selecting && !selectionBusy) {
+                            Icon(painterResource(R.drawable.ic_upload), "上传本机文件", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
+                        }
+                        DropdownMenu(uploadMenu, { uploadMenu = false }) {
+                            DropdownMenuItem({ Text("上传文件") }, {
+                                uploadMenu = false
+                                if (model.beginUploadSelection()) try { uploadFiles.launch(arrayOf("*/*")) }
+                                catch (_: Exception) { model.uploads.cancelSelection(); model.uploads.reportError("无法打开系统文件选择器") }
+                            })
+                            DropdownMenuItem({ Text("上传文件夹") }, {
+                                uploadMenu = false
+                                if (model.beginUploadSelection()) try { uploadFolder.launch(null) }
+                                catch (_: Exception) { model.uploads.cancelSelection(); model.uploads.reportError("无法打开系统文件夹选择器") }
+                            })
+                        }
+                    }
                     if (state.permissions.create) IconButton({ model.startDirectoryCreation(state.previewScope) }, enabled = !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null) {
                         Icon(painterResource(R.drawable.ic_create_folder), "新建文件夹", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
                     }

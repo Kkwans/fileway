@@ -14,6 +14,8 @@ import io.github.kkwans.nasfilebrowser.data.*
 import io.github.kkwans.nasfilebrowser.download.DownloadController
 import io.github.kkwans.nasfilebrowser.download.DownloadRecord
 import io.github.kkwans.nasfilebrowser.download.DownloadDataSource
+import io.github.kkwans.nasfilebrowser.upload.UploadController
+import io.github.kkwans.nasfilebrowser.upload.UploadRecord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +66,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val playbackPreferences = PlaybackPreferences(application)
     val cache = CacheController(application, viewModelScope)
     val downloads = DownloadController(application, viewModelScope)
+    val uploads = UploadController(application, viewModelScope) { context === it && generation == it.generation }
     val previewImageLoader get() = cache.thumbnailLoader.value
     fun cacheAccount(): String = context?.account?.key.orEmpty()
     fun thumbnailKey(file: ResourceRef): String = cache.key(if (file.downloadId.isEmpty()) cacheAccount() else "local-downloads", file.mediaKey, "${file.size}/${file.modified}")
@@ -134,6 +137,14 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { downloads.state.collect { value ->
             localPlayback?.let { item -> mutable.value = mutable.value.copy(downloadBytesPerSecond = value.speeds[item.id]) }
         } }
+        viewModelScope.launch {
+            var revision = 0L
+            uploads.state.collect { value ->
+                if (value.completedRevision != revision) {
+                    revision = value.completedRevision; transferRefreshPending = true; refreshTransferDirectoryIfVisible()
+                }
+            }
+        }
         player.checkpoint = { saveProgress() }
         val expected = generation
         startupJob = viewModelScope.launch {
@@ -286,14 +297,15 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun fileCategory(value: FileCategory) { mutable.value = mutable.value.copy(fileCategory = value) }
     fun fileOrder(value: FileOrder) { mutable.value = mutable.value.copy(fileOrder = value) }
     fun open(file: ResourceRef) = openFrom(file, directoryItems(), MediaQueueSource.DIRECTORY)
-    fun openRemotePath(path: String) {
+    fun openRemotePath(path: String) = openRemotePathWithWire(path, "")
+    private fun openRemotePathWithWire(path: String, requestedWire: String) {
         val bound = context ?: return
         if (mutable.value.busy) return
         operation?.cancel()
         mutable.value = mutable.value.copy(busy = true, stage = "正在确认文件来源", error = null)
         operation = viewModelScope.launch {
             try {
-                val wire = SearchResult.encodePath(path)
+                val wire = requestedWire.ifEmpty { SearchResult.encodePath(path) }
                 val data = bound.api.request("GET", "/api/resources$wire?metadata=1")
                 currentCoroutineContext().ensureActive()
                 check(context === bound && generation == bound.generation)
@@ -315,6 +327,20 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun download(file: ResourceRef) {
         val bound = context ?: return
         downloads.enqueue(bound, file) { context === bound && generation == bound.generation }
+    }
+    fun beginUploadSelection(): Boolean {
+        val bound = context ?: return false
+        val current = mutable.value
+        if (current.busy || fileOperations.state.value.changing || trash.state.value.changing) return false
+        return uploads.begin(bound, DirectoryCrumb("当前目录", current.path, current.wirePath))
+    }
+    fun openUploadedFile(item: UploadRecord) {
+        val bound = context
+        if (bound == null || bound.profile.id != item.profileId || bound.profile.sourceRevision != item.sourceRevision || bound.account.key != item.accountKey) {
+            uploads.reportError("请先连接这项上传原来的服务器和账号，再查看服务器文件")
+            return
+        }
+        openContainingDirectory(ResourceRef(item.targetPath, item.targetWire, item.targetPath.substringAfterLast('/'), false, "", item.expectedSize))
     }
     fun downloadFiles(files: List<ResourceRef>, onCreated: (ResourceRef) -> Unit = {}) {
         val bound = context ?: return
@@ -675,11 +701,16 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun tab(value: String) { if (value == "downloads" && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
+    fun tab(value: String) { if (value in setOf("downloads", "uploads") && mutable.value.startupPending) cancel(); if (value != "files") search.close(); mutable.value = mutable.value.copy(tab = value) }
     fun openDownloads() {
         if (mutable.value.selected != null || pendingMediaOpen != null) leavePlayer()
         if (mutable.value.image != null) closeImage()
         tab("downloads")
+    }
+    fun openUploads() {
+        if (mutable.value.selected != null || pendingMediaOpen != null) leavePlayer()
+        if (mutable.value.image != null) closeImage()
+        tab("uploads")
     }
     fun librarySection(value: LibrarySection) { search.close(); mutable.value = mutable.value.copy(tab = "library", librarySection = value) }
     fun showServerTask(id: String) { librarySection(LibrarySection.TASKS); tasks.select(id) }
@@ -690,6 +721,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         trash.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TRASH)
         storageTools.setVisible(visible && mutable.value.tab == "library" && mutable.value.librarySection == LibrarySection.TOOLS)
         downloads.visible(foreground && (mutable.value.tab == "downloads" || localPlayback != null))
+        uploads.visible(foreground && mutable.value.tab == "uploads")
         fileOperations.setVisible(foreground && mutable.value.connected)
         refreshTransferDirectoryIfVisible()
     }
@@ -900,6 +932,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         trash.bind(null)
         fileOperations.bind(null)
         downloads.cancelFolderDownloads(quiet = true)
+        uploads.cancelSelection(quiet = true)
         storageTools.bind(null)
         endPlayback(); val old = context; context = null
         recentJob?.cancel(); recentMutable.value = emptyList()
