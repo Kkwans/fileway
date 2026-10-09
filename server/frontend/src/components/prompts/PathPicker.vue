@@ -29,7 +29,7 @@
               aria-hidden="true"
               >/</span
             >
-            <button type="button" @click="load(crumb.path)">
+            <button type="button" @click="load(crumb.path, crumb.wirePath)">
               {{ crumb.name }}
             </button>
           </template>
@@ -57,17 +57,20 @@
       <div v-if="error" class="path-picker__error" role="alert">
         <AppIcon name="circle-alert" :size="18" />
         <span>{{ error }}</span>
-        <button type="button" @click="load(currentPath)">重试</button>
+        <button type="button" @click="load(currentPath, currentWirePath)">
+          重试
+        </button>
       </div>
       <div v-else-if="loading" class="path-picker__loading" aria-live="polite">
         <AppIcon name="loader" :size="20" />正在读取目录…
       </div>
       <ul v-else class="path-picker__list" aria-label="路径列表">
-        <li v-for="item in entries" :key="item.path">
+        <li v-for="item in entries" :key="entryKey(item)">
           <div
             class="path-picker__entry"
             :class="{
-              selected: !item.isParent && selectedPaths.includes(item.path),
+              selected:
+                !item.isParent && selectedPaths.includes(entryKey(item)),
               'has-enter':
                 interactionMode === 'analysis' && item.isDir && !item.isParent,
             }"
@@ -95,7 +98,7 @@
               type="button"
               class="path-picker__entry-enter"
               :aria-label="`进入 ${item.name}`"
-              @click.stop="open(item.path)"
+              @click.stop="open(item.path, item.wirePath)"
             >
               <AppIcon name="chevron-right" :size="17" />
             </button>
@@ -107,12 +110,12 @@
                   (mode !== 'file' || !item.isDir)
                 "
                 type="checkbox"
-                :checked="selectedPaths.includes(item.path)"
+                :checked="selectedPaths.includes(entryKey(item))"
                 :aria-label="`选择 ${item.name}`"
-                @change="select(item.path)"
+                @change="select(item.path, item.wirePath)"
               />
               <AppIcon
-                v-else-if="selectedPaths.includes(item.path)"
+                v-else-if="selectedPaths.includes(entryKey(item))"
                 name="circle-check"
                 :size="17"
               />
@@ -142,8 +145,9 @@
             type="button"
             class="primary"
             :disabled="
-              selectedPaths.length === 0 &&
-              (mode === 'file' || interactionMode === 'analysis')
+              (wirePaths && (loading || Boolean(error) || !currentWirePath)) ||
+              (selectedPaths.length === 0 &&
+                (mode === 'file' || interactionMode === 'analysis'))
             "
             @click="confirm"
           >
@@ -167,6 +171,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import AppIcon from "@/components/ui/AppIcon.vue";
 import { files } from "@/api";
 import { canonicalResourcePath, encodeResourceRoute } from "@/utils/url";
+import { archiveWirePath } from "@/utils/archiveWire";
+
+type PickedResource = {
+  name: string;
+  path: string;
+  wirePath: string;
+  isDir: boolean;
+};
 
 const props = withDefaults(
   defineProps<{
@@ -179,6 +191,9 @@ const props = withDefaults(
     shortcuts?: Array<{ label: string; path: string }>;
     /** When set, only these file extensions are listed; directories always show. */
     fileExtensions?: string[];
+    /** Explicit opt-in; legacy callers retain their original select contract. */
+    wirePaths?: boolean;
+    modelWirePath?: string;
   }>(),
   {
     modelValue: "/",
@@ -192,6 +207,8 @@ const props = withDefaults(
     // duplicate standalone “根目录” button.
     shortcuts: () => [],
     fileExtensions: undefined,
+    wirePaths: false,
+    modelWirePath: undefined,
   }
 );
 
@@ -199,6 +216,7 @@ const emit = defineEmits<{
   close: [];
   select: [path: string | string[]];
   "update:modelValue": [path: string | string[]];
+  "select-resource": [resource: PickedResource | PickedResource[]];
 }>();
 
 const currentPath = ref(
@@ -221,11 +239,23 @@ const selectedPaths = ref<string[]>(
           )
         )
 );
+const currentWirePath = ref(props.modelWirePath || "");
+const pickedResources = new Map<string, PickedResource>();
+let loadSequence = 0;
+function entryKey(item: { path: string; wirePath?: string }) {
+  return props.wirePaths ? item.wirePath || "" : item.path;
+}
 const dialog = ref<HTMLElement | null>(null);
 const loading = ref(false);
 const error = ref("");
 const entries = ref<
-  Array<{ name: string; path: string; isDir: boolean; isParent?: boolean }>
+  Array<{
+    name: string;
+    path: string;
+    wirePath?: string;
+    isDir: boolean;
+    isParent?: boolean;
+  }>
 >([]);
 
 // Analysis starts at the current directory and uses the list plus the
@@ -236,13 +266,25 @@ const visibleShortcuts = computed(() =>
 );
 
 const breadcrumbs = computed(() => {
-  const result = [{ name: "根目录", path: "/" }];
+  const result = [{ name: "根目录", path: "/", wirePath: "/" }];
   if (currentPath.value === "/") return result;
   const parts = currentPath.value.replace(/^\/+|\/+$/g, "").split("/");
   let path = "";
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     path += `/${part}`;
-    result.push({ name: part, path: `${path}/` });
+    result.push({
+      name: part,
+      path: `${path}/`,
+      wirePath: props.wirePaths
+        ? "/" +
+          currentWirePath.value
+            .replace(/^\/+|\/+$/g, "")
+            .split("/")
+            .slice(0, index + 1)
+            .join("/") +
+          "/"
+        : "",
+    });
   }
   return result;
 });
@@ -261,12 +303,28 @@ function fileMatchesFilter(name: string) {
   return exts.some((value) => value.replace(/^\./, "").toLowerCase() === ext);
 }
 
-async function load(path: string) {
+async function load(path: string, wirePath?: string) {
+  const sequence = ++loadSequence;
   currentPath.value = normalizePath(path);
   loading.value = true;
   error.value = "";
   try {
-    const resource = await files.fetch(encodeResourceRoute(currentPath.value));
+    const wire = props.wirePaths ? archiveWirePath(path, wirePath) : "";
+    if (props.wirePaths) currentWirePath.value = wire;
+    const resource = await files.fetch(
+      props.wirePaths ? `/files${wire}` : encodeResourceRoute(currentPath.value)
+    );
+    if (sequence !== loadSequence) return;
+    if (props.wirePaths) {
+      currentPath.value = normalizePath(resource.path, true);
+      currentWirePath.value = archiveWirePath(resource.path, resource.wirePath);
+      pickedResources.set(currentWirePath.value, {
+        name: resource.name,
+        path: currentPath.value,
+        wirePath: currentWirePath.value,
+        isDir: true,
+      });
+    }
     // Directories are always listed so the user can navigate; only files are filtered.
     const next = resource.items
       .filter((item) => {
@@ -277,10 +335,15 @@ async function load(path: string) {
       .map((item) => ({
         name: item.name,
         path: normalizePath(
-          canonicalResourcePath(item.path || item.url),
+          props.wirePaths
+            ? item.path
+            : canonicalResourcePath(item.path || item.url),
           item.isDir
         ),
         isDir: item.isDir,
+        wirePath: props.wirePaths
+          ? archiveWirePath(item.path, item.wirePath)
+          : undefined,
       }))
       .filter(
         (item) =>
@@ -297,33 +360,46 @@ async function load(path: string) {
             path: parentPath.value,
             isDir: true,
             isParent: true,
+            wirePath: props.wirePaths
+              ? currentWirePath.value
+                  .replace(/\/+$/, "")
+                  .split("/")
+                  .slice(0, -1)
+                  .join("/") || "/"
+              : undefined,
           },
           ...next,
         ]
       : next;
     if (props.mode === "directory") {
-      selectedPaths.value = [currentPath.value];
+      selectedPaths.value = [
+        props.wirePaths ? currentWirePath.value : currentPath.value,
+      ];
     }
+    if (props.wirePaths)
+      for (const item of next)
+        pickedResources.set(item.wirePath!, item as PickedResource);
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    if (sequence === loadSequence)
+      error.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 
-function open(path: string) {
-  void load(path);
+function open(path: string, wirePath?: string) {
+  void load(path, wirePath);
 }
 
 function handleEntryClick(item: (typeof entries.value)[number]) {
   if (item.isParent || !item.isDir || props.interactionMode !== "analysis") {
-    if (item.isDir) open(item.path);
-    else select(item.path);
+    if (item.isDir) open(item.path, item.wirePath);
+    else select(item.path, item.wirePath);
     return;
   }
   if (entryClickTimer !== undefined) window.clearTimeout(entryClickTimer);
   entryClickTimer = window.setTimeout(() => {
-    select(item.path);
+    select(item.path, item.wirePath);
     entryClickTimer = undefined;
   }, 220);
 }
@@ -334,35 +410,41 @@ function handleEntryDoubleClick(item: (typeof entries.value)[number]) {
     window.clearTimeout(entryClickTimer);
     entryClickTimer = undefined;
   }
-  open(item.path);
+  open(item.path, item.wirePath);
 }
 
 function handleEntryEnter(item: (typeof entries.value)[number]) {
-  if (item.isDir) open(item.path);
-  else select(item.path);
+  if (item.isDir) open(item.path, item.wirePath);
+  else select(item.path, item.wirePath);
 }
 
 function toggleEntrySelection(item: (typeof entries.value)[number]) {
-  if (!item.isParent) select(item.path);
+  if (!item.isParent) select(item.path, item.wirePath);
 }
 
-function select(path: string) {
+function select(path: string, wirePath?: string) {
   if (
     props.mode === "file" &&
-    !entries.value.some((item) => item.path === path && !item.isDir)
+    !entries.value.some(
+      (item) =>
+        entryKey(item) === (props.wirePaths ? wirePath : path) && !item.isDir
+    )
   )
     return;
+  const key = props.wirePaths ? wirePath! : path;
   if (!props.multiple) {
-    selectedPaths.value = [path];
+    selectedPaths.value = [key];
     return;
   }
-  selectedPaths.value = selectedPaths.value.includes(path)
-    ? selectedPaths.value.filter((value) => value !== path)
-    : [...selectedPaths.value, path];
+  selectedPaths.value = selectedPaths.value.includes(key)
+    ? selectedPaths.value.filter((value) => value !== key)
+    : [...selectedPaths.value, key];
 }
 
 function selectCurrentDirectory() {
-  const path = normalizePath(currentPath.value, true);
+  const path = props.wirePaths
+    ? currentWirePath.value
+    : normalizePath(currentPath.value, true);
   if (!props.multiple) {
     selectedPaths.value = [path];
     return;
@@ -375,10 +457,27 @@ function selectCurrentDirectory() {
 function confirm() {
   if (props.mode === "file" && selectedPaths.value.length === 0) return;
   const values =
-    selectedPaths.value.length > 0 ? selectedPaths.value : [currentPath.value];
-  const value = props.multiple ? values : values[0];
+    selectedPaths.value.length > 0
+      ? selectedPaths.value
+      : [props.wirePaths ? currentWirePath.value : currentPath.value];
+  const resources = props.wirePaths
+    ? values
+        .map((key) => pickedResources.get(key))
+        .filter((resource): resource is PickedResource => Boolean(resource))
+    : [];
+  if (
+    props.wirePaths &&
+    (loading.value || error.value || resources.length !== values.length)
+  )
+    return;
+  const displayValues = props.wirePaths
+    ? resources.map((resource) => resource.path)
+    : values;
+  const value = props.multiple ? displayValues : displayValues[0];
   emit("update:modelValue", value);
   emit("select", value);
+  if (props.wirePaths)
+    emit("select-resource", props.multiple ? resources : resources[0]);
   emit("close");
 }
 
@@ -421,7 +520,11 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 function normalizePath(value: string | undefined, directory = false) {
-  const canonical = canonicalResourcePath(value || "/");
+  const canonical = props.wirePaths
+    ? value?.startsWith("/")
+      ? value
+      : "/" + (value || "")
+    : canonicalResourcePath(value || "/");
   if (canonical === "/") return "/";
   const trimmed = canonical.replace(/\/+$/, "");
   return directory || canonical.endsWith("/") ? `${trimmed}/` : trimmed;
@@ -441,7 +544,10 @@ onMounted(() => {
     );
     (closeButton ?? dialog.value)?.focus();
   });
-  void load(currentPath.value);
+  void load(
+    currentPath.value,
+    props.wirePaths ? props.modelWirePath : undefined
+  );
 });
 
 onBeforeUnmount(() => {

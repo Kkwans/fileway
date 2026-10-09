@@ -33,7 +33,7 @@ describe("archive routes", () => {
         path: "/docs/bundle.zip",
         url: "/files/docs/bundle.zip",
       })
-    ).toEqual(archiveRoute("/docs/bundle.zip"));
+    ).toEqual(archiveRoute("/docs/bundle.zip", "/docs/bundle.zip"));
     expect(
       resourceOpenRoute({
         isDir: true,
@@ -41,5 +41,18 @@ describe("archive routes", () => {
         url: "/files/docs/archive.zip/",
       })
     ).toEqual({ path: "/files/docs/archive.zip/" });
+  });
+
+  it("carries the original opaque file route into archive navigation", () => {
+    expect(
+      resourceOpenRoute({
+        isDir: false,
+        path: "/中文.zip",
+        url: "/files/%D6%D0%CE%C4.zip",
+      })
+    ).toEqual({
+      path: "/archive",
+      query: { path: "/中文.zip", wirePath: "/%D6%D0%CE%C4.zip" },
+    });
   });
 });

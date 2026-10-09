@@ -17,17 +17,29 @@ export function isBrowsableArchivePath(value: string) {
   );
 }
 
-export function archiveRoute(path: string): RouteLocationRaw {
-  return { path: "/archive", query: { path: normalizeFileKey(path) } };
+export function archiveRoute(
+  path: string,
+  wirePath?: string
+): RouteLocationRaw {
+  return {
+    path: "/archive",
+    query: { path: normalizeFileKey(path), ...(wirePath ? { wirePath } : {}) },
+  };
 }
 
 export function resourceOpenRoute(resource: {
   isDir: boolean;
   path: string;
   url: string;
+  wirePath?: string;
 }): RouteLocationRaw {
   if (!resource.isDir && isBrowsableArchivePath(resource.path)) {
-    return archiveRoute(resource.path);
+    const wire =
+      resource.wirePath ||
+      (resource.url.startsWith("/files/")
+        ? resource.url.slice("/files".length).replace(/\/+$/, "")
+        : undefined);
+    return archiveRoute(resource.path, wire);
   }
   return { path: resource.url };
 }

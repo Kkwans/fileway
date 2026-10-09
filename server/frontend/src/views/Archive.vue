@@ -8,7 +8,11 @@
     >
       <template #actions>
         <router-link
-          v-if="archivePath"
+          v-if="
+            archivePath &&
+            (archiveWire || !archivePath.includes('\uFFFD')) &&
+            extractReport?.pathsVerified !== false
+          "
           class="archive-header-action"
           aria-label="打开所在目录"
           title="打开所在目录"
@@ -183,13 +187,13 @@
                     type="checkbox"
                     :checked="rowSelected(row.path)"
                     :disabled="rowInherited(row.path)"
-                    :aria-label="`选择 ${row.path}`"
+                    :aria-label="`选择 ${rowDisplay(row.path)}`"
                     @change="toggleSelected(row)"
                   />
                   <AppIcon :name="entryIcon(row)" :size="20" />
-                  <span :title="row.path">
+                  <span :title="rowDisplay(row.path)">
                     <strong>{{ row.name }}</strong>
-                    <small>{{ row.path }}</small>
+                    <small>{{ rowDisplay(row.path) }}</small>
                   </span>
                 </label>
               </div>
@@ -235,7 +239,7 @@
             <div>
               <AppIcon name="move" :size="19" />
               <input
-                v-model.trim="destination"
+                v-model="destination"
                 type="text"
                 autocomplete="off"
                 placeholder="例如 /照片/已解压"
@@ -255,7 +259,9 @@
             v-if="showDestinationPicker"
             title="选择解压目标目录"
             :model-value="destination"
-            @select="selectDestination"
+            :model-wire-path="destinationWire || undefined"
+            wire-paths
+            @select-resource="selectDestination"
             @close="showDestinationPicker = false"
           />
           <div class="archive-extract-footer">
@@ -331,7 +337,10 @@
             </li>
           </ul>
         </div>
-        <router-link :to="destinationRoute">
+        <p v-if="extractReport.pathsVerified === false">
+          历史结果的原始路径无法确认，请从文件列表重新选择目录。
+        </p>
+        <router-link v-else :to="destinationRoute">
           打开目标目录
           <AppIcon name="arrow-right" :size="17" />
         </router-link>
@@ -364,6 +373,11 @@ import {
   type ArchiveTreeRow,
 } from "@/utils/archiveTree";
 import { encodePath } from "@/utils/url";
+import {
+  archiveWirePath,
+  archiveWireEntries,
+  archiveDisplayPaths,
+} from "@/utils/archiveWire";
 import { filesize } from "@/utils";
 import dayjs from "@/utils/date";
 import { getResourceIconName } from "@/utils/fileIcons";
@@ -377,13 +391,24 @@ const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
 
 const archivePath = ref(archivePathFromRoute());
+const archiveWire = ref(
+  typeof route.query.wirePath === "string" ? route.query.wirePath : ""
+);
 const destination = ref(parentPath(archivePath.value));
+const destinationWire = ref(
+  archiveWire.value ? parentPath(archiveWire.value) : ""
+);
+let destinationProofPath = destination.value;
 const showDestinationPicker = ref(false);
 
-function selectDestination(value: string | string[]) {
-  destination.value = Array.isArray(value)
-    ? value[0] || destination.value
-    : value;
+function selectDestination(
+  value:
+    | { path: string; wirePath: string }
+    | Array<{ path: string; wirePath: string }>
+) {
+  const resource = Array.isArray(value) ? value[0] : value;
+  if (!resource) return;
+  bindDestination(resource.path, resource.wirePath);
   showDestinationPicker.value = false;
 }
 
@@ -405,7 +430,25 @@ let routeLoadSequence = 0;
 let listingLoadSequence = 0;
 
 const archiveName = computed(() => archivePath.value.split("/").at(-1) || "");
-const tree = computed(() => buildArchiveTree(listing.value?.entries ?? []));
+const wireEntries = computed(() =>
+  archiveWireEntries(listing.value?.entries ?? [])
+);
+const displayPaths = computed(() =>
+  archiveDisplayPaths(listing.value?.entries ?? [])
+);
+function rowDisplay(wire: string) {
+  return displayPaths.value.get(wire) || wire;
+}
+function displayTree(nodes: ArchiveTreeNode[]): ArchiveTreeNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    name: node.implicit
+      ? rowDisplay(node.path).split("/").at(-1) || node.name
+      : node.name,
+    children: displayTree(node.children),
+  }));
+}
+const tree = computed(() => displayTree(buildArchiveTree(wireEntries.value)));
 const allExpanded = computed(() => {
   const paths = new Set<string>();
   collectDirectoryPaths(tree.value, paths);
@@ -421,14 +464,14 @@ const filteredRows = computed(() => {
   const query = filter.value.toLocaleLowerCase();
   if (!query) return flattenedRows.value;
   return flattenedRows.value.filter((row) =>
-    row.path.toLocaleLowerCase().includes(query)
+    rowDisplay(row.path).toLocaleLowerCase().includes(query)
   );
 });
 const visibleRows = computed(() =>
   filteredRows.value.slice(0, visibleLimit.value)
 );
 const selectedStats = computed(() =>
-  selectedArchiveStats(listing.value?.entries ?? [], selected.value)
+  selectedArchiveStats(wireEntries.value, selected.value)
 );
 const taskActive = computed(
   () =>
@@ -466,41 +509,74 @@ const taskIcon = computed<AppIconName>(() => {
   };
   return currentTask.value ? icons[currentTask.value.status] : "hourglass";
 });
-const parentRoute = computed(() => filesRoute(parentPath(archivePath.value)));
-const destinationRoute = computed(() =>
-  filesRoute(extractReport.value?.destination || destination.value)
+const parentRoute = computed(() =>
+  filesRoute(
+    parentPath(archivePath.value),
+    archiveWire.value ? parentPath(archiveWire.value) : undefined
+  )
 );
+const destinationRoute = computed(() =>
+  filesRoute(
+    extractReport.value?.destination || destination.value,
+    extractReport.value?.destinationWirePath ||
+      destinationWire.value ||
+      undefined
+  )
+);
+function bindDestination(path: string, wire: string) {
+  destinationProofPath = path;
+  destination.value = path;
+  destinationWire.value = wire;
+}
+watch(destination, (path) => {
+  if (path !== destinationProofPath) destinationWire.value = "";
+});
 
 watch(filter, () => {
   visibleLimit.value = 200;
 });
 
 watch(
-  () => [route.query.path, route.query.task],
+  () => [route.query.path, route.query.wirePath, route.query.task],
   () => {
     void loadFromRoute();
   }
 );
 
-async function loadListing(path = archivePath.value) {
+async function loadListing(path = archivePath.value, wire = archiveWire.value) {
   if (!path) return;
   const sequence = ++listingLoadSequence;
   archivePath.value = path;
   loading.value = true;
   loadError.value = "";
   try {
-    const next = await archiveApi.entries(path);
+    const next = await archiveApi.entries(path, wire || undefined);
     if (
       disposed ||
       sequence !== listingLoadSequence ||
       archivePath.value !== path
     )
       return;
+    archiveWireEntries(next.entries);
+    archiveWire.value = archiveWirePath(
+      next.archivePath,
+      next.archiveWirePath,
+      next.pathVerified
+    );
+    archivePath.value = next.archivePath;
     listing.value = next;
-    void recentStore.record(path).catch(() => {});
-    destination.value ||= parentPath(path);
+    void recentStore
+      .record(next.archivePath, archiveWire.value)
+      .catch(() => {});
+    if (!destination.value)
+      bindDestination(
+        parentPath(next.archivePath),
+        parentPath(archiveWire.value)
+      );
     selected.value = new Set();
-    expanded.value = new Set(treeRootDirectories(next.entries));
+    expanded.value = new Set(
+      treeRootDirectories(archiveWireEntries(next.entries))
+    );
     visibleLimit.value = 200;
   } catch (error) {
     if (disposed || sequence !== listingLoadSequence) return;
@@ -511,14 +587,24 @@ async function loadListing(path = archivePath.value) {
   }
 }
 
+// The report can be replaced by an awaited task read during route loading.
+function reportPathsAreVerified() {
+  return extractReport.value?.pathsVerified !== false;
+}
+
 async function loadFromRoute() {
   const sequence = ++routeLoadSequence;
   stopPolling();
   loadError.value = "";
   extractReport.value = null;
   const routePath = archivePathFromRoute();
+  archiveWire.value =
+    typeof route.query.wirePath === "string" ? route.query.wirePath : "";
   archivePath.value = routePath;
-  destination.value = parentPath(routePath);
+  bindDestination(
+    parentPath(routePath),
+    archiveWire.value ? parentPath(archiveWire.value) : ""
+  );
   const taskId = typeof route.query.task === "string" ? route.query.task : "";
   if (!routePath && !taskId) listing.value = null;
   try {
@@ -540,8 +626,11 @@ async function loadFromRoute() {
       currentTask.value = null;
     }
     if (
+      reportPathsAreVerified() &&
       archivePath.value &&
-      (!listing.value || listing.value.archivePath !== archivePath.value)
+      (!listing.value ||
+        listing.value.archivePath !== archivePath.value ||
+        listing.value.archiveWirePath !== archiveWire.value)
     ) {
       await loadListing(archivePath.value);
     }
@@ -559,14 +648,26 @@ async function startExtraction() {
   try {
     const task = await archiveApi.extract({
       archivePath: listing.value.archivePath,
+      archiveWirePath: archiveWire.value,
       destination: destination.value,
-      selected: [...selected.value],
+      destinationWirePath: archiveWirePath(
+        destination.value,
+        destinationWire.value || undefined
+      ),
+      selected: [...selected.value].map((wire) =>
+        wire === "." ? "." : rowDisplay(wire)
+      ),
+      selectedWirePaths: [...selected.value],
     });
     currentTask.value = task;
     tasksStore.record(task);
     await router.replace({
       path: "/archive",
-      query: { path: listing.value.archivePath, task: task.id },
+      query: {
+        path: listing.value.archivePath,
+        wirePath: archiveWire.value,
+        task: task.id,
+      },
     });
     $showSuccess("解压任务已提交，可在任务中心取消");
     schedulePoll(0);
@@ -629,12 +730,37 @@ async function pollTask() {
 async function loadExtractReport(taskId: string) {
   const report = await archiveApi.extractionResult(taskId);
   if (disposed) return;
+  if (
+    (!report.archiveWirePath && report.archivePath.includes("\uFFFD")) ||
+    (!report.destinationWirePath && report.destination.includes("\uFFFD"))
+  )
+    report.pathsVerified = false;
   extractReport.value = report;
   archivePath.value = report.archivePath;
-  destination.value = report.destination;
-  if (!listing.value || listing.value.archivePath !== report.archivePath) {
-    await loadListing(report.archivePath);
-    destination.value = report.destination;
+  if (report.pathsVerified === false) {
+    listing.value = null;
+    archiveWire.value = "";
+    bindDestination(report.destination, "");
+    return;
+  }
+  archiveWire.value = archiveWirePath(
+    report.archivePath,
+    report.archiveWirePath
+  );
+  bindDestination(
+    report.destination,
+    archiveWirePath(report.destination, report.destinationWirePath)
+  );
+  if (
+    !listing.value ||
+    listing.value.archivePath !== report.archivePath ||
+    listing.value.archiveWirePath !== archiveWire.value
+  ) {
+    await loadListing(report.archivePath, archiveWire.value);
+    bindDestination(
+      report.destination,
+      archiveWirePath(report.destination, report.destinationWirePath)
+    );
   }
 }
 
@@ -700,8 +826,8 @@ function parentPath(value: string) {
   return parts.length ? `/${parts.join("/")}` : "/";
 }
 
-function filesRoute(value: string) {
-  return value === "/" ? "/files/" : `/files${encodePath(value)}/`;
+function filesRoute(value: string, wire?: string) {
+  return value === "/" ? "/files/" : `/files${wire || encodePath(value)}/`;
 }
 
 function treeRootDirectories(entries: ArchiveListing["entries"]) {

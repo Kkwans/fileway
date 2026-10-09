@@ -3,6 +3,8 @@ import { fetchJSON, fetchURL } from "./utils";
 
 export interface ArchiveEntry {
   path: string;
+  wirePath?: string;
+  pathVerified?: boolean;
   name: string;
   isDir: boolean;
   size: number;
@@ -16,6 +18,8 @@ export interface BlockedArchiveEntry {
 
 export interface ArchiveListing {
   archivePath: string;
+  archiveWirePath?: string;
+  pathVerified?: boolean;
   format: string;
   sourceSize: number;
   sourceModified: number;
@@ -34,6 +38,9 @@ export interface ArchiveExtractRequest {
   archivePath: string;
   destination: string;
   selected: string[];
+  archiveWirePath?: string;
+  destinationWirePath?: string;
+  selectedWirePaths?: string[];
 }
 
 export interface SkippedArchiveEntry {
@@ -45,6 +52,10 @@ export interface ArchiveExtractReport {
   archivePath: string;
   destination: string;
   selected: string[];
+  archiveWirePath?: string;
+  destinationWirePath?: string;
+  selectedWirePaths?: string[];
+  pathsVerified?: boolean;
   extractedFiles: number;
   extractedDirs: number;
   extractedBytes: number;
@@ -53,9 +64,11 @@ export interface ArchiveExtractReport {
   completedAt: number;
 }
 
-export function entries(path: string) {
+export function entries(path: string, wirePath?: string) {
+  if (!wirePath && path.includes("\uFFFD"))
+    throw new Error("原始路径无法确认，请从文件列表重新选择压缩包。");
   return fetchJSON<ArchiveListing>(
-    `/api/archives/entries?path=${encodeURIComponent(path)}`
+    `/api/archives/entries?${new URLSearchParams(wirePath ? { wirePath } : { path })}`
   );
 }
 
