@@ -11,6 +11,16 @@ export type OperationWireTarget = {
   legacyRoute: string;
 };
 
+export function operationSameTarget(
+  source: OperationResource,
+  destination: OperationResource
+): boolean {
+  return (
+    operationWireTarget(source, true).identity ===
+    operationWireTarget(destination, true).identity
+  );
+}
+
 /** Copy/move preserves the source's basename bytes, not its display spelling. */
 export function operationDestinationRoute(
   destination: OperationResource,

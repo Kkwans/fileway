@@ -82,6 +82,7 @@ import dayjs from "@/utils/date";
 import {
   operationWireTarget,
   operationDestinationRoute,
+  operationSameTarget,
 } from "@/utils/resourceOperationWire";
 import type { ListingResourceRef } from "@/utils/fileListing";
 import { useFileStore } from "@/stores/file";
@@ -176,7 +177,12 @@ async function transfer(value: ListingResourceRef | ListingResourceRef[]) {
       overwrite: false,
       rename: false,
     };
-    const conflicts = await upload.checkConflict([item], destination);
+    const sameTarget = operationSameTarget(item.from, item.to);
+    if (modeAtOpen === "move" && sameTarget) return;
+    item.rename = modeAtOpen === "copy" && sameTarget;
+    const conflicts = (await upload.checkConflict([item], destination)).filter(
+      () => !item.rename
+    );
     if (!currentSource()) return;
     if (!conflicts.length) {
       await executeTransfer(item);

@@ -16,6 +16,14 @@ import type { IUser } from "@/types/user";
 import { useAuthStore } from "@/stores/auth";
 import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
+import { useClipboardStore } from "@/stores/clipboard";
+import * as layoutContract from "@/utils/layoutContract";
+import * as searchPath from "@/utils/searchPath";
+import * as fileDrag from "@/utils/fileDrag";
+import * as archivePath from "@/utils/archivePath";
+import * as listingPreferences from "@/utils/listingPreferences";
+import * as listingIcons from "@/utils/listingIconSemantics";
+import * as sorting from "@/utils/sortingPreferences";
 import * as listing from "@/utils/fileListing";
 import * as identity from "@/utils/favoritePersistence";
 import * as operation from "@/utils/resourceOperationWire";
@@ -29,6 +37,12 @@ const api = { fetch: vi.fn(), copy: vi.fn(), move: vi.fn() },
 const toast = { $showError: vi.fn(), $showSuccess: vi.fn() };
 const router = { push: vi.fn() },
   buttons = { loading: vi.fn(), done: vi.fn(), success: vi.fn() };
+const route = vue.reactive({
+  path: "/files/",
+  fullPath: "/files/",
+  query: {},
+  hash: "",
+});
 type AnyBindings = Record<string, unknown>;
 function component(
   name: string,
@@ -58,12 +72,38 @@ function component(
     pinia: { storeToRefs },
     "vue-router": {
       useRouter: () => router,
-      useRoute: () => ({ path: "/files/" }),
+      useRoute: () => route,
+      onBeforeRouteUpdate: () => {},
+      onBeforeRouteLeave: () => {},
     },
     "@/api": { files: api },
     "@/stores/file": { useFileStore },
     "@/stores/auth": { useAuthStore },
     "@/stores/layout": { useLayoutStore },
+    "@/stores/clipboard": { useClipboardStore },
+    "@/stores/tags": { useTagsStore: () => ({ matchesFilter: () => true }) },
+    "@/stores/listingPreferences": {
+      useListingPreferencesStore: () => ({ preferences: {} }),
+    },
+    "@/stores/accountPreferences": {
+      useAccountPreferencesStore: () => ({ save: vi.fn() }),
+    },
+    "@/stores/navigation": {
+      useNavigationStore: () => ({ takeDirectoryState: () => null }),
+    },
+    "@/utils/constants": { enableExec: false },
+    "@/utils/layoutContract": layoutContract,
+    "@/utils/searchPath": searchPath,
+    "@/utils/fileDrag": fileDrag,
+    "@/utils/archivePath": archivePath,
+    "@/utils/listingPreferences": listingPreferences,
+    "@/utils/listingIconSemantics": listingIcons,
+    "@/utils/sortingPreferences": sorting,
+    "@/api/utils": {
+      removePrefix: (value: string) => value.replace(/^\/files/, ""),
+    },
+    "lodash-es": { throttle: (fn: unknown) => fn },
+    "js-base64": { Base64: { encodeURI: String } },
     "@/utils/url": urls,
     "@/utils/archiveWire": { archiveWirePath },
     "@/utils/batchRename": { batchRenameWireKey },
@@ -87,6 +127,8 @@ function component(
     runInNewContext(output, {
       module,
       exports: module.exports,
+      localStorage: { getItem: () => null },
+      window: { matchMedia: () => ({ matches: false }) },
       require: (key: string) => {
         if (key in modules) return modules[key];
         if (key.endsWith(".vue")) return { default: { name: key } };
@@ -198,6 +240,7 @@ describe("real SFC wire directory destinations (without DOM)", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
+    route.path = route.fullPath = "/files/";
     useAuthStore().setUser({ id: 1, scope: "/one" } as IUser);
     preflight.mockResolvedValue([]);
     api.copy.mockResolvedValue([new Response(null, { status: 202 })]);
@@ -334,6 +377,194 @@ describe("real SFC wire directory destinations (without DOM)", () => {
     );
     expect(changed).not.toHaveBeenCalled();
     expect(toast.$showSuccess.mock.calls[0][0]).toContain("提交");
+    view.dispose();
+  });
+
+  const conflict = (index: number) => ({
+    index,
+    checked: ["origin"],
+    name: "中文.txt",
+  });
+  it("Copy automatically keeps its own opaque source and never offers source replacement", async () => {
+    source();
+    preflight.mockResolvedValue([conflict(0)]);
+    const view = component("Copy");
+    await view.render().props!.onSelectResource({ path: "/", wirePath: "/" });
+    expect(api.copy).toHaveBeenCalledTimes(1);
+    expect(api.copy.mock.calls[0][0][0]).toMatchObject({
+      from: "/files/%D6%D0%CE%C4.txt",
+      to: "/files/%D6%D0%CE%C4.txt",
+      rename: true,
+      overwrite: false,
+    });
+    expect(useLayoutStore().currentPrompt).toBeNull();
+    expect(buttons.success).not.toHaveBeenCalled();
+    view.dispose();
+  });
+  it("same-display but different wire parents retain the normal Copy conflict choice", async () => {
+    const original = source();
+    const view = component("ResultAction", {
+      mode: "copy",
+      result: {
+        ...original,
+        url: "/files/%D6%D0/child",
+        name: "child",
+        dir: false,
+      },
+    });
+    preflight.mockResolvedValue([conflict(0)]);
+    const vnode = view.render();
+    await vnode.props!.onSelectResource({
+      path: "/中文",
+      wirePath: "/%E4%B8%AD%E6%96%87",
+    });
+    expect(api.copy).not.toHaveBeenCalled();
+    expect(useLayoutStore().currentPrompt?.prompt).toBe("resolve-conflict");
+    view.dispose();
+  });
+  it("ResultAction automatically keeps both for COPY but leaves same-target MOVE untouched", async () => {
+    const original = source();
+    preflight.mockResolvedValue([conflict(0)]);
+    const copy = component("ResultAction", {
+      mode: "copy",
+      result: { ...original, dir: false },
+    });
+    await copy.render().props!.onSelectResource({ path: "/", wirePath: "/" });
+    expect(api.copy).toHaveBeenCalledTimes(1);
+    expect(api.copy.mock.calls[0][0][0]).toMatchObject({
+      rename: true,
+      overwrite: false,
+    });
+    expect(useLayoutStore().currentPrompt).toBeNull();
+    const move = component("ResultAction", {
+      mode: "move",
+      result: { ...original, dir: false },
+    });
+    await move.render().props!.onSelectResource({ path: "/", wirePath: "/" });
+    expect(api.move).not.toHaveBeenCalled();
+    expect(useLayoutStore().currentPrompt).toBeNull();
+    copy.dispose();
+    move.dispose();
+  });
+  const pasteEvent = () => ({ target: { tagName: "DIV" } }) as unknown as Event;
+  function listingView() {
+    const view = component("../../views/files/FileListing");
+    return {
+      ...view,
+      paste: view.bindings.paste as (event: Event) => Promise<void>,
+    };
+  }
+  it("paste keeps both same-display siblings using their original wire basenames", async () => {
+    const original = source();
+    useClipboardStore().setClipboard({
+      key: "c",
+      path: "/not-the-route-spelling",
+      items: [
+        { from: original.url, name: original.name, isDir: false },
+        {
+          from: "/files/%E4%B8%AD%E6%96%87.txt",
+          name: original.name,
+          isDir: false,
+        },
+      ],
+    });
+    preflight.mockResolvedValue([conflict(0), conflict(1)]);
+    const view = listingView();
+    await view.paste(pasteEvent());
+    expect(api.copy).toHaveBeenCalledTimes(1);
+    expect(
+      api.copy.mock.calls[0][0].map((item: { to: string; rename: boolean }) => [
+        item.to,
+        item.rename,
+      ])
+    ).toEqual([
+      ["/files/%D6%D0%CE%C4.txt", true],
+      ["/files/%E4%B8%AD%E6%96%87.txt", true],
+    ]);
+    expect(useLayoutStore().currentPrompt).toBeNull();
+    expect(useFileStore().preselect).toBeNull();
+    view.dispose();
+  });
+  it("paste preserves an opaque destination and treats a real /files directory as data", async () => {
+    source();
+    route.path = route.fullPath = "/files/files/%D6%D0/";
+    useClipboardStore().setClipboard({
+      key: "c",
+      items: [
+        {
+          from: "/files/%E4%B8%AD/100%252F.txt",
+          name: "100%2F.txt",
+          isDir: false,
+        },
+      ],
+    });
+    const view = listingView();
+    await view.paste(pasteEvent());
+    expect(api.copy.mock.calls[0][0][0]).toMatchObject({
+      to: "/files/files/%D6%D0/100%252F.txt",
+      rename: false,
+    });
+    view.dispose();
+  });
+  it("paste skips only self conflicts, retains cross-directory conflict indices and keeps the self source", async () => {
+    source();
+    useClipboardStore().setClipboard({
+      key: "c",
+      items: [
+        { from: "/files/%D6%D0%CE%C4.txt", name: "中文.txt", isDir: false },
+        { from: "/files/out/other.txt", name: "other.txt", isDir: false },
+      ],
+    });
+    preflight.mockResolvedValue([conflict(0), conflict(1)]);
+    const view = listingView();
+    await view.paste(pasteEvent());
+    const prompt = useLayoutStore().currentPrompt!;
+    expect(prompt.props?.conflict).toEqual([conflict(1)]);
+    expect(api.copy).not.toHaveBeenCalled();
+    (prompt.confirm as (e: object, result: object[]) => void)(
+      { preventDefault: () => {} },
+      [{ index: 1, checked: [] }]
+    );
+    expect(api.copy.mock.calls[0][0]).toHaveLength(1);
+    expect(api.copy.mock.calls[0][0][0]).toMatchObject({
+      rename: true,
+      overwrite: false,
+    });
+    view.dispose();
+  });
+  it("cut-and-paste to the same wire target submits no MOVE or replacement prompt", async () => {
+    const original = source();
+    useClipboardStore().setClipboard({
+      key: "x",
+      path: "/files/",
+      items: [{ from: original.url, name: original.name, isDir: false }],
+    });
+    preflight.mockResolvedValue([conflict(0)]);
+    const view = listingView();
+    await view.paste(pasteEvent());
+    expect(api.move).not.toHaveBeenCalled();
+    expect(useLayoutStore().currentPrompt).toBeNull();
+    view.dispose();
+  });
+  it("late paste preflight after a source-scope switch performs no write", async () => {
+    const original = source();
+    useClipboardStore().setClipboard({
+      key: "c",
+      items: [{ from: original.url, name: original.name, isDir: false }],
+    });
+    let finish!: (rows: unknown[]) => void;
+    preflight.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const view = listingView(),
+      pending = view.paste(pasteEvent());
+    useAuthStore().setUser({ id: 1, scope: "/two" } as IUser);
+    finish([conflict(0)]);
+    await pending;
+    expect(api.copy).not.toHaveBeenCalled();
+    expect(useLayoutStore().currentPrompt).toBeNull();
     view.dispose();
   });
 });

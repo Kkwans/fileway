@@ -25,6 +25,7 @@ import {
   operationDestinationRoute,
   operationWireTarget,
   operationResourceSnapshot,
+  operationSameTarget,
 } from "@/utils/resourceOperationWire";
 import type { ListingResourceRef } from "@/utils/fileListing";
 
@@ -56,7 +57,10 @@ function buildItems(destination: string): MoveCopyItem[] {
     modified: item.modified,
     isDir: item.isDir,
     overwrite: false,
-    rename: false,
+    rename: operationSameTarget(
+      item.url,
+      operationDestinationRoute(destination, item)
+    ),
   }));
 }
 
@@ -97,7 +101,9 @@ async function copyTo(value: ListingResourceRef | ListingResourceRef[]) {
     const items = buildItems(destination);
     if (items.length === 0) return;
 
-    const conflict = await upload.checkConflict(items, destination);
+    const conflict = (await upload.checkConflict(items, destination)).filter(
+      ({ index }) => !items[index].rename
+    );
     if (fileStore.scope !== sourceScope) return;
     if (conflict.length > 0) {
       showHover({

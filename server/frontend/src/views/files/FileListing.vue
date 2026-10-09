@@ -1051,7 +1051,11 @@
 
 <script setup lang="ts">
 import { useAuthStore } from "@/stores/auth";
-import { operationAcknowledgedTarget } from "@/utils/resourceOperationWire";
+import {
+  operationAcknowledgedTarget,
+  operationDestinationRoute,
+  operationSameTarget,
+} from "@/utils/resourceOperationWire";
 import { useClipboardStore } from "@/stores/clipboard";
 import { useFileStore } from "@/stores/file";
 import { useLayoutStore } from "@/stores/layout";
@@ -1849,55 +1853,38 @@ const paste = async (event: Event) => {
   if (fileStore.scope !== sourceScope) return;
   if ((event.target as HTMLElement).tagName?.toLowerCase() === "input") return;
 
-  // TODO router location should it be
-  const items: PasteItem[] = [];
+  try {
+    // TODO router location should it be
+    const items: PasteItem[] = [];
+    const moving = clipboardStore.key === "x";
 
-  for (const item of clipboardStore.items) {
-    const from = item.from.endsWith("/") ? item.from.slice(0, -1) : item.from;
-    const to = route.path + encodeURIComponent(item.name);
-    items.push({
-      from,
-      to,
-      name: item.name,
-      size: item.size ?? 0, // ClipboardItem.size is optional, default to 0
-      modified: item.modified,
-      isDir: item.isDir,
-      overwrite: false,
-      rename: clipboardStore.path == route.path,
-    });
-  }
+    for (const item of clipboardStore.items) {
+      const from = item.from.endsWith("/") ? item.from.slice(0, -1) : item.from;
+      const to = operationDestinationRoute(route.path, from);
+      const sameTarget = operationSameTarget(from, to);
+      if (moving && sameTarget) continue;
+      items.push({
+        from,
+        to,
+        name: item.name,
+        size: item.size ?? 0, // ClipboardItem.size is optional, default to 0
+        modified: item.modified,
+        isDir: item.isDir,
+        overwrite: false,
+        rename: !moving && sameTarget,
+      });
+    }
 
-  if (items.length === 0) {
-    return;
-  }
+    if (items.length === 0) {
+      return;
+    }
 
-  let action = (overwrite?: boolean, rename?: boolean) => {
-    if (fileStore.scope !== sourceScope) return;
-    api
-      .copy(items, overwrite, rename)
-      .then((responses) => {
-        if (fileStore.scope !== sourceScope) return;
-        fileStore.clearSelection();
-        fileStore.setPreselect(
-          operationAcknowledgedTarget(responses[0], [
-            items[0].from,
-            items[0].to,
-          ]),
-          sourceScope
-        );
-        fileStore.reload = true;
-      })
-      .catch($showError);
-  };
-
-  if (clipboardStore.key === "x") {
-    action = (overwrite, rename) => {
+    let action = (overwrite?: boolean, rename?: boolean) => {
       if (fileStore.scope !== sourceScope) return;
       api
-        .move(items, overwrite, rename)
+        .copy(items, overwrite, rename)
         .then((responses) => {
           if (fileStore.scope !== sourceScope) return;
-          clipboardStore.resetClipboard();
           fileStore.clearSelection();
           fileStore.setPreselect(
             operationAcknowledgedTarget(responses[0], [
@@ -1908,44 +1895,77 @@ const paste = async (event: Event) => {
           );
           fileStore.reload = true;
         })
-        .catch($showError);
+        .catch((error) => {
+          if (fileStore.scope === sourceScope) $showError(error);
+        });
     };
-  }
 
-  const path = route.path.endsWith("/") ? route.path : route.path + "/";
-  const conflict = await upload.checkConflict(items as PasteItem[], path);
-  if (fileStore.scope !== sourceScope) return;
-
-  if (conflict.length > 0) {
-    layoutStore.showHover({
-      prompt: "resolve-conflict",
-      props: {
-        conflict: conflict,
-      },
-      confirm: (event: Event, result: Array<ConflictingResource>) => {
-        event.preventDefault();
+    if (moving) {
+      action = (overwrite, rename) => {
         if (fileStore.scope !== sourceScope) return;
-        layoutStore.closeHovers();
-        for (let i = result.length - 1; i >= 0; i--) {
-          const item = result[i];
-          if (item.checked.length == 2) {
-            items[item.index].rename = true;
-          } else if (item.checked.length == 1 && item.checked[0] == "origin") {
-            items[item.index].overwrite = true;
-          } else {
-            items.splice(item.index, 1);
+        api
+          .move(items, overwrite, rename)
+          .then((responses) => {
+            if (fileStore.scope !== sourceScope) return;
+            clipboardStore.resetClipboard();
+            fileStore.clearSelection();
+            fileStore.setPreselect(
+              operationAcknowledgedTarget(responses[0], [
+                items[0].from,
+                items[0].to,
+              ]),
+              sourceScope
+            );
+            fileStore.reload = true;
+          })
+          .catch((error) => {
+            if (fileStore.scope === sourceScope) $showError(error);
+          });
+      };
+    }
+
+    const path = route.path.endsWith("/") ? route.path : route.path + "/";
+    const conflict = (
+      await upload.checkConflict(items as PasteItem[], path)
+    ).filter(({ index }) => !items[index].rename);
+    if (fileStore.scope !== sourceScope) return;
+
+    if (conflict.length > 0) {
+      layoutStore.showHover({
+        prompt: "resolve-conflict",
+        props: {
+          conflict: conflict,
+        },
+        confirm: (event: Event, result: Array<ConflictingResource>) => {
+          event.preventDefault();
+          if (fileStore.scope !== sourceScope) return;
+          layoutStore.closeHovers();
+          for (let i = result.length - 1; i >= 0; i--) {
+            const item = result[i];
+            if (item.checked.length == 2) {
+              items[item.index].rename = true;
+            } else if (
+              item.checked.length == 1 &&
+              item.checked[0] == "origin"
+            ) {
+              items[item.index].overwrite = true;
+            } else {
+              items.splice(item.index, 1);
+            }
           }
-        }
-        if (items.length > 0) {
-          action();
-        }
-      },
-    });
+          if (items.length > 0) {
+            action();
+          }
+        },
+      });
 
-    return;
+      return;
+    }
+
+    action(false, false);
+  } catch (error) {
+    if (fileStore.scope === sourceScope) $showError(error as Error);
   }
-
-  action(false, false);
 };
 
 const scrollEvent = throttle(() => {
