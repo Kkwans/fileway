@@ -128,6 +128,8 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val operationHistory = OperationHistoryController(viewModelScope) { context === it && generation == it.generation }
     val recentAccess = RecentAccessController(viewModelScope) { context === it && generation == it.generation }
     val fileChecksum = FileChecksumController(viewModelScope) { context === it && generation == it.generation }
+    val documents = DocumentPreviewController(application, viewModelScope,
+        { context === it && generation == it.generation }, { bound, file -> if (context === bound) recentAccess.record(file) })
     val accountSettings = AccountSettingsController(viewModelScope, { context === it && generation == it.generation },
         onPasswordChanged = { bound, password ->
             if (context === bound && generation == bound.generation && store.password(bound.profile, bound.account) != null && context === bound)
@@ -256,6 +258,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
                 operationHistory.bind(bound)
                 recentAccess.bind(bound)
                 fileChecksum.bind(bound)
+                documents.bind(bound)
                 accountSettings.bind(bound)
                 trash.bind(bound)
                 fileOperations.bind(bound)
@@ -512,7 +515,12 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         } else if (file.mediaKind() == MediaKind.IMAGE) {
             search.cancel(); operation?.cancel(); mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false; endPlayback()
             mutable.value = mutable.value.copy(selected = null, image = file, mediaQueue = queue, busy = false, stage = "", error = null)
-        } else mutable.value = mutable.value.copy(error = "这个文件类型暂不支持打开")
+        } else {
+            val bound = context ?: return
+            search.cancel(); operation?.cancel(); mediaRequest++; pendingMediaOpen = null; pendingOpenFromPlayer = false; endPlayback()
+            mutable.value = mutable.value.copy(selected = null, image = null, mediaQueue = null, busy = false, stage = "", error = null)
+            documents.open(file, bound.api.id)
+        }
     }
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun openLocal(file: ResourceRef, queue: MediaQueue?, autoplay: Boolean) {
@@ -706,6 +714,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             error = if (returnToSource) null else if (opening) "已取消打开，可重试或选择其他视频" else mutable.value.error)
     }
     fun back(): Boolean {
+        if (documents.state.value.file != null) { documents.close(); return true }
         if (mutable.value.image != null) { closeImage(); return true }
         if (mutable.value.selected != null) { leavePlayer(); return true }
         if (search.state.value.open) { cancel(); search.close(); return true }
@@ -1011,6 +1020,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
         operationHistory.bind(null)
         recentAccess.bind(null)
         fileChecksum.bind(null)
+        documents.bind(null)
         accountSettings.bind(null)
         trash.bind(null)
         fileOperations.bind(null)

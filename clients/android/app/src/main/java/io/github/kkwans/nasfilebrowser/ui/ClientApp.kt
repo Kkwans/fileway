@@ -38,6 +38,7 @@ import java.util.Locale
     val state by model.state.collectAsStateWithLifecycle()
     val recent by model.recent.collectAsStateWithLifecycle()
     val search by model.search.state.collectAsStateWithLifecycle()
+    val document by model.documents.state.collectAsStateWithLifecycle()
     val pageState = key(state.previewScope) { rememberSaveableStateHolder() }
     // Local queue filters/scroll survive connecting or changing the server.
     val localTaskState = rememberSaveableStateHolder()
@@ -71,6 +72,7 @@ import java.util.Locale
     }
     if (state.image != null) { ImageScreen(model, state.image!!); return }
     if (state.selected != null) { PlayerScreen(model, state.selected!!); return }
+    if (document.file != null) { LibraryTheme { DocumentPreviewScreen(model.documents, {}, model::download, state.permissions.download, onEdit = null) }; return }
     if (state.tab == "account" && state.connected) { LibraryTheme {
         AccountSettingsScreen(model.accountSettings, { model.tab("settings") }, model::disconnect)
     }; return }
