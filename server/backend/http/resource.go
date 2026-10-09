@@ -292,6 +292,12 @@ var resourcePutHandler = withUser(func(w http.ResponseWriter, r *http.Request, d
 	if strings.HasSuffix(r.URL.Path, "/") {
 		return http.StatusMethodNotAllowed, fmt.Errorf("不能直接修改目录内容")
 	}
+	if r.URL.Query().Get("conditional") == "true" {
+		return conditionalResourceEdit(w, r, d)
+	}
+	// Ordinary Web edits share this serialization boundary with native edits.
+	textEditMu.Lock()
+	defer textEditMu.Unlock()
 
 	exists, err := afero.Exists(d.user.Fs, r.URL.Path)
 	if err != nil {
