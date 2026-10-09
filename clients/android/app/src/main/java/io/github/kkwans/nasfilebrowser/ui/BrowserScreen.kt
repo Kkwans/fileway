@@ -40,6 +40,7 @@ import io.github.kkwans.nasfilebrowser.app.FileCategory
 import io.github.kkwans.nasfilebrowser.app.mediaKind
 import io.github.kkwans.nasfilebrowser.data.collectionPath
 import io.github.kkwans.nasfilebrowser.data.FileTransferAction
+import io.github.kkwans.nasfilebrowser.data.DirectoryCrumb
 
 /** Official reference: restrained chrome, cover-led content and compact directory entries. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -77,6 +78,7 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
         if (uri != null) model.uploads.prepare(tree = uri) else model.uploads.cancelSelection()
     }
     LaunchedEffect(operations.lastTask?.id) { selected = selected - operations.lastSources.map(::key).toSet() }
+    LaunchedEffect(operations.scope, operations.batchCompletion) { selected = selected - operations.lastBatchSources.map(::key).toSet() }
     var batchKind by remember(state.previewScope, state.wirePath) { mutableStateOf("") }
     var pendingTrash by remember(state.previewScope, state.wirePath) { mutableStateOf<List<ResourceRef>?>(null) }
     var trashAttempted by remember(state.previewScope, state.wirePath) { mutableStateOf(false) }
@@ -106,7 +108,7 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
                             })
                         }
                     }
-                    if (state.permissions.create) IconButton({ model.startDirectoryCreation(state.previewScope) }, enabled = !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null) {
+                    if (state.permissions.create) IconButton({ model.startDirectoryCreation(state.previewScope) }, enabled = !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null && operations.batchRename == null) {
                         Icon(painterResource(R.drawable.ic_create_folder), "新建文件夹", Modifier.size(22.dp), tint = colors.onSurfaceVariant)
                     }
                     IconButton(onClick = { model.retry(); model.tags.refresh() }, enabled = !state.busy) {
@@ -132,11 +134,15 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
                         FileActionIcon(R.drawable.ic_arrow_back, "退出多选", true) { selecting = false; selected = emptySet() }
                     }
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (state.permissions.create) FileActionIcon(R.drawable.ic_copy, "批量复制", !state.busy && !selectionBusy && operations.transfer == null && chosen.isNotEmpty()) {
+                        if (state.permissions.create) FileActionIcon(R.drawable.ic_copy, "批量复制", !state.busy && !selectionBusy && operations.transfer == null && operations.batchRename == null && chosen.isNotEmpty()) {
                             model.startFileTransfer(chosen, FileTransferAction.COPY, state.previewScope)
                         }
-                        if (state.permissions.create && state.permissions.rename) FileActionIcon(R.drawable.ic_move, "批量移动", !state.busy && !selectionBusy && operations.transfer == null && chosen.isNotEmpty()) {
+                        if (state.permissions.create && state.permissions.rename) FileActionIcon(R.drawable.ic_move, "批量移动", !state.busy && !selectionBusy && operations.transfer == null && operations.batchRename == null && chosen.isNotEmpty()) {
                             model.startFileTransfer(chosen, FileTransferAction.MOVE, state.previewScope)
+                        }
+                        if (state.permissions.rename) FileActionIcon(R.drawable.ic_edit, "批量重命名", !state.busy && !selectionBusy && operations.transfer == null && operations.creation == null && operations.batchRename == null && chosen.size in 1..500) {
+                            batchKind = "rename"
+                            model.fileOperations.startBatchRename(chosen, DirectoryCrumb("原目录", state.path, state.wirePath), state.previewScope)
                         }
                         FileActionIcon(R.drawable.ic_download, "批量下载", !state.busy && !selectionBusy && downloads.folderPlan == null && chosen.isNotEmpty() && state.permissions.download) {
                             batchKind = "download"
@@ -148,9 +154,10 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
                             pendingTrash = chosen.toList(); trashAttempted = false
                         }
                     }
+                    if (state.permissions.rename && chosen.size > 500) Text("批量重命名最多 500 项，请减少选择。", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                     if (selectionBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    val error = if (batchKind == "trash") trash.error else if (batchKind == "download") downloads.error else null
-                    val notice = if (batchKind == "trash") trash.notice else if (batchKind == "download") downloads.notice else null
+                    val error = if (batchKind == "trash") trash.error else if (batchKind == "download") downloads.error else if (batchKind == "rename") operations.error else null
+                    val notice = if (batchKind == "trash") trash.notice else if (batchKind == "download") downloads.notice else if (batchKind == "rename") operations.notice else null
                     (error ?: notice)?.let { Text(it, Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall,
                         color = if (error != null) colors.error else colors.onSurfaceVariant) }
                 }
@@ -186,6 +193,10 @@ import io.github.kkwans.nasfilebrowser.data.FileTransferAction
             }
         }
         details?.let { file -> FileDetailsDialog(file, actions = { FileActions(model, file) { details = null } }, onDismiss = { details = null }) }
+        operations.batchRename?.let { rename -> BatchRenameSheet(model.fileOperations) {
+            selected = emptySet(); selecting = false
+            model.openContainingDirectory(rename.files.first())
+        } }
         pendingTrash?.let { pending -> AlertDialog(onDismissRequest = { if (!trash.changing) pendingTrash = null },
             title = { Text("将 ${pending.size} 项移入回收站？") }, text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

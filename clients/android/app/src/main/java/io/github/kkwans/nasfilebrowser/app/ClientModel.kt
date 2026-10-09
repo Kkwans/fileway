@@ -129,7 +129,7 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     val recentAccess = RecentAccessController(viewModelScope) { context === it && generation == it.generation }
     val trash = TrashController(viewModelScope, { context === it && generation == it.generation }, ::resourceTrashed, ::resourceRestored)
     val fileOperations = FileOperationsController(viewModelScope, { context === it && generation == it.generation }, ::resourceRenamed, ::resourceTransferFinished,
-        { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } })
+        { bound, _ -> if (context === bound && generation == bound.generation) { transferRefreshPending = true; refreshTransferDirectoryIfVisible() } }, ::resourcesBatchRenamed)
     val storageTools = StorageToolsController(viewModelScope) { context === it && generation == it.generation }
     init {
         viewModelScope.launch { state.collect { syncLibraryObservers() } }
@@ -826,6 +826,17 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
             navigation.clear()
             browse(target.path + current.path.removePrefix(file.path), target.wirePath + current.wirePath.removePrefix(source))
         }
+    }
+    private fun resourcesBatchRenamed(bound: SessionContext, changes: List<BatchRenameChange>) {
+        if (context !== bound || generation != bound.generation) return
+        // Apply the entire original snapshot once: a->b, b->a must never rewrite
+        // the result of the first rename as though it were the second source.
+        mutable.value = mutable.value.copy(files = applyBatchResourceRenames(mutable.value.files, changes),
+            notice = "已重命名 ${changes.size} 项")
+        favorites.refresh(replaceRead = true); tags.refresh(replaceRead = true)
+        if (recentAccess.state.value.loaded) recentAccess.refresh()
+        transferRefreshPending = true
+        refreshTransferDirectoryIfVisible()
     }
     private fun resourceRestored(bound: SessionContext, path: String) {
         if (context !== bound) return

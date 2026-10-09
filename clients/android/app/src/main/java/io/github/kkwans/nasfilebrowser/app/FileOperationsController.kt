@@ -10,7 +10,14 @@ import org.json.JSONObject
 data class FileOperationsState(val scope: String = "", val changing: Boolean = false,
     val error: String? = null, val notice: String? = null, val transfer: FileTransferDraft? = null,
     val lastTask: ServerTask? = null, val lastDestination: DirectoryCrumb? = null, val lastSources: List<ResourceRef> = emptyList(), val taskError: String? = null,
-    val creation: DirectoryCreateDraft? = null)
+    val creation: DirectoryCreateDraft? = null, val batchRename: BatchRenameDraft? = null,
+    val batchCompletion: Long = 0, val lastBatchSources: List<ResourceRef> = emptyList())
+data class BatchRenameDraft(val files: List<ResourceRef>, val parent: DirectoryCrumb, val options: BatchRenameOptions = BatchRenameOptions(),
+    val overrides: Map<String, String> = emptyMap(), val reviewed: Boolean = false, val legacy: Boolean = false,
+    val serverErrors: Map<String, String> = emptyMap(), val error: String? = null, val unknownExecution: Boolean = false,
+    val reviewedChanges: List<BatchRenameChange> = emptyList()) {
+    val rows get() = batchRenameRows(files, options, overrides)
+}
 data class DirectoryCreateDraft(val parent: DirectoryCrumb, val name: String = "", val error: String? = null,
     val existing: DirectoryCrumb? = null, val unknownTarget: DirectoryCrumb? = null)
 data class FileTransferDraft(val files: List<ResourceRef>, val action: FileTransferAction, val directory: DirectoryCrumb,
@@ -23,25 +30,27 @@ private data class PendingFileTransfer(val task: ServerTask, val sources: List<R
 class FileOperationsController(private val scope: CoroutineScope, private val isCurrent: (SessionContext) -> Boolean,
     private val onRenamed: (SessionContext, ResourceRef, RenameTarget) -> Unit,
     private val onTransferFinished: (SessionContext, ServerTask, List<ResourceRef>) -> Unit = { _, _, _ -> },
-    private val onDirectoryReady: (SessionContext, DirectoryCrumb) -> Unit = { _, _ -> }) {
+    private val onDirectoryReady: (SessionContext, DirectoryCrumb) -> Unit = { _, _ -> },
+    private val onBatchRenamed: (SessionContext, List<BatchRenameChange>) -> Unit = { _, _ -> }) {
     private val mutable = MutableStateFlow(FileOperationsState())
     val state = mutable.asStateFlow()
     private var bound: SessionContext? = null
     private var write: Job? = null
     private var directoryRead: Job? = null
     private var directoryEpoch = 0L
+    private var batchEpoch = 0L
     private var poll: Job? = null
     private var visible = false
     private val pendingTasks = linkedMapOf<String, PendingFileTransfer>()
     fun bind(context: SessionContext?) {
-        write?.cancel(); directoryRead?.cancel(); directoryEpoch++; poll?.cancel(); visible = false
+        write?.cancel(); directoryRead?.cancel(); directoryEpoch++; batchEpoch++; poll?.cancel(); visible = false
         pendingTasks.clear(); bound = context
         mutable.value = FileOperationsState(scope = context?.owner.orEmpty())
     }
     private fun current(context: SessionContext) = bound === context && isCurrent(context)
     fun startTransfer(files: List<ResourceRef>, action: FileTransferAction, directory: DirectoryCrumb) {
         val context = bound ?: return
-        if (!current(context) || mutable.value.changing || mutable.value.transfer != null || mutable.value.creation != null) return
+        if (!current(context) || mutable.value.changing || mutable.value.transfer != null || mutable.value.creation != null || mutable.value.batchRename != null) return
         directoryRead?.cancel(); directoryEpoch++
         mutable.value = mutable.value.copy(error = null, notice = null, transfer = FileTransferDraft(files.toList(), action, directory))
         readTransferDirectory(directory)
@@ -197,7 +206,7 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
     }
     fun startDirectoryCreation(parent: DirectoryCrumb) {
         val context = bound ?: return
-        if (!current(context) || mutable.value.changing || mutable.value.transfer != null || mutable.value.creation != null) return
+        if (!current(context) || mutable.value.changing || mutable.value.transfer != null || mutable.value.creation != null || mutable.value.batchRename != null) return
         mutable.value = mutable.value.copy(creation = DirectoryCreateDraft(parent), error = null, notice = null)
     }
     fun directoryName(value: String) {
@@ -287,7 +296,7 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
     }
     fun rename(file: ResourceRef, name: String, done: () -> Unit = {}) {
         val context = bound ?: return
-        if (!current(context) || mutable.value.changing || mutable.value.creation != null || mutable.value.transfer != null) return
+        if (!current(context) || mutable.value.changing || mutable.value.creation != null || mutable.value.transfer != null || mutable.value.batchRename != null) return
         mutable.value = mutable.value.copy(changing = true, error = null, notice = null)
         write = scope.launch {
             var applied = false
@@ -309,6 +318,158 @@ class FileOperationsController(private val scope: CoroutineScope, private val is
                     mutable.value = mutable.value.copy(changing = false,
                         error = if (applied) "重命名已保存，请刷新查看实际状态" else error.message ?: "重命名失败，请重试")
                     if (applied) done()
+                }
+            }
+        }
+    }
+
+    fun startBatchRename(files: List<ResourceRef>, parent: DirectoryCrumb, sourceScope: String) {
+        val context = bound ?: return
+        val before = mutable.value
+        if (!current(context) || context.api.id != sourceScope || before.changing || before.transfer != null || before.creation != null || before.batchRename != null) return
+        try {
+            val snapshot = files.toList()
+            batchRenameRows(snapshot, BatchRenameOptions())
+            val selectedParent = batchRenameParent(snapshot.first())
+            require(parent.path == selectedParent.path && resourceWireBytes(requireNotNull(parent.wirePath))
+                .contentEquals(resourceWireBytes(selectedParent.wirePath!!))) { "所选目录已变化，请刷新后重新选择" }
+            batchEpoch++
+            mutable.value = before.copy(batchRename = BatchRenameDraft(snapshot, parent), error = null, notice = null)
+        } catch (error: Exception) {
+            mutable.value = before.copy(error = error.message ?: "无法开始批量重命名，请刷新后重新选择")
+        }
+    }
+    fun closeBatchRename(verifyUnknown: Boolean = false) {
+        val draft = mutable.value.batchRename ?: return
+        if (mutable.value.changing || draft.unknownExecution && !verifyUnknown) return
+        batchEpoch++
+        mutable.value = mutable.value.copy(batchRename = null)
+    }
+    fun batchRenameOptions(value: BatchRenameOptions) {
+        val draft = mutable.value.batchRename ?: return
+        if (mutable.value.changing || draft.unknownExecution || draft.options == value) return
+        batchEpoch++
+        mutable.value = mutable.value.copy(batchRename = draft.copy(options = value, reviewed = false, legacy = false,
+            reviewedChanges = emptyList(), serverErrors = emptyMap(), error = null))
+    }
+    fun batchRenameName(wire: String, name: String) {
+        val draft = mutable.value.batchRename ?: return
+        if (mutable.value.changing || draft.unknownExecution || draft.files.none { batchRenameSourceWire(it) == wire }) return
+        batchEpoch++
+        mutable.value = mutable.value.copy(batchRename = draft.copy(overrides = draft.overrides + (wire to name),
+            reviewed = false, legacy = false, reviewedChanges = emptyList(), serverErrors = emptyMap(), error = null))
+    }
+    fun resetBatchRenameNames() {
+        val draft = mutable.value.batchRename ?: return
+        if (mutable.value.changing || draft.unknownExecution) return
+        batchEpoch++
+        mutable.value = mutable.value.copy(batchRename = draft.copy(overrides = emptyMap(), reviewed = false, legacy = false,
+            reviewedChanges = emptyList(), serverErrors = emptyMap(), error = null))
+    }
+    private fun batchBody(changes: List<BatchRenameChange>, legacy: Boolean, dryRun: Boolean): JSONObject = JSONObject()
+        .put("dryRun", dryRun).put("items", JSONArray(changes.map { change ->
+            if (legacy) JSONObject().put("from", change.file.path).put("to", change.target.path)
+            else JSONObject().put("fromWirePath", batchRenameSourceWire(change.file)).put("toWirePath", change.target.wirePath)
+        }))
+    private data class BatchReply(val changes: List<BatchRenameChange>, val errors: Map<String, String>, val error: String?)
+    private class BatchExecutionReported : IllegalStateException("服务器在检查时报告了执行，请刷新原目录核对")
+    private fun batchReply(response: JSONObject, changes: List<BatchRenameChange>, legacy: Boolean, execute: Boolean): BatchReply {
+        val valid = response.get("valid") as? Boolean ?: error("服务器返回了无效检查结果")
+        val executed = response.get("executed") as? Boolean ?: error("服务器未确认执行状态")
+        if (!execute && executed) throw BatchExecutionReported()
+        check(executed == execute) { "服务器返回的执行状态不匹配，请核对原目录" }
+        val items = response.getJSONArray("items")
+        check(items.length() == changes.size) { "服务器返回的变更项目不完整，请核对原目录" }
+        val errors = linkedMapOf<String, String>()
+        val acknowledged = changes.mapIndexed { index, change ->
+            val row = items.getJSONObject(index)
+            val from = row.get("from") as? String ?: error("服务器返回的源路径无效")
+            val to = row.get("to") as? String ?: error("服务器返回的目标路径无效")
+            val wire = batchRenameSourceWire(change.file)
+            if (legacy) check(from == change.file.path && to == change.target.path) { "服务器返回的变更来源不匹配" }
+            else {
+                check(resourceWireBytes(row.getString("fromWirePath")).contentEquals(resourceWireBytes(wire)) &&
+                    resourceWireBytes(row.getString("toWirePath")).contentEquals(resourceWireBytes(change.target.wirePath))) { "服务器返回的原始路径不匹配" }
+                check(from == change.file.path && to.startsWith('/') && to.substringBeforeLast('/') == change.target.path.substringBeforeLast('/')) { "服务器返回的显示路径不匹配" }
+                check(renameNameError(to.substringAfterLast('/')) == null) { "服务器返回的新名称无效" }
+            }
+            val status = row.getString("status")
+            check(status == (if (execute) "completed" else "ready") || !execute && status == "error") { "服务器返回的项目状态不匹配" }
+            val message = row.optString("error")
+            if (status == "error") errors[wire] = message.ifEmpty { "这个项目未通过检查" }
+            else check(message.isEmpty()) { "服务器返回的项目确认包含错误" }
+            change.copy(target = change.target.copy(path = to, name = to.substringAfterLast('/')))
+        }
+        val message = response.optString("error").takeIf { it.isNotEmpty() }
+        check(valid == (errors.isEmpty() && message == null)) { "服务器返回的检查状态不一致" }
+        if (execute) check(valid && errors.isEmpty()) { "服务器未确认所有项目已重命名" }
+        return BatchReply(acknowledged, errors, message)
+    }
+    fun checkBatchRename() {
+        val context = bound ?: return
+        val draft = mutable.value.batchRename ?: return
+        if (!current(context) || mutable.value.changing || draft.unknownExecution) return
+        val epoch = ++batchEpoch
+        mutable.value = mutable.value.copy(changing = true, batchRename = draft.copy(reviewed = false, reviewedChanges = emptyList(), serverErrors = emptyMap(), error = null))
+        write = scope.launch {
+            try {
+                check(context.api.permissions().rename) { "当前账号没有重命名权限" }
+                val rows = draft.rows
+                require(rows.none { it.error != null }) { "请先修正预览中的名称错误" }
+                val changes = rows.filter { it.changed }.map { BatchRenameChange(it.file, it.target!!) }
+                require(changes.isNotEmpty()) { "名称没有变化，请先设置命名规则或调整新名称" }
+                check(current(context) && batchEpoch == epoch) { "连接已切换" }
+                var legacy = false
+                val response = try { context.api.request("POST", "/api/resources/batch-rename", batchBody(changes, false, true)) }
+                catch (error: ServiceException) {
+                    if (error.status != 400) throw error
+                    check(batchRenameLegacySafe(changes)) { "此服务器不支持原始路径批量重命名，请升级服务器后重试；未提交执行" }
+                    check(current(context) && batchEpoch == epoch) { "连接已切换" }
+                    legacy = true
+                    context.api.request("POST", "/api/resources/batch-rename", batchBody(changes, true, true))
+                }
+                val reply = batchReply(response, changes, legacy, false)
+                if (current(context) && batchEpoch == epoch) mutable.value = mutable.value.copy(changing = false,
+                    batchRename = draft.copy(reviewed = reply.errors.isEmpty() && reply.error == null, legacy = legacy, reviewedChanges = reply.changes,
+                        serverErrors = reply.errors, error = reply.error ?: if (reply.errors.isEmpty()) null else "存在冲突，请调整名称后重新检查"))
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (current(context) && batchEpoch == epoch) mutable.value = mutable.value.copy(changing = false,
+                    batchRename = draft.copy(reviewed = false, reviewedChanges = emptyList(), unknownExecution = error is BatchExecutionReported,
+                        error = error.message ?: "无法完成检查，输入已保留，请重试"))
+            }
+        }
+    }
+    fun executeBatchRename() {
+        val context = bound ?: return
+        val draft = mutable.value.batchRename ?: return
+        if (!current(context) || mutable.value.changing || !draft.reviewed || draft.unknownExecution || draft.reviewedChanges.isEmpty()) return
+        val epoch = ++batchEpoch
+        mutable.value = mutable.value.copy(changing = true, batchRename = draft.copy(error = null))
+        write = scope.launch {
+            var sending = false
+            try {
+                check(context.api.permissions().rename) { "当前账号没有重命名权限" }
+                check(current(context) && batchEpoch == epoch) { "连接已切换" }
+                sending = true
+                val response = context.api.request("POST", "/api/resources/batch-rename", batchBody(draft.reviewedChanges, draft.legacy, false))
+                val reply = batchReply(response, draft.reviewedChanges, draft.legacy, true)
+                if (!current(context) || batchEpoch != epoch) return@launch
+                mutable.value = mutable.value.copy(changing = false, batchRename = null, batchCompletion = mutable.value.batchCompletion + 1,
+                    lastBatchSources = reply.changes.map { it.file }, error = null, notice = "已重命名 ${reply.changes.size} 项")
+                // One atomic callback is essential for swaps; sequential rewrites corrupt references.
+                try { onBatchRenamed(context, reply.changes) } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    if (current(context)) mutable.value = mutable.value.copy(error = "重命名已完成，本地关联刷新失败，请刷新原目录核对")
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (current(context) && batchEpoch == epoch) {
+                    val unknown = sending && (error !is ServiceException || error.status !in setOf(400, 401, 403, 404, 409))
+                    mutable.value = mutable.value.copy(changing = false, batchRename = draft.copy(reviewed = false, reviewedChanges = emptyList(),
+                        unknownExecution = unknown, error = if (unknown) "无法确认哪些名称已生效。请刷新原目录核对，避免重复执行。"
+                        else if (error is ServiceException && error.status == 409) "名称或磁盘状态已变化，请重新检查后确认"
+                        else error.message ?: "执行被拒绝，输入已保留，请重新检查"))
                 }
             }
         }
