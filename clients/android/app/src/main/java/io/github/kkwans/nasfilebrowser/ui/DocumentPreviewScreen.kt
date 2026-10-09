@@ -27,6 +27,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.kkwans.nasfilebrowser.R
@@ -34,6 +36,7 @@ import io.github.kkwans.nasfilebrowser.app.DocumentPreviewController
 import io.github.kkwans.nasfilebrowser.app.DocumentPreviewState
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
+import kotlin.math.roundToInt
 
 @Composable internal fun DocumentPreviewScreen(controller: DocumentPreviewController, onClose: () -> Unit,
     onDownload: (ResourceRef) -> Unit, canDownload: Boolean, onOpenExternal: ((ResourceRef) -> Unit)? = null,
@@ -178,13 +181,28 @@ import io.github.kkwans.nasfilebrowser.data.*
     } }
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-        val viewportWidth = maxWidth
-        val pixels = with(density) { viewportWidth.roundToPx() }
+        val pixels = with(density) { maxWidth.roundToPx() }
         LaunchedEffect(pixels) { controller.viewport(pixels) }
         val page = borrowed?.bitmap?.takeUnless { it.isRecycled }
         if (page != null && state.pageImage != null) Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState())) {
-            Image(page.asImageBitmap(), "PDF 第 ${state.page + 1} 页", modifier = Modifier.width(viewportWidth * (state.zoom / 100f)).heightIn(max = 100_000.dp).aspectRatio(page.width.toFloat() / page.height))
+            val dimensions = documentPdfDisplaySize(pixels, state.zoom, page.width, page.height)
+            val width = with(density) { dimensions.width.toDp() }
+            val height = with(density) { dimensions.height.toDp() }
+            Image(page.asImageBitmap(), "PDF 第 ${state.page + 1} 页", modifier = Modifier.size(width, height))
         }
         else if (state.rendering) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
     }
+}
+
+/** Scroll children are unbounded, but a finite page still has to fit Compose's
+ * packed pixel constraints. Derive the page from the real viewport and ratio,
+ * then uniformly fit extreme pages; a large dp constant is not infinity. */
+internal fun documentPdfDisplaySize(viewportWidthPixels: Int, zoomPercent: Int, pageWidth: Int, pageHeight: Int): IntSize {
+    require(viewportWidthPixels >= 0 && zoomPercent > 0 && pageWidth > 0 && pageHeight > 0)
+    val width = (viewportWidthPixels.toDouble() * zoomPercent / 100).coerceAtLeast(1.0)
+    val height = (width * pageHeight / pageWidth).coerceAtLeast(1.0)
+    val limits = Constraints.fitPrioritizingWidth(minWidth = 0, maxWidth = width.coerceAtMost((Int.MAX_VALUE - 1).toDouble()).roundToInt(),
+        minHeight = 0, maxHeight = height.coerceAtMost((Int.MAX_VALUE - 1).toDouble()).roundToInt())
+    val scale = minOf(1.0, limits.maxWidth / width, limits.maxHeight / height)
+    return IntSize((width * scale).roundToInt().coerceIn(1, limits.maxWidth), (height * scale).roundToInt().coerceIn(1, limits.maxHeight))
 }
