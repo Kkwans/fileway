@@ -1,6 +1,7 @@
 package io.github.kkwans.nasfilebrowser
 
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
@@ -51,7 +52,16 @@ class PlayerFullscreenTest {
         fun click(label: String) {
             val action = device.wait(Until.findObject(By.desc(label)), 5_000) ?: error("Missing player action $label")
             assertTrue("Player action must be enabled: $label", action.isEnabled)
+            println("Owned fullscreen action=$label bounds=${action.visibleBounds}")
             action.click()
+        }
+        fun detailsGone() {
+            val gone = device.wait(Until.gone(By.desc("播放详情")), 5_000)
+            if (!gone) {
+                device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+                device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/fullscreen-entry-failure-${SystemClock.uptimeMillis()}.png")
+            }
+            assertTrue("Fullscreen must hide details: exit=${device.hasObject(By.desc("退出全屏"))}, screen=${device.displayWidth}x${device.displayHeight}", gone)
         }
         fun findViewport(view: View): PlayerViewport? {
             if (view is PlayerViewport) return view
@@ -137,13 +147,13 @@ class PlayerFullscreenTest {
             withTimeout(15_000) { model.player.state.first { it.durationMs > 0 && it.playing && it.canSavePosition } }
             main { model.player.pause() }
             click("竖屏全屏")
-            assertTrue(device.wait(Until.gone(By.desc("播放详情")), 5_000))
+            detailsGone()
             checkFullscreen()
             click("退出全屏")
             assertTrue(device.wait(Until.hasObject(By.desc("播放详情")), 5_000))
             device.unfreezeRotation()
             click("横屏全屏")
-            assertTrue(device.wait(Until.gone(By.desc("播放详情")), 5_000))
+            detailsGone()
             withTimeout(5_000) { while (device.displayWidth <= device.displayHeight) delay(50) }
             checkFullscreen()
             device.pressBack()
