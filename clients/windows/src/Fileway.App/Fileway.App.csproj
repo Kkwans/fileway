@@ -37,6 +37,7 @@
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\AppIcon.ico" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Content Update="Assets\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -84,6 +85,14 @@
   <Target Name="ValidateFilewayGoHost" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
     <Error Condition="!Exists('$(FilewayArtifactsRoot)\host\$(Configuration)\fileway-host.exe')" Text="Build the matching Go Host first with eng/Build-Windows.ps1 or eng/Build-GoHost.ps1." />
     <Error Condition="!Exists('$(FilewayArtifactsRoot)\host\$(Configuration)\host-build.json')" Text="The Go Host build provenance manifest is missing." />
+  </Target>
+
+  <Target Name="CollectFilewayXamlPublishResources" BeforeTargets="ComputeFilesToPublish">
+    <Error Condition="!Exists('$(TargetDir)$(AssemblyName).pri')" Text="Build the native application before publishing its resource index." />
+    <ItemGroup>
+      <FilewayXamlPublishResource Include="$(TargetDir)**\*.xbf;$(TargetDir)$(AssemblyName).pri" />
+      <ResolvedFileToPublish Include="@(FilewayXamlPublishResource)" RelativePath="%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
   </Target>
 
   <!--
