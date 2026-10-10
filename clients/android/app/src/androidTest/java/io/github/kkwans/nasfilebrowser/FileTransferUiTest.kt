@@ -16,9 +16,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 internal class FileTransferUiTest : LibraryUiHarness() {
     private fun clickText(label: String) {
-        var target = text(label)
-        while (!target.isClickable) target = target.parent ?: error("Missing clickable owner for $label")
-        assertTrue("$label must be enabled", target.isEnabled); target.click()
+        val target = enabledTextAction(label)
+        try { assertTrue("$label must be enabled", target.isEnabled); target.click() }
+        finally { target.recycle() }
     }
     private suspend fun regularList() {
         main { model.fileLayout(FileLayout.LIST) }
@@ -30,7 +30,15 @@ internal class FileTransferUiTest : LibraryUiHarness() {
         withTimeout(5000) { model.fileOperations.state.first { it.transfer?.let { draft -> !draft.loading && draft.directory.path == "/$name" } == true } }
     }
     private suspend fun review() {
-        clickText("检查此目录")
+        try { clickText("检查此目录") }
+        catch (failure: Exception) {
+            val state = model.fileOperations.state.value
+            val draft = state.transfer
+            capture("transfer-review-not-ready")
+            throw AssertionError("Owned review unavailable: changing=${state.changing}, present=${draft != null}, " +
+                "visible=${draft?.visible}, loading=${draft?.loading}, reviewed=${draft?.reviewed}, " +
+                "unknownSubmission=${draft?.unknownSubmission}, errorPresent=${draft?.error != null}", failure)
+        }
         withTimeout(5000) { model.fileOperations.state.first { !it.changing && it.transfer?.reviewed == true } }
     }
 
