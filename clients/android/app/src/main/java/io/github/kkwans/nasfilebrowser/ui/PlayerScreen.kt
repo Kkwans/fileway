@@ -90,7 +90,6 @@ import io.github.kkwans.nasfilebrowser.R
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.mediaKey
-import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
 import io.github.kkwans.nasfilebrowser.player.SeekDragSession
 import kotlinx.coroutines.delay
@@ -101,7 +100,7 @@ import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 import io.github.kkwans.nasfilebrowser.download.DownloadIndex
 import io.github.kkwans.nasfilebrowser.download.DownloadRuntime
 
-private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE, MORE }
+private enum class PlayerSheet { AUDIO, SUBTITLE, SUBTITLE_ADJUST, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE, MORE }
 private enum class PlayerDisplayMode { AUTOMATIC, PORTRAIT_FULLSCREEN, LANDSCAPE_FULLSCREEN }
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
@@ -572,7 +571,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         }
                     }
                 }
-                SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp)
+                if (sheet == null) SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp)
                     .then(if (touchLocked) Modifier.clearAndSetSemantics {} else Modifier))
                 if (touchLocked) {
                     // The topmost input layer covers controls as well as the picture. System Back unlocks first.
@@ -585,7 +584,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             IntOffset(position.x.roundToInt(), position.y.roundToInt())
                         })
                 }
-                if (sheet != null) PlayerPanel(landscape, fullscreen && !exploration, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "媒体系统音量"; PlayerSheet.BRIGHTNESS -> "窗口亮度"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; PlayerSheet.MORE -> "更多播放选项"; else -> "播放来源" }, { sheet = null; touch() }) {
+                if (sheet != null) PlayerPanel(landscape, fullscreen && !exploration, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SUBTITLE_ADJUST -> "字幕调整"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "媒体系统音量"; PlayerSheet.BRIGHTNESS -> "窗口亮度"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; PlayerSheet.MORE -> "更多播放选项"; else -> "播放来源" }, { sheet = null; touch() }, back = if (sheet == PlayerSheet.SUBTITLE_ADJUST) {
+                    { sheet = PlayerSheet.SUBTITLE; touch() }
+                } else null, feedback = feedback) {
                     when (sheet) {
                         PlayerSheet.MORE -> Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             SourceField("文件", file.name)
@@ -623,69 +624,57 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         }
                         PlayerSheet.AUDIO, PlayerSheet.SUBTITLE -> {
                             val audio = sheet == PlayerSheet.AUDIO
-                            TrackChoices(if (audio) state.audio else state.subtitles, if (audio) state.selectedAudio else state.selectedSubtitle,
+                            PlayerTrackList(
+                                tracks = if (audio) state.audio else state.subtitles,
+                                selected = if (audio) state.selectedAudio else state.selectedSubtitle,
+                                pending = if (audio) state.pendingAudio else state.pendingSubtitle,
+                                subtitle = !audio,
                                 header = if (audio) null else { {
-                                    if (file.downloadId.isEmpty()) DetailAction(R.drawable.ic_folder, "选择外挂字幕", if (state.subtitleLoading) "正在读取字幕" else "浏览当前服务器的字幕文件", "选择外挂字幕", !state.subtitleLoading) { sheet = PlayerSheet.EXTERNAL; touch() }
-                                    DetailAction(R.drawable.ic_subtitles, "选择本地字幕", "从手机或文档提供方选择字幕", "选择本地字幕", !readingDocument && !state.subtitleLoading) {
-                                        documentGeneration = model.player.state.value.mediaGeneration
-                                        touch()
-                                        try { subtitleDocument.launch(arrayOf("*/*")) }
-                                        catch (_: android.content.ActivityNotFoundException) {
-                                            documentGeneration = null
-                                            uiScope.launch { feedback.showSnackbar("此设备没有可用的文件选择器") }
-                                        }
-                                    }
-                                    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Text("字幕时间 · " + when {
-                                            state.subtitleDelayMs > 0 -> "延后 ${state.subtitleDelayMs / 1000.0} 秒"
-                                            state.subtitleDelayMs < 0 -> "提前 ${-state.subtitleDelayMs / 1000.0} 秒"
-                                            else -> "无偏移"
-                                        }, fontSize = 14.sp)
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            TextButton(onClick = { model.player.subtitleDelay(state.subtitleDelayMs - 500) }) { Text("提前 0.5 秒") }
-                                            TextButton(onClick = { model.player.subtitleDelay(0); subtitleOffset = "" }) { Text("归零") }
-                                            TextButton(onClick = { model.player.subtitleDelay(state.subtitleDelayMs + 500) }) { Text("延后 0.5 秒") }
-                                        }
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            OutlinedTextField(subtitleOffset, { subtitleOffset = it; subtitleOffsetError = null }, Modifier.weight(1f),
-                                                label = { Text("偏移秒数，正数延后") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                                            TextButton(onClick = {
-                                                val seconds = subtitleOffset.trim().toDoubleOrNull()
-                                                if (seconds == null || !seconds.isFinite() || seconds !in -600.0..600.0) subtitleOffsetError = "请输入 -600 到 600 秒"
-                                                else { model.player.subtitleDelay((seconds * 1000).toLong()); subtitleOffsetError = null }
-                                            }) { Text("应用") }
-                                        }
-                                        subtitleOffsetError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                                        val codec = state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.codec.orEmpty()
-                                        when {
-                                            codec.contains("ssa", ignoreCase = true) -> Text("ASS / SSA 使用作者字体、位置与动画，保留原始样式。", fontSize = 12.sp, color = PlayerSecondary)
-                                            listOf("pgs", "dvbsub", "vobsub").any { codec.contains(it, ignoreCase = true) } -> Text("位图字幕使用片源图像，不支持文字字号调整。", fontSize = 12.sp, color = PlayerSecondary)
-                                            else -> {
-                                                Text("文本字号 ${(subtitlePreview.scale * 100).roundToInt()}% · 底边距 ${(subtitlePreview.bottomPadding * 100).roundToInt()}%", fontSize = 14.sp)
-                                                Slider(subtitlePreview.scale, { subtitlePreview = subtitlePreview.copy(scale = it) },
-                                                    Modifier.semantics { contentDescription = "文本字幕字号" }, valueRange = .5f..2f)
-                                                Slider(subtitlePreview.bottomPadding, { subtitlePreview = subtitlePreview.copy(bottomPadding = it) },
-                                                    Modifier.semantics { contentDescription = "文本字幕底边距" }, valueRange = 0f.. .4f)
-                                                Text("字幕外观预览", fontSize = (18 * subtitlePreview.scale).sp, color = Color.White)
-                                                Row {
-                                                    TextButton(onClick = { subtitlePreview = TextSubtitleAppearance() }) { Text("重置预览") }
-                                                    TextButton(onClick = {
-                                                        val value = subtitlePreview
-                                                        uiScope.launch {
-                                                            try { model.playbackPreferences.saveTextSubtitleAppearance(value) }
-                                                            catch (cancelled: CancellationException) { throw cancelled }
-                                                            catch (_: Exception) { feedback.showSnackbar("字幕外观保存失败，请重试") }
-                                                        }
-                                                    }) { Text("保存到此设备") }
-                                                }
+                                    PlayerSubtitleHomeActions(
+                                        downloadLocal = file.downloadId.isNotEmpty(),
+                                        loading = state.subtitleLoading,
+                                        readingDocument = readingDocument,
+                                        onAdjust = { sheet = PlayerSheet.SUBTITLE_ADJUST; touch() },
+                                        onServerSubtitle = { sheet = PlayerSheet.EXTERNAL; touch() },
+                                        onLocalSubtitle = {
+                                            documentGeneration = model.player.state.value.mediaGeneration
+                                            touch()
+                                            try { subtitleDocument.launch(arrayOf("*/*")) }
+                                            catch (_: android.content.ActivityNotFoundException) {
+                                                documentGeneration = null
+                                                uiScope.launch { feedback.showSnackbar("此设备没有可用的文件选择器") }
                                             }
-                                        }
-                                    }
-                                } }) {
+                                        },
+                                    )
+                                } },
+                            ) {
                                 if (audio) model.player.audio(it) else model.player.subtitle(it)
-                                sheet = null; touch()
+                                touch()
                             }
                         }
+                        PlayerSheet.SUBTITLE_ADJUST -> PlayerSubtitleAdjustments(
+                            delayMs = state.subtitleDelayMs,
+                            codec = state.subtitles.firstOrNull { it.id == state.selectedSubtitle }?.codec.orEmpty(),
+                            offsetText = subtitleOffset,
+                            onOffsetText = { subtitleOffset = it; subtitleOffsetError = null },
+                            offsetError = subtitleOffsetError,
+                            onDelay = model.player::subtitleDelay,
+                            onApplyOffset = {
+                                val seconds = subtitleOffset.trim().toDoubleOrNull()
+                                if (seconds == null || !seconds.isFinite() || seconds !in -600.0..600.0) subtitleOffsetError = "请输入 -600 到 600 秒"
+                                else { model.player.subtitleDelay((seconds * 1000).toLong()); subtitleOffsetError = null }
+                            },
+                            appearance = subtitlePreview,
+                            onAppearance = { subtitlePreview = it },
+                            onSaveAppearance = {
+                                val value = subtitlePreview
+                                uiScope.launch {
+                                    try { model.playbackPreferences.saveTextSubtitleAppearance(value) }
+                                    catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (_: Exception) { feedback.showSnackbar("字幕外观保存失败，请重试") }
+                                }
+                            },
+                        )
                         PlayerSheet.EXTERNAL -> NasSubtitlePicker(model, file, chosen = { sheet = PlayerSheet.SUBTITLE; touch() })
                         PlayerSheet.SPEED -> LazyColumn(contentPadding = PaddingValues(bottom = 20.dp)) {
                             item {
@@ -874,13 +863,36 @@ private val PlayerDivider = Color(0xFF293342)
     }
 }
 @OptIn(ExperimentalLayoutApi::class)
-@Composable private fun PlayerPanel(landscape: Boolean, immersive: Boolean, title: String, dismiss: () -> Unit, content: @Composable () -> Unit) {
+@Composable private fun PlayerPanel(landscape: Boolean, immersive: Boolean, title: String, dismiss: () -> Unit, back: (() -> Unit)? = null, feedback: SnackbarHostState, content: @Composable () -> Unit) {
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(dismissOnBackPress = false, usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val keyboard = LocalSoftwareKeyboardController.current
         val imeVisible = WindowInsets.isImeVisible
+        val dialogView = LocalView.current
+        var imeDismissRequested by remember { mutableStateOf(false) }
+        LaunchedEffect(imeVisible) {
+            // Compose visibility can briefly bounce false -> true while IME
+            // hides. Only a genuinely visible native IME starts a new cycle.
+            if (imeVisible && androidx.core.view.ViewCompat.getRootWindowInsets(dialogView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true) {
+                imeDismissRequested = false
+            }
+        }
         // This dialog owns its Back dispatcher and IME insets. Keep an edit's
         // first Back local to the keyboard, then return through the panel.
-        BackHandler { if (imeVisible) keyboard?.hide() else dismiss() }
+        BackHandler {
+            val rootIme = androidx.core.view.ViewCompat.getRootWindowInsets(dialogView)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
+            // Native insets hide before Compose's IME animation finishes. The
+            // first Back still belongs to that IME; later Back must not be eaten
+            // by its old visible snapshot. Keep this acknowledgement across pages.
+            val hideIme = when (rootIme) {
+                true -> true
+                false -> imeVisible && !imeDismissRequested
+                null -> imeVisible && !imeDismissRequested
+            }
+            if (hideIme) { imeDismissRequested = true; keyboard?.hide() }
+            else (back ?: dismiss)()
+        }
         PlayerWindowBars((LocalView.current.parent as? DialogWindowProvider)?.window, immersive)
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(if (immersive)
             WindowInsets.displayCutout.union(WindowInsets.navigationBarsIgnoringVisibility).union(WindowInsets.captionBar)
@@ -891,21 +903,16 @@ private val PlayerDivider = Color(0xFF293342)
                 else Modifier.align(Alignment.BottomCenter).fillMaxWidth().heightIn(max = maxHeight * 0.75f)
             Column(panel.clip(if (landscape) RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp) else RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).background(PlayerPanel).pointerInput(Unit) { detectTapGestures(onTap = {}) }, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (back != null) PlayerIcon(R.drawable.ic_arrow_back, "返回字幕轨道", back)
                     Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     PlayerIcon(R.drawable.art_close, "关闭播放设置", dismiss)
                 }
                 HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = Color(0xFF323236))
                 content()
             }
-        }
-    }
-}
-@Composable private fun TrackChoices(tracks: List<NativeTrack>, selected: Int, header: @Composable (() -> Unit)? = null, choose: (Int) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(bottom = 20.dp)) {
-        if (header != null) item { header() }
-        itemsIndexed(tracks, key = { _, track -> track.id }) { index, track ->
-            val duplicate = tracks.count { it.title == track.title } > 1
-            Choice(track.title + if (duplicate) " · ${index + 1}" else "", listOf(track.language.takeUnless { it == "und" }.orEmpty(), track.codec).filter { it.isNotBlank() }.joinToString(" · "), selected == track.id) { choose(track.id) }
+            // The active dialog owns feedback while open; keep the same state
+            // so failed track requests remain visible and accessible above it.
+            SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(16.dp))
         }
     }
 }

@@ -7,7 +7,6 @@ import android.os.SystemClock
 import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
-import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.inspector.WindowInspector
 import android.view.accessibility.AccessibilityNodeInfo
@@ -109,35 +108,10 @@ class PlayerFullscreenTest {
                 device.executeShellCommand("input touchscreen tap ${bounds.centerX()} ${bounds.centerY()}")
                 return
             }
-            val downTime = SystemClock.uptimeMillis()
-            fun inject(action: Int): Boolean {
-                val properties = MotionEvent.PointerProperties().apply {
-                    id = 0
-                    toolType = if (touchTool == "finger") MotionEvent.TOOL_TYPE_FINGER else MotionEvent.TOOL_TYPE_UNKNOWN
-                }
-                val coordinates = MotionEvent.PointerCoords().apply {
-                    x = bounds.centerX().toFloat(); y = bounds.centerY().toFloat()
-                    pressure = 1f; size = 1f
-                }
-                val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, 1,
-                    arrayOf(properties), arrayOf(coordinates), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
-                OwnedUiTraceRule.trace("fullscreen-event action=$action tool=${event.getToolType(0)} " +
-                    "source=${event.source} device=${event.deviceId} " +
-                    "pressure=${event.getPressure(0)} flags=${event.flags}")
-                return try { instrumentation.uiAutomation.injectInputEvent(event, true) }
-                finally { event.recycle() }
-            }
-            val down = inject(MotionEvent.ACTION_DOWN)
-            if (!down) rejectedInput("DOWN")
-            assertTrue("Owned tap DOWN must be injected at $bounds", down)
-            if (inspectDown) { inspectDown = false; rejectedInput("DOWN-observed-before-UP") }
-            var released = false
-            try {
-                SystemClock.sleep(100) // Same normal tap duration as UiDevice's click.
-                released = inject(MotionEvent.ACTION_UP)
-                if (!released) rejectedInput("UP")
-                assertTrue("Owned tap UP must be injected at $bounds", released)
-            } finally { if (!released) inject(MotionEvent.ACTION_CANCEL) }
+            OwnedTouchInput.tap(instrumentation, bounds,
+                toolType = if (touchTool == "finger") MotionEvent.TOOL_TYPE_FINGER else MotionEvent.TOOL_TYPE_UNKNOWN,
+                tracePrefix = "fullscreen", rejected = ::rejectedInput,
+                afterDown = { if (inspectDown) { inspectDown = false; rejectedInput("DOWN-observed-before-UP") } })
         }
         fun traceWindow(stage: String) {
             activity.scenario.onActivity { host ->
@@ -226,6 +200,7 @@ class PlayerFullscreenTest {
                             "ime=${insets?.isVisible(WindowInsetsCompat.Type.ime())}"
                     }
                 }
+                if (!stage.startsWith("real-shade")) capture("failure-$stage")
                 throw AssertionError("Fullscreen wait failed at $stage; windows=$windows; ${trace.snapshot()}", failure)
             }
         }
@@ -285,24 +260,40 @@ class PlayerFullscreenTest {
                 hiddenFocusedWindow("panel-$panel-hidden")
                 assertEquals("A focused settings window must not resize video", before, geometry())
                 capture("$direction-${if (panel == "选择字幕") "subtitles" else "speed"}")
-                if (panel == "播放速度") {
-                    val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)
-                        ?: error("Custom rate input missing")
-                    val bounds = field.visibleBounds
-                    physicalTap(bounds)
-                    suspend fun keyboard(shown: Boolean) = awaitStage("ime-$shown") {
-                        withContext(Dispatchers.Main) {
-                            WindowInspector.getGlobalWindowViews().any { view ->
-                                view.isShown && view.hasWindowFocus() &&
-                                    ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == shown
-                            }
+                if (panel == "选择字幕") {
+                    click("字幕调整")
+                    assertTrue(device.wait(Until.hasObject(By.desc("返回字幕轨道")), 5_000))
+                    hiddenFocusedWindow("subtitle-adjustments-hidden")
+                    assertEquals("Subtitle adjustments must preserve native layers", before, geometry())
+                }
+                val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)
+                    ?: error(if (panel == "选择字幕") "Subtitle offset input missing" else "Custom rate input missing")
+                val bounds = field.visibleBounds
+                physicalTap(bounds)
+                suspend fun keyboard(shown: Boolean) = awaitStage("ime-$shown") {
+                    withContext(Dispatchers.Main) {
+                        WindowInspector.getGlobalWindowViews().any { view ->
+                            view.isShown && view.hasWindowFocus() &&
+                                ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == shown
                         }
                     }
-                    keyboard(true)
-                    assertEquals("IME must not resize any video/subtitle layer", before, geometry())
+                }
+                keyboard(true)
+                assertEquals("IME must not resize any video/subtitle layer", before, geometry())
+                device.pressBack()
+                keyboard(false)
+                assertTrue("Back closes the keyboard before its panel", device.hasObject(By.desc("播放设置")))
+                assertEquals(before, geometry())
+                if (panel == "选择字幕") {
+                    assertTrue("IME Back must keep the adjustments page", device.hasObject(By.desc("返回字幕轨道")))
                     device.pressBack()
-                    keyboard(false)
-                    assertTrue("Back closes the keyboard before its panel", device.hasObject(By.desc("播放设置")))
+                    awaitStage("subtitle-home-after-back") {
+                        val nodes = freshAccessibilityBounds(instrumentation, Rect(0, 0, device.displayWidth, device.displayHeight))
+                        nodes != null && nodes.any { it.visible && it.description == "播放设置" } &&
+                            nodes.none { it.visible && it.description == "返回字幕轨道" } &&
+                            nodes.any { it.visible && it.description == "字幕调整" }
+                    }
+                    hiddenFocusedWindow("subtitle-home-hidden")
                     assertEquals(before, geometry())
                 }
                 click("关闭播放设置")
