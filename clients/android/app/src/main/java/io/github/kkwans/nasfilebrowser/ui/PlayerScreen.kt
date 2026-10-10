@@ -21,7 +21,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -611,16 +610,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                         }
                         PlayerSheet.QUEUE -> queue?.let { snapshot ->
-                            Column {
-                                Text("${snapshot.source.label} · ${snapshot.index + 1} / ${snapshot.items.size}", Modifier.padding(horizontal = 24.dp, vertical = 12.dp), color = PlayerSecondary, fontSize = 13.sp)
-                                LazyColumn(state = rememberLazyListState(initialFirstVisibleItemIndex = snapshot.index), contentPadding = PaddingValues(bottom = 20.dp)) {
-                                    itemsIndexed(snapshot.items, key = { _, item -> item.mediaKey }) { index, item ->
-                                        Choice(item.name, "${index + 1} · ${item.path.substringBeforeLast('/').ifEmpty { "/" }}", index == snapshot.index) {
-                                            model.navigateMedia(index); sheet = null; touch()
-                                        }
-                                    }
-                                }
-                            }
+                            PlayerQueuePanel(model, snapshot, state.playing, state.durationMs, choose = { index ->
+                                model.navigateMedia(index); sheet = null; touch()
+                            })
                         }
                         PlayerSheet.AUDIO, PlayerSheet.SUBTITLE -> {
                             val audio = sheet == PlayerSheet.AUDIO

@@ -2,6 +2,7 @@ package io.github.kkwans.nasfilebrowser
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Rect
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -16,6 +17,7 @@ import androidx.test.uiautomator.Until
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.FileLayout
 import io.github.kkwans.nasfilebrowser.data.*
+import io.github.kkwans.nasfilebrowser.player.PlaybackTraceAction
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
@@ -236,41 +238,104 @@ class MediaQueueUiTest {
     @Test fun videoQueueControlsKeepSnapshotAndRejectSupersededOpen(): Unit = runBlocking {
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(media, videos = listOf("one.mkv", "two.mkv"))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
         val model = model(); val store = store(); val profile = store.save(ServerProfile(name = "Video queue fixture", address = source.url))
+        fun freshNodes() = freshAccessibilityBounds(instrumentation, Rect(0, 0, device.displayWidth, device.displayHeight))
+        suspend fun findFresh(label: String, enabled: Boolean = true, checked: Boolean? = null, hud: Boolean = false): FreshAccessibilityNodeBounds = withTimeout(5_000) {
+            while (true) {
+                freshNodes()?.singleOrNull {
+                    it.visible && it.description == label && it.enabled == enabled &&
+                        (!hud || "播放详情" !in it.ancestorDescriptions) &&
+                        (checked == null || (it.checkable && it.checked == checked))
+                }?.let { return@withTimeout it }
+                delay(25)
+            }
+            @Suppress("UNREACHABLE_CODE") error("Queue control is not reachable: $label")
+        }
+        fun tap(node: FreshAccessibilityNodeBounds) {
+            assertTrue("Queue control must be enabled: ${node.description}", node.enabled)
+            // Compose omits AX ACTION_CLICK for the selected RadioButton;
+            // its enabled pointer target still closes the current-item panel.
+            val selectedRadio = node.checkable && node.checked && node.className == "android.widget.RadioButton"
+            assertTrue("Queue control must expose a click or the selected radio state: ${node.description}",
+                node.clickable || selectedRadio)
+            assertFalse("Queue control must have visible bounds: ${node.description}", node.bounds.isEmpty)
+            OwnedTouchInput.tap(instrumentation, node.bounds, tracePrefix = "queue-panel")
+        }
+        // Portrait also has a details shortcut; exercise the unique HUD button.
+        suspend fun openQueue() { tap(findFresh("播放列表", hud = true)) }
+        suspend fun chooseQueue(index: Int, name: String) {
+            tap(findFresh("第 ${index + 1} 项，$name"))
+            withTimeout(5_000) {
+                while (freshNodes()?.none { it.visible && it.description == "播放设置" } != true) delay(25)
+            }
+        }
         try {
             main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             withTimeout(10_000) { model.state.first { it.connected && !it.busy } }
             main { model.foreground(false); model.open(model.state.value.files.first()) }
             withTimeout(10_000) { model.state.first { it.selected?.name == "one.mkv" && !it.busy } }
             val snapshot = model.state.value.mediaQueue!!.snapshotId
+            val orderedPaths = model.state.value.mediaQueue!!.items.map { it.wirePath }
             assertFalse(model.player.state.value.playing)
             assertEquals(0, model.state.value.mediaQueue!!.index)
-            assertTrue(device.wait(Until.hasObject(By.desc("上一个视频")), 5000))
+            val next = findFresh("下一个视频")
+            assertTrue("Next remains a real enabled button", next.clickable)
+            val controls = checkNotNull(freshNodes()) { "Queue HUD accessibility sample is incomplete" }
+            assertFalse("The main controls no longer expose a previous-item button", controls.any { it.visible && it.description == "上一个视频" })
+            assertFalse(controls.any { it.visible && it.description == "上一集" })
+            val removedSeekAction = Regex("""^(后退|快退|快进)\s*(10|十)\s*秒$""")
+            assertFalse("Explicit +/-10 second buttons must not return",
+                controls.any { it.visible && it.clickable && it.description?.let(removedSeekAction::matches) == true })
             capture("video-queue-first")
-            assertNotNull(device.wait(Until.findObject(By.desc("上一个视频").enabled(false)), 5000))
+            val generation = model.player.state.value.mediaGeneration
+            val opens = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.OPEN_REQUEST }
+            val mediaSets = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.MEDIA_SET }
+            openQueue()
+            val currentRow = findFresh("第 1 项，one.mkv", checked = true)
+            assertTrue("Current item must expose its selected state", currentRow.checkable && currentRow.checked)
+            chooseQueue(0, "one.mkv")
+            assertEquals("Selecting the current item must not reopen media", opens,
+                model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.OPEN_REQUEST })
+            assertEquals(generation, model.player.state.value.mediaGeneration)
+            assertEquals("Selecting the current item must not set native media again", mediaSets,
+                model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.MEDIA_SET })
+            assertEquals(snapshot, model.state.value.mediaQueue!!.snapshotId)
+            assertEquals(orderedPaths, model.state.value.mediaQueue!!.items.map { it.wirePath })
             source.stallNextRead.set(true)
-            device.findObject(By.desc("下一个视频")).click()
+            tap(findFresh("下一个视频"))
             assertTrue(withContext(Dispatchers.IO) { source.resumeRead.await(5, TimeUnit.SECONDS) })
             main { model.cancel() }
             assertFalse(model.state.value.busy)
             assertEquals("Canceling a queue transition must keep the current queue item", "two.mkv", model.state.value.selected?.name)
             assertEquals(snapshot, model.state.value.mediaQueue!!.snapshotId)
             assertTrue(model.state.value.error.orEmpty().contains("已取消打开"))
-            (device.wait(Until.findObject(By.desc("上一个视频").enabled(true)), 5000) ?: error("Previous queue action has not rendered")).click()
+            openQueue()
+            chooseQueue(0, "one.mkv")
             source.releaseRead.countDown()
             withTimeout(10_000) { model.state.first { it.selected?.name == "one.mkv" && !it.busy } }
             delay(300)
             assertEquals(snapshot, model.state.value.mediaQueue!!.snapshotId)
+            assertEquals(orderedPaths, model.state.value.mediaQueue!!.items.map { it.wirePath })
             assertEquals("one.mkv", model.state.value.selected?.name)
-            device.findObject(By.desc("播放列表")).click()
-            assertTrue(device.wait(Until.hasObject(By.textContains("two.mkv")), 5000))
-            device.findObject(By.textContains("two.mkv")).click()
+            openQueue()
+            chooseQueue(1, "two.mkv")
             withTimeout(10_000) { model.state.first { it.selected?.name == "two.mkv" && !it.busy } }
-            assertNotNull(device.wait(Until.findObject(By.desc("下一个视频").enabled(false)), 5000))
+            assertEquals(snapshot, model.state.value.mediaQueue!!.snapshotId)
+            assertEquals(orderedPaths, model.state.value.mediaQueue!!.items.map { it.wirePath })
+            assertFalse(findFresh("下一个视频", enabled = false).enabled)
             assertFalse(model.player.state.value.playing)
-        } finally {
+        } finally { withContext(NonCancellable) {
             source.releaseRead.countDown()
-            main { model.leavePlayer(); model.foreground(true); model.disconnect() }; store.remove(profile); source.close()
-        }
+            try { main { model.leavePlayer(); model.foreground(true); model.disconnect() } }
+            finally {
+                try { store.remove(profile) }
+                finally {
+                    try { source.close() }
+                    finally { previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) } }
+                }
+            }
+        } }
     }
 }
