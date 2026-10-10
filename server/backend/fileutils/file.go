@@ -3,6 +3,7 @@ package fileutils
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path"
 	"syscall"
@@ -21,15 +22,27 @@ func MoveFile(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) erro
 	}
 	// A cross-device rename is the only safe fallback case. Permission,
 	// conflict and source errors must reach the caller unchanged.
-	err := CopyContext(context.Background(), afs, src, dst, fileMode, dirMode)
+	info, err := lstat(afs, src)
 	if err != nil {
-		_ = afs.Remove(dst)
 		return err
 	}
-	if err := afs.RemoveAll(src); err != nil {
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("不支持复制符号链接: %s", src)
+	}
+	if info.Mode().IsRegular() {
+		if err := copyFilePublished(afs, src, dst, fileMode, dirMode, true); err != nil {
+			// A publication/sync error can leave a complete destination. It is
+			// never safe to remove that path or the source on a failed copy.
+			return err
+		}
+		return afs.Remove(src)
+	}
+	// Preserve legacy directory merging, fail-fast traversal and link rejection.
+	// This is not the task runner's whole-tree replacement transaction.
+	if err := CopyContext(context.Background(), afs, src, dst, fileMode, dirMode); err != nil {
 		return err
 	}
-	return nil
+	return afs.RemoveAll(src)
 }
 
 // CopyFile copies a file from source to dest and returns
