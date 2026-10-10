@@ -42,8 +42,10 @@ jobs:
             go vet ./transport ./bridge ./tailnet
             if ($LASTEXITCODE -ne 0) { throw 'Shared core vet failed' }
           } finally { Pop-Location }
-      - name: Build self-contained x64 application
-        run: ./eng/Build-Windows.ps1 -ToolsRoot $env:FILEWAY_TOOLS_ROOT -ArtifactsRoot $env:FILEWAY_ARTIFACTS_ROOT -NuGetPackagesRoot $env:FILEWAY_NUGET_PACKAGES -Configuration Release -Publish
+      - name: Compile native x64 application
+        run: ./eng/Build-Windows.ps1 -ToolsRoot $env:FILEWAY_TOOLS_ROOT -ArtifactsRoot $env:FILEWAY_ARTIFACTS_ROOT -NuGetPackagesRoot $env:FILEWAY_NUGET_PACKAGES -Configuration Release
+      - name: Test Windows infrastructure
+        run: ./eng/Test-Windows.ps1 -ToolsRoot $env:FILEWAY_TOOLS_ROOT -ArtifactsRoot $env:FILEWAY_ARTIFACTS_ROOT -NuGetPackagesRoot $env:FILEWAY_NUGET_PACKAGES -Configuration Release
       - name: Preserve build diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

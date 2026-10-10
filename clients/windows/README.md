@@ -30,6 +30,25 @@ The EXE is produced under `<external-artifacts>\bin\Fileway.App\x64\Debug\net10.
 - `Fileway.Playback`: native media bindings and playback lifecycle.
 - `host`: separate Go executable referencing `clients/shared/core`, following [private IPC v1](docs/ipc-v1.md).
 
-The current native scaffold is a technical probe. Visual direction, representative native slice and final product acceptance are separate gates. Build and runtime evidence belongs outside Git.
+## First local preview
+
+The first native preview supports password/noauth connections, directory browsing, sorting and filtering the current directory, file details, a native image window, and libmpv video playback with pause, seek and volume. The A/B/C appearance selector compares provisional visual directions inside the native app; it does not save a product-wide design decision.
+
+This preview uses explicit direct connections, including routes supplied by the system Tailscale installation. System/PAC proxies, embedded tsnet, persistent credentials, transfers, file mutations and external-player integration are not included in this first slice. They remain separate application work. The main interface contains no placeholder actions for those features.
+
+The Go auxiliary process is managed by the app: it starts locally, uses private inherited control pipes, and exits with the parent. Process management prevents orphan processes and supports crash recovery. Server authorization continues to enforce the existing account permissions.
+
+## Media and packaging
+
+Native media binaries stay outside Git. `vendor/mpv/runtime-packages.lock.json` records the exact MSYS2 UCRT64 packages and PE imports selected for the preview. `resolve-runtime.py` resolves the runtime into an external artifact root; `probe-runtime.py` inspects the actual mpv/FFmpeg build, including rejection of an enabled nonfree configuration. These scripts require Python and `pefile` in the isolated dependency environment. Runtime licenses and binary provenance accompany the local payload; corresponding-source completeness and public redistribution approval remain separate release gates.
+
+```powershell
+.\eng\Build-Windows.ps1 -ArtifactsRoot <external-artifacts> -Configuration Release -MediaRuntimeRoot <pinned-runtime-directory> -Publish
+.\eng\Package-Preview.ps1 -PublisherInput <external-artifacts>\publish\Release\win-x64 -ArtifactsRoot <external-artifacts>
+```
+
+The runtime is copied under `media` beside the application. Packaging consumes an existing publish directory and creates an unsigned ZIP and a current-user NSIS installer; it does not rebuild, install or publish a GitHub release. Keep the whole extracted directory together and run `Fileway.App.exe`. See [installer behavior](installer/README.md).
+
+Visual direction, representative native slice and final product acceptance remain separate gates. Build and runtime evidence belongs outside Git. A successful native media probe does not prove visible first frames, audible sound, HDR, all codecs, multiple monitors or a clean installation.
 
 Windows code uses GPL-3.0, consistent with the shared core. Existing backend and Android licenses and identifiers remain unchanged. Third-party binaries require their own pinned provenance, notices and corresponding source/build materials before distribution.
