@@ -1,4 +1,5 @@
 <template>
+  <header-bar showMenu showLogo show-task-center />
   <section class="async-view-error" role="alert">
     <h2>无法打开文件预览</h2>
     <p>{{ message }}</p>
@@ -10,6 +11,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import HeaderBar from "@/components/header/HeaderBar.vue";
 import {
   assetLoadMessage,
   isAssetLoadError,

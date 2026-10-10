@@ -49,6 +49,7 @@ const showAssetLoadError = (error: unknown) => {
     },
     {
       id: "asset-load-recovery",
+      toastClassName: "asset-load-notice",
       position: POSITION.BOTTOM_CENTER,
       timeout: false,
       closeOnClick: false,

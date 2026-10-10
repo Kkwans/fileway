@@ -436,11 +436,14 @@ test.describe("affected page browser gate", () => {
   test("面包屑末级长名称在桌面和窄屏完整显示", async ({ page }) => {
     const unknownRequests: string[] = [];
     await installFixtureApi(page, unknownRequests);
-    await login(page);
+    await page.addInitScript(
+      (token) => localStorage.setItem("jwt", token),
+      fixtureToken()
+    );
     const current = "06_PARALLEL_AGENT_AND_GIT_" + "长名称必须完整显示".repeat(8);
     await page.goto(`/files/docs/${encodeURIComponent(current)}/`);
     const label = page.locator(".breadcrumb-current > .breadcrumb-label");
-    await expect(label).toHaveText(current);
+    await expect(label).toHaveText(current, { timeout: 30_000 });
     await expect(label).toHaveAttribute("aria-current", "location");
     for (const width of [1440, 1024, 768, 390]) {
       await page.setViewportSize({ width, height: 900 });

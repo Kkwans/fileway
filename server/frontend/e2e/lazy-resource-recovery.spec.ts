@@ -24,4 +24,26 @@ test("资源失效提示不自动刷新，取消刷新后仍可恢复", async ({
   await expect(reload).toBeVisible();
   await expect(reload).toBeEnabled();
   await expect(page.getByLabel("用户名")).toHaveValue("unsaved-local-input");
+  for (const theme of ["light", "dark"]) {
+    const contrast = await page.evaluate((value) => {
+      document.documentElement.className = value;
+      const notice = document.querySelector(".asset-load-notice")!;
+      const style = getComputedStyle(notice);
+      const luminance = (color: string) => {
+        const rgb = color
+          .match(/[\d.]+/g)!
+          .slice(0, 3)
+          .map(Number);
+        const linear = rgb.map((v) => {
+          const c = v / 255;
+          return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+        });
+        return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+      };
+      const fg = luminance(style.color);
+      const bg = luminance(style.backgroundColor);
+      return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+    }, theme);
+    expect(contrast).toBeGreaterThanOrEqual(4.5);
+  }
 });

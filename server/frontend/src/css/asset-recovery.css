@@ -1,0 +1,25 @@
+/* Keep recovery readable in both product themes instead of the library's
+ * low-contrast white-on-yellow warning palette. */
+.asset-load-notice.Vue-Toastification__toast {
+  color: var(--textPrimary);
+  background: var(--surfacePrimary, var(--background));
+  border: 1px solid var(--divider);
+}
+
+.asset-load-notice .action,
+.asset-load-notice .Vue-Toastification__close-button {
+  color: inherit;
+  border-color: currentColor;
+}
+
+.asset-load-notice .action {
+  min-height: 44px;
+}
+
+.asset-load-notice .action:focus-visible {
+  outline-color: var(--focus-ring);
+}
+
+.asset-load-notice .Vue-Toastification__close-button {
+  opacity: 1;
+}

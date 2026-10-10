@@ -30,6 +30,7 @@
 /* 文件工作台的统一视觉契约必须最后加载，避免历史样式互相覆盖。 */
 @import "./workspace-ui.css";
 @import "./sidebar.css";
+@import "./asset-recovery.css";
 
 /* For testing only
  :focus {
