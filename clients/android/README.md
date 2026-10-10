@@ -14,32 +14,31 @@ are separate from full API35/API37 CI, physical HDR, speaker/Bluetooth continuit
 long-film performance and complete UI acceptance. This preview does not certify
 all formats, server/provider behavior or recovery scenarios.
 
-## Install the 0.7.3 preview
+## Install the 0.7.4 preview
 
-[Android 0.7.3 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.3-4862ed0/fileway-android-0.7.3-preview.apk)
+[Android 0.7.4 preview — download APK](https://github.com/Kkwans/fileway/releases/download/android-preview-0.7.4-63d3ddb/fileway-android-0.7.4-preview.apk)
 
-Published artifact: `0.7.3-preview`, **signed release**, versionCode **13**, Room **8**.
+Published artifact: `0.7.4-preview`, **signed release**, versionCode **14**, Room **8**.
 The original package ID and signing identity are preserved. Source:
-`4862ed007b6f49fed02b0f485110a619b925ceac`.
-See [0.7.3 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.3-4862ed0).
+`63d3ddb21007731bfdee6f8d91a9b266c6c82ddc`.
+See [0.7.4 release notes](https://github.com/Kkwans/fileway/releases/tag/android-preview-0.7.4-63d3ddb).
 
 Release build/lint and 95 JVM tests in the configured debug host-test variant
 passed, including both ABI and 16 KiB ELF/ZIP checks. Xiaomi14 was cover-upgraded
-to code 13; saved-login/directory restore and the retained complete 8.6 GB download
-record were observed on the release APK. The diagnostic debug build passed 39
-focused device methods; its missing-control case also passed a separate replay
-with explicit foreground guarding. Linux and Windows run the same pushed server
-source and one Web build, with 582 Web tests and native backend test/vet passing;
-platform and hardware skips remain explicit.
+to code 14 without changing its first install time. Saved-login/directory restore,
+retained downloads, actual local MKV pixels and subtitles were observed on the
+release APK. The diagnostic build passed 21 focused media/upload/recovery methods,
+7 file-operation UI methods and 5 harness diagnostics. Linux and Windows run
+shared server `2026.10.10-v4` from the same source. Native backend test/vet passed
+(740 Linux and 756 Windows cases, platform skips recorded separately). The
+unchanged Web artifact reuses its 582-test verification.
 
-The [complete Android CI](https://github.com/Kkwans/fileway/actions/runs/38001143310)
-**failed**: both API35 and API37 ordinary suites reached the 1200-second host
-deadline, without complete JUnit totals. Theme prepare/verify were not executed
-in this run. Executed-method observations are not a complete suite result.
-The [previous 0.7.2 CI](https://github.com/Kkwans/fileway/actions/runs/37990113163)
-had 89/270 and 11/271 ordinary failures respectively, plus theme verify failures;
-those historical counts must not be reused as this run's totals. Complete
-functional, hardware/media and UI acceptance remain open.
+The [complete Android CI for this source](https://github.com/Kkwans/fileway/actions/runs/38019996792)
+**failed**; its per-case results remain under review. The earlier
+[ab3950 run](https://github.com/Kkwans/fileway/actions/runs/38007213426) reported
+10/286 API35 and 7/287 API37 failures plus theme verify failures; those historical
+counts are not this version's totals. Complete functional, hardware/media and UI
+acceptance remain open.
 
 ### Features available in the 0.7 line
 
@@ -64,6 +63,25 @@ These are implemented feature groups, with scoped verification. Server capabilit
 and versions determine availability; unsupported newer operations request an upgrade.
 The full App-internal download/install/cover-upgrade flow remains a separate gate.
 
+### Core fixes in 0.7.4
+
+- Save only engine-confirmed READY/ENDED positions, preserving valid resume data
+  when a seek into an unavailable download range is still waiting or has failed.
+- Use actual readable descriptor length when validating an upload source;
+  unknown descriptor lengths retain the provider fallback, while access errors
+  remain explicit. Existing fragments are retained when the source changed.
+- Treat temporary metadata and range failures consistently as recoverable
+  download waits; authorization and source-identity failures remain explicit.
+- Persist directory-overwrite recovery journals across task interruption and
+  retry, retaining originals/backups and refusing unknown ownership.
+- Publish legacy copies and cross-device regular-file moves after preparation;
+  failed operations do not blindly remove the destination.
+
+Server-side fixes require `2026.10.10-v4`. Directory task recovery is a process
+interruption protocol, not a power-loss or snapshot guarantee. Legacy directory
+move merging still has separate leaf-write/recovery limitations. Preserve live
+database writes and use a compatible forward repair when recovery is needed.
+
 ### Core fixes in 0.7.3
 
 - Publish document save/create, atomic batch rename and current-account deletion
@@ -76,9 +94,9 @@ The full App-internal download/install/cover-upgrade flow remains a separate gat
 - Publish regular files without removing an existing destination first, and use
   no-replace publication when overwrite was not approved.
 
-Server copy/publication fixes require shared server `2026.10.10-v3` on Linux or
-Windows. Directory replacement recovery and legacy PATCH copy are separate open
-items; this preview does not certify those paths as repaired.
+These original regular-file publication fixes require shared server
+`2026.10.10-v3` or later. The 0.7.4 section describes the additional recovery and
+legacy-copy changes and their limits.
 
 ### Core fixes in 0.7.2
 
