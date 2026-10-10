@@ -23,18 +23,23 @@ import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 
 /** Gesture routing uses a real native session; this is not first-frame or audio acceptance. */
 @RunWith(AndroidJUnit4::class)
 class PlayerGestureControlsTest {
-    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    private val trace = OwnedUiTraceRule()
+    private val activity = ActivityScenarioRule(MainActivity::class.java)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(trace).around(activity)
 
     @Test fun pictureDragPreviewsWithoutSeekingThenCommitsOnceOrCancels(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(instrumentation)
         val source = NativePlaybackTest.Fixture(instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() })
-        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Seek drag fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
@@ -45,6 +50,7 @@ class PlayerGestureControlsTest {
         var downTime = 0L
         var held = false
         var x = 0f; var y = 0f
+        var stage = "prepare"
         fun pointer(action: Int, nextX: Float = x, nextY: Float = y) {
             x = nextX; y = nextY
             if (action == MotionEvent.ACTION_DOWN) { downTime = SystemClock.uptimeMillis(); held = true }
@@ -52,6 +58,7 @@ class PlayerGestureControlsTest {
             event.source = InputDevice.SOURCE_TOUCHSCREEN
             try { assertTrue("Owned pointer event must be injected", instrumentation.uiAutomation.injectInputEvent(event, true)) }
             finally { event.recycle() }
+            OwnedUiTraceRule.trace("seek-drag=$stage action=$action x=$x y=$y screen=${device.displayWidth}x${device.displayHeight}")
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) held = false
         }
         fun previewDescription(node: AccessibilityNodeInfo): String? {
@@ -63,10 +70,15 @@ class PlayerGestureControlsTest {
                 return null
             } finally { node.recycle() }
         }
-        suspend fun feedback() = withTimeout(5_000) {
-            var description = instrumentation.uiAutomation.rootInActiveWindow?.let(::previewDescription)
-            while (description == null) { delay(25); description = instrumentation.uiAutomation.rootInActiveWindow?.let(::previewDescription) }
-            description
+        suspend fun feedback(): String {
+            return try { withTimeout(5_000) {
+                var description = instrumentation.uiAutomation.rootInActiveWindow?.let(::previewDescription)
+                while (description == null) { delay(25); description = instrumentation.uiAutomation.rootInActiveWindow?.let(::previewDescription) }
+                description
+            } } catch (error: TimeoutCancellationException) {
+                throw AssertionError("Seek preview missing during $stage; ${trace.snapshot()}; state=${model.player.state.value.phase}, " +
+                    "seekable=${model.player.state.value.seekable}, seeks=${seeks().size}", error)
+            }
         }
         try {
             main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
@@ -78,6 +90,7 @@ class PlayerGestureControlsTest {
             val picture = device.wait(Until.findObject(By.desc("视频画面")), 5_000)?.visibleBounds ?: error("Picture missing")
             configuration.setWaitForIdleTimeout(0)
             val before = seeks().size
+            stage = "release-preview"
             pointer(MotionEvent.ACTION_DOWN, picture.centerX().toFloat(), picture.centerY().toFloat())
             delay(25)
             pointer(MotionEvent.ACTION_MOVE, picture.centerX() + picture.width() * .16f)
@@ -86,12 +99,14 @@ class PlayerGestureControlsTest {
             assertEquals("Drag previews must not send incremental seek commands", before, seeks().size)
             assertEquals(1f, model.player.state.value.rate)
             pointer(MotionEvent.ACTION_UP)
-            withTimeout(5_000) { while (seeks().size == before) delay(25) }
+            try { withTimeout(5_000) { while (seeks().size == before) delay(25) } }
+            catch (error: TimeoutCancellationException) { throw AssertionError("Release did not seek; ${trace.snapshot()}", error) }
             assertEquals("One release sends exactly one command", before + 1, seeks().size)
             val shownMs = preview.split(':').fold(0L) { total, part -> total * 60 + part.toLong() } * 1000
             assertTrue("Requested target must match the visible preview", seeks().last().value!! in shownMs.toDouble()..(shownMs + 999).toDouble())
             withTimeout(10_000) { model.player.state.first { it.canSavePosition && !it.playing } }
             val after = seeks().size
+            stage = "cancel-preview"
             pointer(MotionEvent.ACTION_DOWN, picture.centerX().toFloat(), picture.centerY().toFloat())
             delay(25)
             pointer(MotionEvent.ACTION_MOVE, picture.centerX() - picture.width() * .16f)
@@ -100,11 +115,16 @@ class PlayerGestureControlsTest {
             assertTrue(device.wait(Until.gone(By.desc("画面拖动进度")), 5_000))
             assertEquals("Cancel must not seek", after, seeks().size)
             assertFalse(model.player.state.value.playing)
+        } catch (error: Throwable) {
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/seek-drag-failure-${SystemClock.uptimeMillis()}.png")
+            throw error
         } finally {
             if (held) pointer(MotionEvent.ACTION_CANCEL)
             configuration.setWaitForIdleTimeout(oldIdle)
             main { model.disconnect() }
             store.remove(profile); source.close()
+            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
         }
     }
 

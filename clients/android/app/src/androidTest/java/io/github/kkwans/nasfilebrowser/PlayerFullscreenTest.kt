@@ -32,12 +32,15 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 
 /** Real Activity/dialog windows and native Surface geometry, not just HUD semantics. */
 @RunWith(AndroidJUnit4::class)
 class PlayerFullscreenTest {
-    @get:Rule val activity = ActivityScenarioRule(MainActivity::class.java)
+    private val trace = OwnedUiTraceRule()
+    private val activity = ActivityScenarioRule(MainActivity::class.java)
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(trace).around(activity)
 
     @Test fun portraitAndLandscapeKeepTheirSurfaceWhenControlsOrSystemBarsAppear() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -49,15 +52,27 @@ class PlayerFullscreenTest {
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
+        fun traceWindow(stage: String) {
+            activity.scenario.onActivity { host ->
+                val decor = host.window.decorView
+                OwnedUiTraceRule.trace("fullscreen=$stage orientation=${host.resources.configuration.orientation} " +
+                    "requested=${host.requestedOrientation} decor=${decor.width}x${decor.height} " +
+                    "focus=${host.hasWindowFocus()} generation=${model.player.state.value.mediaGeneration}")
+            }
+        }
         fun click(label: String) {
             val action = device.wait(Until.findObject(By.desc(label)), 5_000) ?: error("Missing player action $label")
             assertTrue("Player action must be enabled: $label", action.isEnabled)
-            println("Owned fullscreen action=$label bounds=${action.visibleBounds}")
+            OwnedUiTraceRule.trace("fullscreen-action=$label bounds=${action.visibleBounds}")
+            traceWindow("before-$label")
             action.click()
+            traceWindow("after-$label")
         }
         fun detailsGone() {
             val gone = device.wait(Until.gone(By.desc("播放详情")), 5_000)
             if (!gone) {
+                OwnedUiTraceRule.trace("fullscreen-entry-failure ${trace.snapshot()}")
+                traceWindow("details-remain")
                 device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
                 device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/fullscreen-entry-failure-${SystemClock.uptimeMillis()}.png")
             }
