@@ -40,13 +40,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
@@ -61,6 +65,7 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
@@ -68,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -154,6 +160,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var exploration by remember { mutableStateOf(accessibility.isTouchExplorationEnabled) }
     var visible by remember(file) { mutableStateOf(true) }
     var touchLocked by remember(file) { mutableStateOf(false) }
+    var playerPosition by remember { mutableStateOf(Offset.Zero) }
+    var touchLockPosition by remember { mutableStateOf(Offset.Zero) }
     var orientationBeforeLock by remember { mutableStateOf<Int?>(null) }
     val gestureSeek = remember(file) { SeekGestureAccumulator() }
     var gestureMessage by remember(file) { mutableStateOf<String?>(null) }
@@ -164,7 +172,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var pictureSeek by remember(file, state.mediaGeneration) { mutableStateOf<Long?>(null) }
     var dragSession by remember(file, state.mediaGeneration) { mutableStateOf<SeekDragSession?>(null) }
     val seekPreview = rememberSeekPreview(model, file, state.mediaGeneration, seek != null || pictureSeek != null)
-    val showControls = visible && pictureSeek == null
+    val showControls = visible && pictureSeek == null && !touchLocked
     var showRequest by remember(file) { mutableStateOf(false) }
     val feedback = remember { SnackbarHostState() }
     var documentGeneration by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -216,6 +224,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     fun touch() { visible = true; interaction++ }
     fun step(delta: Long) { gestureSeek.reset(); touch(); model.player.seek(liveState.positionMs + delta) }
     fun lockTouch() { touchLocked = true; sheet = null; gestureSeek.reset() }
+    fun unlockTouch() { touchLocked = false; touch() }
     fun lockOrientation() {
         val owner = context.activity() ?: return
         val previous = orientationBeforeLock
@@ -237,7 +246,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
     }
     BackHandler(fullscreen && !touchLocked) { changeDisplay(PlayerDisplayMode.AUTOMATIC) }
-    BackHandler(touchLocked) { touchLocked = false; touch() }
+    BackHandler(touchLocked) { unlockTouch() }
     LaunchedEffect(exploration) { if (exploration) touchLocked = false }
     LaunchedEffect(gestureMessage, interaction) { if (gestureMessage != null) { delay(1_000); gestureMessage = null } }
     DisposableEffect(accessibility) {
@@ -307,17 +316,16 @@ private tailrec fun Context.activity(): Activity? = when (this) {
             // Fullscreen media ignores changing system-bar visibility. Insets
             // protect only the overlay controls, never resize the video Surface.
             BoxWithConstraints(Modifier.fillMaxSize().background(PlayerCanvas)
-                .then(if (fullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))) {
+                .then(if (fullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))
+                .onGloballyPositioned { playerPosition = it.positionInRoot() }) {
                 val landscape = maxWidth > maxHeight
                 val controlInsets = if (exploration) WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout)
                     else WindowInsets.displayCutout.union(WindowInsets.navigationBarsIgnoringVisibility).union(WindowInsets.captionBar)
                 val portraitStageHeight = maxWidth / (16f / 9f) + 116.dp
-                Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().then(if (touchLocked) Modifier.clearAndSetSemantics {} else Modifier)) {
                     if (!fullscreen) Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
                         Text("正在观看", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        PlayerLabel(if (orientationBeforeLock == null) "锁定方向" else "方向已锁", if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定", click = ::lockOrientation)
-                        PlayerIcon(R.drawable.ic_lock, "锁定触控", ::lockTouch, !exploration)
                         PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                     }
                     // Portrait keeps transport below the picture. Fullscreen
@@ -434,6 +442,25 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     PlayerLabel("取消", "取消播放等待") { model.leavePlayer() }
                                 }
                             }
+                            if (showControls) Box(Modifier.align(AbsoluteAlignment.CenterLeft)
+                                .then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Left)) else Modifier)
+                                .absolutePadding(left = 8.dp)) {
+                                PlayerLockIcon(
+                                    if (orientationBeforeLock == null) R.drawable.ic_screen_rotation else R.drawable.ic_screen_lock_rotation,
+                                    if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定",
+                                    if (orientationBeforeLock == null) "方向未锁定" else "方向已锁定",
+                                    orientationBeforeLock != null, ::lockOrientation)
+                            }
+                            if (showControls || touchLocked) Box(Modifier.align(AbsoluteAlignment.CenterRight)
+                                .then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Right)) else Modifier)
+                                .absolutePadding(right = 8.dp)) {
+                                // Retain this anchor while locked, including after a real
+                                // window rotation. The topmost unlock uses these same bounds.
+                                PlayerLockIcon(R.drawable.ic_lock_open, "锁定触控", "触控未锁定", false, ::lockTouch,
+                                    enabled = !exploration,
+                                    modifier = Modifier.alpha(if (touchLocked) 0f else 1f)
+                                        .onGloballyPositioned { touchLockPosition = it.positionInRoot() })
+                            }
                         }
                         Text(client.downloadBytesPerSecond?.let { speed ->
                             when {
@@ -451,8 +478,6 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             .padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             PlayerIcon(R.drawable.ic_arrow_back, "退出全屏并返回详情", { changeDisplay(PlayerDisplayMode.AUTOMATIC) })
                             Text(file.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
-                            PlayerLabel(if (orientationBeforeLock == null) "锁定方向" else "方向已锁", if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定", click = ::lockOrientation)
-                            PlayerIcon(R.drawable.ic_lock, "锁定触控", ::lockTouch, !exploration)
                             PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                         }
                         if (showControls) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))
@@ -543,15 +568,18 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         }
                     }
                 }
-                SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp))
+                SnackbarHost(feedback, Modifier.align(Alignment.BottomCenter).padding(bottom = 64.dp)
+                    .then(if (touchLocked) Modifier.clearAndSetSemantics {} else Modifier))
                 if (touchLocked) {
                     // The topmost input layer covers controls as well as the picture. System Back unlocks first.
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .08f))
+                    Box(Modifier.fillMaxSize()
                         .clearAndSetSemantics { contentDescription = "触控已锁定" }
                         .pointerInput(Unit) { detectTapGestures(onTap = {}, onDoubleTap = {}, onLongPress = {}) })
-                    Box(Modifier.align(Alignment.CenterEnd).padding(12.dp).clip(RoundedCornerShape(12.dp)).background(PlayerPanel)) {
-                        PlayerLabel("解锁", "解除触控锁定") { touchLocked = false; touch() }
-                    }
+                    PlayerLockIcon(R.drawable.ic_lock, "解除触控锁定", "触控已锁定", true, ::unlockTouch,
+                        modifier = Modifier.align(AbsoluteAlignment.TopLeft).absoluteOffset {
+                            val position = touchLockPosition - playerPosition
+                            IntOffset(position.x.roundToInt(), position.y.roundToInt())
+                        })
                 }
                 if (sheet != null) PlayerPanel(landscape, fullscreen && !exploration, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "媒体系统音量"; PlayerSheet.BRIGHTNESS -> "窗口亮度"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
@@ -737,6 +765,21 @@ private val PlayerPanel = Color(0xFF1B212B)
 private val PlayerAccent = Color(0xFF69A8FF)
 private val PlayerSecondary = Color(0xFFADB9CB)
 private val PlayerDivider = Color(0xFF293342)
+
+@Composable private fun PlayerLockIcon(icon: Int, label: String, state: String, locked: Boolean, click: () -> Unit,
+    enabled: Boolean = true, modifier: Modifier = Modifier) {
+    IconButton(onClick = click, enabled = enabled, modifier = modifier.size(48.dp)
+        .background(Color.Black.copy(alpha = .28f), CircleShape).clearAndSetSemantics {
+            contentDescription = label
+            stateDescription = state
+            selected = locked
+            role = Role.Button
+            if (enabled) onClick { click(); true } else disabled()
+        }) {
+        Icon(painterResource(icon), null, Modifier.size(22.dp),
+            tint = if (!enabled) Color.White.copy(alpha = .38f) else if (locked) PlayerAccent else Color.White.copy(alpha = .94f))
+    }
+}
 
 @Composable private fun PlayerIcon(icon: Int, label: String, click: () -> Unit, enabled: Boolean = true) {
     IconButton(onClick = click, enabled = enabled, modifier = Modifier.size(48.dp).clearAndSetSemantics {

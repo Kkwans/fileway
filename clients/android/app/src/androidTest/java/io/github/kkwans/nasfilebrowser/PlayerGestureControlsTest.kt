@@ -154,12 +154,49 @@ class PlayerGestureControlsTest {
         val device = UiDevice.getInstance(instrumentation)
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(media)
-        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Gesture fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
         fun button(label: String) = device.wait(Until.findObject(By.desc(label)), 5_000) ?: error("Missing $label")
+        fun lockDescription(node: AccessibilityNodeInfo, label: String): String? {
+            try {
+                if (!node.refresh()) return null
+                if (node.contentDescription?.toString() == label) return AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString()
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let { lockDescription(it, label) }?.let { return it }
+                }
+                return null
+            } finally { node.recycle() }
+        }
+        suspend fun assertLockState(label: String, expected: String, selected: Boolean) {
+            withTimeout(5_000) {
+                while (instrumentation.uiAutomation.rootInActiveWindow?.let { lockDescription(it, label) } != expected) delay(25)
+            }
+            // Compose maps Selected on non-Tab roles to Android's checked state.
+            assertTrue("$label must expose a checkable lock state", button(label).isCheckable)
+            assertEquals("$label must expose its lock state", selected, button(label).isChecked)
+        }
+        val minimumTarget = (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt() - 2
+        fun assertSideLock(label: String, pictureBounds: Rect, left: Boolean): Rect {
+            val bounds = button(label).visibleBounds
+            assertTrue("$label needs a 48dp touch target: $bounds", bounds.width() >= minimumTarget && bounds.height() >= minimumTarget)
+            assertTrue("$label must stay inside the picture: $bounds / $pictureBounds", pictureBounds.contains(bounds))
+            assertTrue("$label must align with the picture's vertical centre", kotlin.math.abs(bounds.centerY() - pictureBounds.centerY()) <= 2)
+            assertTrue("$label must be on its own side of the picture", if (left)
+                bounds.centerX() < pictureBounds.left + pictureBounds.width() / 4 else bounds.centerX() > pictureBounds.right - pictureBounds.width() / 4)
+            return bounds
+        }
+        fun captureLocks(stage: String) {
+            if (InstrumentationRegistry.getArguments().getString("nfbTraceUi") != "true") return
+            val name = "player075-locks-$stage-${SystemClock.uptimeMillis()}"
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$name.png")
+            OwnedUiTraceRule.trace("locks-capture=$name")
+        }
         suspend fun doubleTap(fraction: Float, bounds: Rect = button("视频画面").visibleBounds) {
             val x = bounds.left + (bounds.width() * fraction).toInt()
             device.click(x, bounds.centerY()); delay(70); device.click(x, bounds.centerY())
@@ -196,16 +233,31 @@ class PlayerGestureControlsTest {
 
             var oldOrientation = 0
             activity.scenario.onActivity { oldOrientation = it.requestedOrientation }
+            val lockedBounds = button("视频画面").visibleBounds
+            val orientationBounds = assertSideLock("锁定屏幕方向", lockedBounds, left = true)
+            val touchBounds = assertSideLock("锁定触控", lockedBounds, left = false)
+            captureLocks("portrait-controls")
+            assertLockState("锁定屏幕方向", "方向未锁定", false)
+            assertLockState("锁定触控", "触控未锁定", false)
             button("锁定屏幕方向").click()
             instrumentation.waitForIdleSync()
             activity.scenario.onActivity { assertEquals(ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
-            button("解除方向锁定").click()
-            instrumentation.waitForIdleSync()
-            activity.scenario.onActivity { assertEquals(oldOrientation, it.requestedOrientation) }
+            assertLockState("解除方向锁定", "方向已锁定", true)
+            assertEquals(orientationBounds, button("解除方向锁定").visibleBounds)
 
-            val lockedBounds = button("视频画面").visibleBounds
             button("锁定触控").click()
-            button("解除触控锁定")
+            assertLockState("解除触控锁定", "触控已锁定", true)
+            assertEquals("Unlock must keep the same touch target", touchBounds, button("解除触控锁定").visibleBounds)
+            captureLocks("portrait-locked")
+            assertFalse(device.hasObject(By.desc("视频画面")))
+            assertFalse(device.hasObject(By.desc("解除方向锁定")))
+            button("解除触控锁定").click()
+            assertLockState("锁定触控", "触控未锁定", false)
+            assertEquals(touchBounds, button("锁定触控").visibleBounds)
+            activity.scenario.onActivity { assertEquals("Touch unlock must preserve orientation lock", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
+
+            button("锁定触控").click()
+            assertLockState("解除触控锁定", "触控已锁定", true)
             val count = seeks().size
             // The lock deliberately removes covered controls from accessibility discovery.
             // Inject at the real pre-lock picture coordinates to verify that touches do nothing.
@@ -218,12 +270,75 @@ class PlayerGestureControlsTest {
             device.pressBack()
             assertTrue(device.wait(Until.gone(By.desc("解除触控锁定")), 5_000))
             assertNotNull(model.state.value.selected)
+            assertLockState("锁定触控", "触控未锁定", false)
+            assertLockState("解除方向锁定", "方向已锁定", true)
+            activity.scenario.onActivity { assertEquals("Back unlock must preserve orientation lock", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
+            button("解除方向锁定").click()
+            instrumentation.waitForIdleSync()
+            activity.scenario.onActivity { assertEquals(oldOrientation, it.requestedOrientation) }
+
+            val fullscreenGeneration = model.player.state.value.mediaGeneration
+            val fullscreenOpens = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.OPEN_REQUEST }
+            val fullscreenMedia = model.state.value.selected
+            val landscapeEntry = button("横屏全屏").visibleBounds
+            assertTrue("Landscape fullscreen must receive a real button tap", device.click(landscapeEntry.centerX(), landscapeEntry.centerY()))
+            assertTrue(device.wait(Until.gone(By.desc("播放详情")), 5_000))
+            withTimeout(5_000) { while (device.displayWidth <= device.displayHeight) delay(50) }
+            activity.scenario.onActivity {
+                assertEquals(android.content.res.Configuration.ORIENTATION_LANDSCAPE, it.resources.configuration.orientation)
+                assertEquals(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE, it.requestedOrientation)
+            }
+            val landscapePicture = button("视频画面").visibleBounds
+            val landscapeOrientationBounds = assertSideLock("锁定屏幕方向", landscapePicture, left = true)
+            val landscapeTouchBounds = assertSideLock("锁定触控", landscapePicture, left = false)
+            OwnedUiTraceRule.trace("landscape-locks picture=$landscapePicture orientation=$landscapeOrientationBounds touch=$landscapeTouchBounds")
+            captureLocks("landscape-controls")
+            assertLockState("锁定屏幕方向", "方向未锁定", false)
+            assertLockState("锁定触控", "触控未锁定", false)
+            button("锁定屏幕方向").click()
+            assertLockState("解除方向锁定", "方向已锁定", true)
+            assertEquals(landscapeOrientationBounds, button("解除方向锁定").visibleBounds)
+            activity.scenario.onActivity { assertEquals(ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
+
+            button("锁定触控").click()
+            assertLockState("解除触控锁定", "触控已锁定", true)
+            assertEquals("Landscape unlock must keep the same touch target", landscapeTouchBounds, button("解除触控锁定").visibleBounds)
+            captureLocks("landscape-locked")
+            button("解除触控锁定").click()
+            assertLockState("锁定触控", "触控未锁定", false)
+            assertEquals(landscapeTouchBounds, button("锁定触控").visibleBounds)
+            activity.scenario.onActivity { assertEquals("Landscape touch unlock must preserve orientation lock", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
+
+            button("锁定触控").click()
+            assertLockState("解除触控锁定", "触控已锁定", true)
+            device.pressBack()
+            assertTrue(device.wait(Until.gone(By.desc("解除触控锁定")), 5_000))
+            assertLockState("锁定触控", "触控未锁定", false)
+            assertLockState("解除方向锁定", "方向已锁定", true)
+            assertFalse("First Back must keep fullscreen", device.hasObject(By.desc("播放详情")))
+            button("退出全屏并返回详情")
+            activity.scenario.onActivity {
+                assertEquals(android.content.res.Configuration.ORIENTATION_LANDSCAPE, it.resources.configuration.orientation)
+                assertEquals("First Back unlocks touch before exiting fullscreen", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation)
+            }
+            assertEquals(fullscreenMedia, model.state.value.selected)
+            assertEquals(fullscreenGeneration, model.player.state.value.mediaGeneration)
+            assertEquals(fullscreenOpens, model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.OPEN_REQUEST })
+            assertFalse("Touch unlock must preserve the pause intent", model.player.state.value.playing)
+
+            device.pressBack()
+            assertTrue(device.wait(Until.hasObject(By.desc("播放详情")), 5_000))
+            assertEquals("Second Back returns to details before leaving the media", fullscreenMedia, model.state.value.selected)
+            assertEquals("Fullscreen Back must not reopen media", fullscreenGeneration, model.player.state.value.mediaGeneration)
+            assertEquals(fullscreenOpens, model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.OPEN_REQUEST })
+            assertFalse("Fullscreen Back must preserve the pause intent", model.player.state.value.playing)
             button("返回文件").click()
             withTimeout(5_000) { model.state.first { it.selected == null } }
             activity.scenario.onActivity { assertEquals(oldOrientation, it.requestedOrientation) }
         } finally {
             main { model.disconnect() }
             store.remove(profile); source.close()
+            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
         }
     }
 }
