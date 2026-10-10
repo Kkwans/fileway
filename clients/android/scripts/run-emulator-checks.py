@@ -15,6 +15,10 @@ PACKAGE = "io.github.kkwans.nasfilebrowser"
 RESTART_PACKAGE = f"{PACKAGE}.hostrestart"
 RESTART_CLASSES = [f"{RESTART_PACKAGE}.ThemeRestartPrepareTest", f"{RESTART_PACKAGE}.ThemeRestartVerifyTest"]
 RUNNER = f"{PACKAGE}.test/androidx.test.runner.AndroidJUnitRunner"
+# The growing ordinary suite was still executing tests when both API jobs hit
+# the previous 20-minute host limit. This aggregate budget does not change any
+# device test's startup, subtitle, pixel or interaction assertion/deadline.
+CONNECTED_SUITE_TIMEOUT_SECONDS = 30 * 60
 
 
 def suite_contract(component):
@@ -85,7 +89,7 @@ def run_checks(component, serial, run=run_command):
     suite_status = check("connected-suite", [wrapper, ":app:connectedDebugAndroidTest", "--stacktrace",
           # AGP/UTP discovery did not preserve the second comma-separated notClass
           # exclusion. A dedicated package is one unambiguous argument value.
-          "-Pandroid.testInstrumentationRunnerArguments.notPackage=" + RESTART_PACKAGE], 1200)
+          "-Pandroid.testInstrumentationRunnerArguments.notPackage=" + RESTART_PACKAGE], CONNECTED_SUITE_TIMEOUT_SECONDS)
     if suite_status == 124:
         # Losing the Gradle observer does not prove device instrumentation ended.
         # Preserve evidence without racing another install/test against it.
