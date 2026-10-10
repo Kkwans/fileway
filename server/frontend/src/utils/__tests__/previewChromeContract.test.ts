@@ -9,8 +9,8 @@ const previewStyles = readFileSync(
   new URL("../../css/styles.css", import.meta.url),
   "utf8"
 );
-const workspaceStyles = readFileSync(
-  new URL("../../css/workspace-ui.css", import.meta.url),
+const breadcrumbStyles = readFileSync(
+  new URL("../../components/Breadcrumbs.vue", import.meta.url),
   "utf8"
 );
 
@@ -48,10 +48,10 @@ describe("preview chrome contract", () => {
   });
 
   it("keeps the breadcrumb gap in its sticky offsets", () => {
-    expect(workspaceStyles).toContain(
+    expect(breadcrumbStyles).toContain(
       "top: calc(var(--app-header-height, 56px) + 10px);"
     );
-    expect(workspaceStyles).toContain(
+    expect(breadcrumbStyles).toContain(
       "top: calc(var(--app-mobile-header-height, 96px) + 8px);"
     );
   });

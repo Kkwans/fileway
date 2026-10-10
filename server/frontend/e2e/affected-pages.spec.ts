@@ -440,7 +440,8 @@ test.describe("affected page browser gate", () => {
       (token) => localStorage.setItem("jwt", token),
       fixtureToken()
     );
-    const current = "06_PARALLEL_AGENT_AND_GIT_" + "长名称必须完整显示".repeat(8);
+    const current =
+      "06_PARALLEL_AGENT_AND_GIT_" + "长名称必须完整显示".repeat(8);
     await page.goto(`/files/docs/${encodeURIComponent(current)}/`);
     const label = page.locator(".breadcrumb-current > .breadcrumb-label");
     await expect(label).toHaveText(current, { timeout: 30_000 });
@@ -455,12 +456,30 @@ test.describe("affected page browser gate", () => {
           clippedY: element.scrollHeight > element.clientHeight + 1,
           outside: rect.right > bar.right + 1 || rect.bottom > bar.bottom + 1,
           pageWidth: document.documentElement.scrollWidth,
+          nameLeft: rect.left,
+          ancestorLeft: element
+            .closest(".breadcrumbs")!
+            .querySelector(".breadcrumb-ancestors")!
+            .getBoundingClientRect().left,
+          ancestorWrap: [
+            ...element
+              .closest(".breadcrumbs")!
+              .querySelectorAll(".breadcrumb-ancestors a"),
+          ]
+            .filter((node) => node.getBoundingClientRect().width > 0)
+            .map((node) => node.getBoundingClientRect().top),
         };
       });
       expect(measured.clippedX).toBe(false);
       expect(measured.clippedY).toBe(false);
       expect(measured.outside).toBe(false);
       expect(measured.pageWidth).toBeLessThanOrEqual(width + 1);
+      if (width < 900) {
+        expect(
+          Math.abs(measured.nameLeft - measured.ancestorLeft)
+        ).toBeLessThan(1);
+        expect(new Set(measured.ancestorWrap).size).toBe(1);
+      }
     }
   });
 
