@@ -23,7 +23,7 @@ const props = defineProps<{
   reportText?: string;
   isReport?: boolean;
   actionLabel?: string;
-  onAction?: () => void | Promise<void>;
+  onAction?: () => void | boolean | Promise<void | boolean>;
 }>();
 
 const actionPending = ref(false);
@@ -33,8 +33,8 @@ const runAction = async () => {
   if (!props.onAction || actionPending.value) return;
   actionPending.value = true;
   try {
-    await props.onAction();
-    actionHandled.value = true;
+    const result = await props.onAction();
+    actionHandled.value = result !== false;
   } catch {
     actionHandled.value = false;
   } finally {

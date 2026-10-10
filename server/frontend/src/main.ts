@@ -12,6 +12,11 @@ import router from "@/router";
 import App from "@/App.vue";
 import CustomToast from "@/components/CustomToast.vue";
 import { T } from "@/utils/translations";
+import {
+  assetLoadMessage,
+  isAssetLoadError,
+  reloadAfterConfirmation,
+} from "@/utils/assetLoadRecovery";
 
 import "@/utils/date";
 
@@ -30,6 +35,33 @@ app.use(Toast, {
 } satisfies PluginOptions);
 
 app.use(pinia);
+
+const showAssetLoadError = (error: unknown) => {
+  if (!isAssetLoadError(error)) return;
+  useToast().warning(
+    {
+      component: CustomToast,
+      props: {
+        message: assetLoadMessage,
+        actionLabel: "刷新页面",
+        onAction: reloadAfterConfirmation,
+      },
+    },
+    {
+      id: "asset-load-recovery",
+      position: POSITION.BOTTOM_CENTER,
+      timeout: false,
+      closeOnClick: false,
+      draggable: false,
+    }
+  );
+};
+// Keep the rejection intact for Router/Vue error handling; do not preventDefault
+// and turn a failed import into a supposedly successful undefined component.
+window.addEventListener("vite:preloadError", (event) => {
+  showAssetLoadError((event as Event & { payload?: unknown }).payload);
+});
+router.onError(showAssetLoadError);
 app.use(router);
 
 // 全局 t 函数，供所有 Vue 组件模板使用（替代 vue-i18n）
@@ -159,4 +191,11 @@ app.provide(
   }
 );
 
-router.isReady().then(() => app.mount("#app"));
+router.isReady().then(
+  () => app.mount("#app"),
+  (error) => {
+    // Initial lazy-route failures must not leave the bootstrap promise unhandled.
+    showAssetLoadError(error);
+    app.mount("#app");
+  }
+);

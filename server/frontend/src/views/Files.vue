@@ -58,8 +58,15 @@ import FileListing from "@/views/files/FileListing.vue";
 import { StatusError } from "@/api/utils";
 import { name } from "../utils/constants";
 import { fileResourceIdentity } from "@/utils/fileListing";
-const Editor = defineAsyncComponent(() => import("@/views/files/Editor.vue"));
-const Preview = defineAsyncComponent(() => import("@/views/files/Preview.vue"));
+import AsyncViewError from "@/components/AsyncViewError.vue";
+const Editor = defineAsyncComponent({
+  loader: () => import("@/views/files/Editor.vue"),
+  errorComponent: AsyncViewError,
+});
+const Preview = defineAsyncComponent({
+  loader: () => import("@/views/files/Preview.vue"),
+  errorComponent: AsyncViewError,
+});
 
 const layoutStore = useLayoutStore();
 const fileStore = useFileStore();
