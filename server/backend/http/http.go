@@ -50,6 +50,10 @@ func NewHandler(
 		return nil, err
 	}
 
+	if err := initializeDirectoryPublications(store); err != nil {
+		return nil, fmt.Errorf("load directory recovery journals: %w", err)
+	}
+
 	if err := store.Trash.RecoverSizes(); err != nil {
 		return nil, err
 	}

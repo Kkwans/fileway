@@ -139,6 +139,11 @@ var taskDeleteRecordsHandler = withUser(func(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}
+	for _, task := range all {
+		if task.ArchivedAt == 0 && taskCategoryMatches(task, category) && directoryTaskNeedsRecovery(d, task) {
+			return http.StatusConflict, errDirectoryRecovery
+		}
+	}
 	now := time.Now().UnixMilli()
 	deleted := 0
 	for _, task := range all {
@@ -172,6 +177,9 @@ func taskArchiveHandler(archive bool) handleFunc {
 			return taskErrorStatus(err), err
 		}
 		if archive {
+			if directoryTaskNeedsRecovery(d, task) {
+				return http.StatusConflict, errDirectoryRecovery
+			}
 			if !task.CanArchive() {
 				return http.StatusConflict, tasks.ErrState
 			}
@@ -218,6 +226,9 @@ func taskBatchHandler(runtime *tasks.Runtime, hlsServices ...*hls.Service) handl
 			return renderJSONStatus(w, taskBatchResponse{Matched: request.ExpectedCount, Actual: len(matched)}, http.StatusConflict)
 		}
 		for _, task := range matched {
+			if request.Action == "archive" && directoryTaskNeedsRecovery(d, task) {
+				return http.StatusConflict, errDirectoryRecovery
+			}
 			valid := request.Action == "retry" && task.CanRetry() ||
 				request.Action == "archive" && task.CanArchive() ||
 				request.Action == "unarchive" && task.ArchivedAt != 0

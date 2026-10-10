@@ -61,14 +61,16 @@ func (item *fileTransferItem) UnmarshalJSON(encoded []byte) error {
 }
 
 type fileTransferTaskArgs struct {
-	Items          []fileTransferItem       `json:"items"`
-	Completed      map[string]bool          `json:"completed,omitempty"`
-	CompletedPaths []fileTransferResultItem `json:"completedPaths,omitempty"`
+	Items          []fileTransferItem               `json:"items"`
+	Completed      map[string]bool                  `json:"completed,omitempty"`
+	CompletedPaths []fileTransferResultItem         `json:"completedPaths,omitempty"`
+	Directories    map[string]*directoryPublication `json:"directoryPublications,omitempty"`
 }
 
 type fileTransferResult struct {
-	Completed []fileTransferResultItem `json:"completed,omitempty"`
-	Failed    []fileTransferFailure    `json:"failed,omitempty"`
+	Directories map[string]*directoryPublication `json:"directoryPublications,omitempty"`
+	Completed   []fileTransferResultItem         `json:"completed,omitempty"`
+	Failed      []fileTransferFailure            `json:"failed,omitempty"`
 }
 
 type fileTransferResultItem struct {
@@ -83,7 +85,8 @@ type fileTransferFailure struct {
 }
 
 type fileTransferCheckpoint struct {
-	Completed map[string]bool `json:"completed,omitempty"`
+	Directories map[string]*directoryPublication `json:"directoryPublications,omitempty"`
+	Completed   map[string]bool                  `json:"completed,omitempty"`
 }
 
 // Task JSON contains display paths for readers and ASCII wire identities for
@@ -127,6 +130,15 @@ func (args *fileTransferTaskArgs) UnmarshalJSON(encoded []byte) error {
 		saved.Items[index].From, saved.Items[index].To = from, to
 	}
 	saved.Completed = canonicalTransferCheckpoints(saved.Completed)
+	for key, j := range saved.Directories {
+		if err := validateDirectoryJournal(j); err != nil {
+			return err
+		}
+		from, to, _, _ := directoryPaths(j)
+		if key != directoryKey(fileTransferItem{From: from, To: to}) {
+			return errDirectoryRecovery
+		}
+	}
 	*args = fileTransferTaskArgs(saved.payload)
 	return nil
 }
@@ -185,15 +197,17 @@ func (item *fileTransferFailure) UnmarshalJSON(encoded []byte) error {
 
 func (checkpoint fileTransferCheckpoint) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Completed    map[string]bool `json:"completed,omitempty"`
-		PathEncoding string          `json:"pathEncoding"`
-	}{canonicalTransferCheckpoints(checkpoint.Completed), taskWirePathEncoding})
+		Completed    map[string]bool                  `json:"completed,omitempty"`
+		PathEncoding string                           `json:"pathEncoding"`
+		Directories  map[string]*directoryPublication `json:"directoryPublications,omitempty"`
+	}{canonicalTransferCheckpoints(checkpoint.Completed), taskWirePathEncoding, checkpoint.Directories})
 }
 
 func (checkpoint *fileTransferCheckpoint) UnmarshalJSON(encoded []byte) error {
 	var saved struct {
 		Completed    map[string]bool
 		PathEncoding string
+		Directories  map[string]*directoryPublication `json:"directoryPublications,omitempty"`
 	}
 	if err := json.Unmarshal(encoded, &saved); err != nil {
 		return err
@@ -202,6 +216,12 @@ func (checkpoint *fileTransferCheckpoint) UnmarshalJSON(encoded []byte) error {
 		return fmt.Errorf("不支持的检查点路径编码")
 	}
 	checkpoint.Completed = canonicalTransferCheckpoints(saved.Completed)
+	checkpoint.Directories = saved.Directories
+	for _, j := range checkpoint.Directories {
+		if err := validateDirectoryJournal(j); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -315,6 +335,11 @@ var fileTransferTaskHandler = func(runtime *tasks.Runtime) handleFunc {
 			if to == from {
 				return http.StatusBadRequest, fmt.Errorf("第 %d 项的源和目标路径相同", index+1)
 			}
+			if info.IsDir() {
+				if err := nativeDirectoryOverlap(d.user.Fs, from, to); err != nil {
+					return http.StatusBadRequest, err
+				}
+			}
 			item.From, item.To, item.IsDir, item.Size = from, to, info.IsDir(), info.Size()
 			args.Items = append(args.Items, item)
 		}
@@ -421,11 +446,27 @@ func validateFileTransferEnqueue(ctx context.Context, d *data, task *tasks.Task,
 	if len(args.Items) == 0 || len(args.Items) > 1000 {
 		return nil, http.StatusConflict, fmt.Errorf("文件任务参数无有效项目，请重新创建任务")
 	}
+	if err := directoryConflict(d, args); err != nil {
+		return nil, http.StatusConflict, err
+	}
+	for _, j := range args.Directories {
+		if err := validateDirectoryJournal(j); err != nil {
+			return nil, http.StatusConflict, err
+		}
+		if j.UserID != task.UserID || j.Scope != directoryScope(d) {
+			return nil, http.StatusConflict, errFileTransferWorkspaceChanged
+		}
+	}
 	workspace := captureFileTransferWorkspace(d, args)
 	current := d
 	for _, item := range args.Items {
 		if item.From == "/" || item.To == "/" || item.From == item.To {
 			return nil, http.StatusConflict, fmt.Errorf("文件任务源或目标无效，请重新创建任务")
+		}
+		if item.IsDir {
+			if err := directoryOverlap(item.From, item.To); err != nil {
+				return nil, http.StatusConflict, err
+			}
 		}
 		if err := checkParent(item.From, item.To); err != nil {
 			return nil, http.StatusConflict, err
@@ -452,32 +493,42 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 	if args.Completed == nil {
 		args.Completed = make(map[string]bool)
 	}
+	args.Directories = nonNilDirectories(args.Directories)
 	workspace := captureFileTransferWorkspace(d, args)
 	return func(ctx context.Context, report tasks.Reporter) (json.RawMessage, error) {
+		abandoned := func(err error) (json.RawMessage, error) {
+			if len(args.Directories) > 0 {
+				return marshalFileTransferResult(fileTransferResult{Directories: args.Directories}), fmt.Errorf("目录事务待恢复，未继续写入: %w", err)
+			}
+			return nil, err
+		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return abandoned(ctx.Err())
 		case fileTransferGate <- struct{}{}:
 		}
 		defer func() { <-fileTransferGate }()
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return abandoned(err)
 		}
 
-		result := fileTransferResult{}
+		result := fileTransferResult{Directories: args.Directories}
+		if err := directoryConflict(d, args); err != nil {
+			return marshalFileTransferResult(result), err
+		}
 		totalBytes := int64(0)
 		for _, item := range args.Items {
 			totalBytes += item.Size
 		}
 		processedItems := 0
 		processedBytes := int64(0)
-		checkpoint := fileTransferCheckpoint{Completed: args.Completed}
+		checkpoint := fileTransferCheckpoint{Completed: args.Completed, Directories: args.Directories}
 		checkpointJSON := func() json.RawMessage {
 			encoded, _ := json.Marshal(checkpoint)
 			return encoded
 		}
 		if err := report(tasks.Progress{TotalItems: len(args.Items), TotalBytes: totalBytes}); err != nil {
-			return nil, err
+			return abandoned(err)
 		}
 
 		for index, item := range args.Items {
@@ -502,6 +553,36 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 				current = updated
 				return nil
 			}
+			directoryRun := func() error {
+				directoryBytes := processedBytes
+				return runDirectoryPublication(ctx, current, task, item, args.Directories,
+					func() error {
+						return report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: processedBytes, Checkpoint: checkpointJSON()})
+					},
+					func() (*data, error) {
+						if err := verify(); err != nil {
+							return nil, err
+						}
+						return current, nil
+					},
+					func(delta int64) error {
+						directoryBytes += delta
+						return report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: directoryBytes})
+					})
+			}
+			if args.Directories[directoryKey(item)] != nil {
+				if err := directoryRun(); err != nil {
+					result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
+					return marshalFileTransferResult(result), err
+				}
+				processedItems++
+				processedBytes += item.Size
+				result.Completed = append(result.Completed, fileTransferResultItem{From: item.From, To: item.To})
+				if err := report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: processedBytes, Checkpoint: checkpointJSON()}); err != nil {
+					return marshalFileTransferResult(result), err
+				}
+				continue
+			}
 			if completedPath(args.CompletedPaths, item) || completedCheckpoint(itemFS, checkpoint.Completed, item) {
 				if destinationMatchesItem(itemFS, item) {
 					processedItems++
@@ -520,6 +601,30 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 			if err != nil {
 				result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
 				continue
+			}
+
+			if info.IsDir() {
+				if err := nativeDirectoryOverlap(itemFS, item.From, item.To); err != nil {
+					return marshalFileTransferResult(result), err
+				}
+				if dst, dstErr := lstatResource(itemFS, item.To); dstErr == nil && item.Overwrite {
+					if !dst.IsDir() {
+						return marshalFileTransferResult(result), fmt.Errorf("目录目标类型已变化，未覆盖")
+					}
+					if err := directoryRun(); err != nil {
+						result.Failed = append(result.Failed, fileTransferFailure{From: item.From, To: item.To, Error: err.Error()})
+						return marshalFileTransferResult(result), err
+					}
+					processedItems++
+					processedBytes += item.Size
+					result.Completed = append(result.Completed, fileTransferResultItem{From: item.From, To: item.To})
+					if err := report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: processedBytes, Checkpoint: checkpointJSON()}); err != nil {
+						return marshalFileTransferResult(result), err
+					}
+					continue
+				} else if dstErr != nil && !errors.Is(dstErr, os.ErrNotExist) {
+					return marshalFileTransferResult(result), dstErr
+				}
 			}
 
 			if task.Type == tasks.TypeFileMove {
@@ -576,10 +681,8 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 				copyBytes += delta
 				return report(tasks.Progress{TotalItems: len(args.Items), ProcessedItems: processedItems, TotalBytes: totalBytes, ProcessedBytes: copyBytes})
 			})
-			destinationExists := false
 			if err == nil {
 				if _, statErr := itemFS.Stat(item.To); statErr == nil {
-					destinationExists = true
 					if !item.Overwrite {
 						err = fmt.Errorf("文件冲突: %s", item.To)
 					}
@@ -596,14 +699,7 @@ func fileTransferRunner(d *data, task *tasks.Task, args fileTransferTaskArgs) ta
 					// target; a failed native rename leaves its bytes available.
 					err = files.PublishUpload(itemFS, temp, item.To, item.Overwrite)
 				} else {
-					// Directory replacement still uses the legacy publication;
-					// recovery for an interrupted tree replacement is separate work.
-					if destinationExists {
-						err = itemFS.RemoveAll(item.To)
-					}
-					if err == nil {
-						err = itemFS.Rename(temp, item.To)
-					}
+					err = files.PublishUpload(itemFS, temp, item.To, false)
 				}
 			}
 			if err == nil && task.Type == tasks.TypeFileMove {
@@ -739,6 +835,14 @@ func resumeFileTransferArgs(original *tasks.Task) (json.RawMessage, error) {
 		args.Completed = make(map[string]bool)
 	}
 	if len(original.Result) > 0 {
+		current, err := journalEnvelope(original.Result)
+		if err != nil {
+			return nil, err
+		}
+		args.Directories = nonNilDirectories(args.Directories)
+		for key, j := range current {
+			args.Directories[key] = j
+		}
 		var envelope struct{ Completed json.RawMessage }
 		if err := json.Unmarshal(original.Result, &envelope); err != nil {
 			return nil, fmt.Errorf("任务结果损坏: %w", err)

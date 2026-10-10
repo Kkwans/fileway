@@ -43,7 +43,7 @@ func (d *data) Check(path string) bool {
 	if runtime.GOOS == "windows" && (strings.ContainsRune(path, '\\') || !utf8.ValidString(path)) {
 		return false
 	}
-	if trash.IsInternalPath(path) || files.IsUploadPartPath(path) {
+	if trash.IsInternalPath(path) || files.IsPrivateResourcePath(d.user.Fs, path) {
 		return false
 	}
 	allow := true

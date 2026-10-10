@@ -240,6 +240,9 @@ func (runtime *Runtime) run(ctx context.Context, task *Task, runner Runner) {
 	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
 		task.Status = StatusCanceled
 		task.Error = "任务已取消"
+		if (task.Type == TypeFileCopy || task.Type == TypeFileMove) && err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			task.Error = err.Error()
+		}
 	case err != nil:
 		task.Status = StatusFailed
 		task.Error = err.Error()

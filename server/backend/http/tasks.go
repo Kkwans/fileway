@@ -219,6 +219,13 @@ func retryExistingTask(runtime *tasks.Runtime, d *data, original *tasks.Task, hl
 			}
 			ownerData := *d
 			ownerData.user = owner
+			if err := refreshDirectoryArgs(&ownerData, &transferArgs); err != nil {
+				return nil, http.StatusConflict, err
+			}
+			args, err = json.Marshal(transferArgs)
+			if err != nil {
+				return nil, http.StatusConflict, err
+			}
 			current, status, checkErr := validateFileTransferEnqueue(context.Background(), &ownerData, original, transferArgs)
 			if checkErr != nil {
 				return nil, status, checkErr
@@ -283,19 +290,46 @@ func enqueuePendingDeletionTask(runtime *tasks.Runtime, d *data, args pendingDel
 }
 
 func enqueueTask(runtime *tasks.Runtime, d *data, owner *users.User, taskType tasks.Type, title string, args json.RawMessage, retryOf string) (*tasks.Task, error) {
+	release := func() {}
+	var directoryKeys []string
+	if taskType == tasks.TypeFileCopy || taskType == tasks.TypeFileMove {
+		var transfer fileTransferTaskArgs
+		if err := json.Unmarshal(args, &transfer); err != nil {
+			return nil, err
+		}
+		if len(transfer.Directories) > 0 {
+			var err error
+			release, err = claimDirectoryRetry(d, transfer)
+			if err != nil {
+				return nil, err
+			}
+			for _, j := range transfer.Directories {
+				directoryKeys = append(directoryKeys, "directory:"+j.key())
+			}
+		}
+	}
 	task, err := d.store.Tasks.New(owner.ID, owner.Username, taskType, title, args, retryOf)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	runner, err := taskRunner(d, task)
 	if err == nil {
-		if task.Type == tasks.TypeTrashClear {
+		inner := runner
+		runner = func(ctx context.Context, report tasks.Reporter) (json.RawMessage, error) {
+			defer release()
+			return inner(ctx, report)
+		}
+		if len(directoryKeys) > 0 {
+			err = runtime.StartExclusive(task, runner, directoryKeys...)
+		} else if task.Type == tasks.TypeTrashClear {
 			err = runtime.StartExclusive(task, runner, "trash.clear")
 		} else {
 			err = runtime.Start(task, runner)
 		}
 	}
 	if err != nil {
+		release()
 		task.Status = tasks.StatusFailed
 		task.FinishedAt = time.Now().UnixMilli()
 		task.Error = err.Error()
