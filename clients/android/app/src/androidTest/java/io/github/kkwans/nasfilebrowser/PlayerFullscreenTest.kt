@@ -22,6 +22,7 @@ import io.github.kkwans.nasfilebrowser.data.CredentialVault
 import io.github.kkwans.nasfilebrowser.data.ProfileStore
 import io.github.kkwans.nasfilebrowser.data.ServerProfile
 import io.github.kkwans.nasfilebrowser.player.PlaybackTraceAction
+import io.github.kkwans.nasfilebrowser.player.MediaSubtitleLayer
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -47,7 +48,9 @@ class PlayerFullscreenTest {
         val device = UiDevice.getInstance(instrumentation)
         val media = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(media)
-        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Fullscreen fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
@@ -78,6 +81,13 @@ class PlayerFullscreenTest {
             }
             assertTrue("Fullscreen must hide details: exit=${device.hasObject(By.desc("退出全屏"))}, screen=${device.displayWidth}x${device.displayHeight}", gone)
         }
+        fun capture(stage: String) {
+            if (InstrumentationRegistry.getArguments().getString("nfbTraceUi") != "true") return
+            val name = "player075-$stage-${SystemClock.uptimeMillis()}"
+            device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+            device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$name.png")
+            OwnedUiTraceRule.trace("fullscreen-capture=$name")
+        }
         fun findViewport(view: View): PlayerViewport? {
             if (view is PlayerViewport) return view
             if (view is ViewGroup) for (index in 0 until view.childCount) findViewport(view.getChildAt(index))?.let { return it }
@@ -88,7 +98,13 @@ class PlayerFullscreenTest {
             lateinit var rectangles: List<Rect>
             activity.scenario.onActivity { host ->
                 viewport = findViewport(host.window.decorView) ?: error("Native viewport missing")
-                rectangles = listOf(viewport, viewport.video).map { view ->
+                val layers = mutableListOf<View>(viewport, viewport.video, viewport.text)
+                fun collect(view: View) {
+                    if (view is MediaSubtitleLayer) layers += view
+                    if (view is ViewGroup) for (index in 0 until view.childCount) collect(view.getChildAt(index))
+                }
+                collect(viewport)
+                rectangles = layers.map { view ->
                     Rect().also { assertTrue("Native view must remain visible", view.getGlobalVisibleRect(it)) }
                 }
                 assertTrue("Fullscreen must keep a valid native Surface", viewport.video.holder.surface.isValid)
@@ -117,6 +133,8 @@ class PlayerFullscreenTest {
             assertTrue("Fullscreen viewport must occupy the full screen height", before.second.first().height() >= device.displayHeight * .98f)
             val generation = model.player.state.value.mediaGeneration
             val mediaSets = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.MEDIA_SET }
+            val direction = if (device.displayWidth > device.displayHeight) "landscape" else "portrait"
+            capture("$direction-controls")
             device.click(device.displayWidth / 2, device.displayHeight / 2)
             hiddenFocusedWindow()
             assertEquals("Ordinary touch must not resize video", before, geometry())
@@ -125,6 +143,30 @@ class PlayerFullscreenTest {
                 assertTrue(device.wait(Until.hasObject(By.desc("播放设置")), 5_000))
                 hiddenFocusedWindow()
                 assertEquals("A focused settings window must not resize video", before, geometry())
+                capture("$direction-${if (panel == "选择字幕") "subtitles" else "speed"}")
+                if (panel == "播放速度") {
+                    val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)
+                        ?: error("Custom rate input missing")
+                    field.click()
+                    suspend fun keyboard(shown: Boolean) = withTimeout(5_000) {
+                        while (true) {
+                            val matches = withContext(Dispatchers.Main) {
+                                WindowInspector.getGlobalWindowViews().any { view ->
+                                    view.isShown && view.hasWindowFocus() &&
+                                        ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == shown
+                                }
+                            }
+                            if (matches) break
+                            delay(50)
+                        }
+                    }
+                    keyboard(true)
+                    assertEquals("IME must not resize any video/subtitle layer", before, geometry())
+                    device.pressBack()
+                    keyboard(false)
+                    assertTrue("Back closes the keyboard before its panel", device.hasObject(By.desc("播放设置")))
+                    assertEquals(before, geometry())
+                }
                 click("关闭播放设置")
                 assertTrue(device.wait(Until.gone(By.desc("播放设置")), 5_000))
                 hiddenFocusedWindow()
@@ -149,6 +191,23 @@ class PlayerFullscreenTest {
             }
             hiddenFocusedWindow()
             assertEquals(before, geometry())
+            // A real top-edge gesture must remain available. Do not capture the
+            // owner's notification shade; inspect only our native geometry.
+            assertTrue(device.swipe(device.displayWidth / 2, 1, device.displayWidth / 2, device.displayHeight / 5, 20))
+            withTimeout(5_000) {
+                while (true) {
+                    var revealed = false
+                    activity.scenario.onActivity { host -> revealed = !host.hasWindowFocus() ||
+                        ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
+                    if (revealed) break
+                    delay(50)
+                }
+            }
+            assertEquals("A real system shade gesture must overlay the same native layers", before, geometry())
+            if (device.currentPackageName != instrumentation.targetContext.packageName) device.pressBack()
+            hiddenFocusedWindow()
+            assertEquals(before, geometry())
+            assertTrue("Closing system UI must keep fullscreen", device.hasObject(By.desc("退出全屏")))
             assertEquals(generation, model.player.state.value.mediaGeneration)
             assertEquals("Fullscreen and settings must not reopen media", mediaSets,
                 model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.MEDIA_SET })
@@ -180,6 +239,7 @@ class PlayerFullscreenTest {
             device.unfreezeRotation()
             store.remove(profile)
             source.close()
+            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
         }
     }
 }

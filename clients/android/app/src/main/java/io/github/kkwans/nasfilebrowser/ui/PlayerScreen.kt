@@ -50,6 +50,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -804,7 +805,12 @@ private val PlayerDivider = Color(0xFF293342)
 }
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun PlayerPanel(landscape: Boolean, immersive: Boolean, title: String, dismiss: () -> Unit, content: @Composable () -> Unit) {
-    Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    Dialog(onDismissRequest = dismiss, properties = DialogProperties(dismissOnBackPress = false, usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        val keyboard = LocalSoftwareKeyboardController.current
+        val imeVisible = WindowInsets.isImeVisible
+        // This dialog owns its Back dispatcher and IME insets. Keep an edit's
+        // first Back local to the keyboard, then return through the panel.
+        BackHandler { if (imeVisible) keyboard?.hide() else dismiss() }
         PlayerWindowBars((LocalView.current.parent as? DialogWindowProvider)?.window, immersive)
         BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(if (immersive)
             WindowInsets.displayCutout.union(WindowInsets.navigationBarsIgnoringVisibility).union(WindowInsets.captionBar)
