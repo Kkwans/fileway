@@ -1,44 +1,118 @@
-﻿using Windows.ApplicationModel;
-using Windows.ApplicationModel.Activation;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
+using Fileway.App.MediaSurfaces;
+using Fileway.Core.Contracts;
+using Fileway.Core.Integration;
+using Fileway.Infrastructure.Ipc;
+using Fileway.Infrastructure.Services;
+using Fileway.Playback;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
-using Microsoft.UI.Xaml.Shapes;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
 
 namespace Fileway.App;
 
-/// <summary>
-/// Provides application-specific behavior to supplement the default Application class.
-/// </summary>
-public partial class App : Application
+public partial class App : Application, IAsyncDisposable
 {
-    private Window? _window;
+    private readonly CancellationTokenSource _lifetime = new();
+    private MainWindow? _window;
+    private GoHostClient? _host;
+    private FilewayClientServices? _services;
+    private MpvPlaybackService? _playback;
+    private Task _startup = Task.CompletedTask;
+    private Task? _shutdown;
+    private bool _closing;
+    private bool _closed;
 
-    /// <summary>
-    /// Initializes the singleton application object.  This is the first line of authored code
-    /// executed, and as such is the logical equivalent of main() or WinMain().
-    /// </summary>
     public App()
     {
+        UnhandledException += (_, args) => { if (_window is null) RecordStartupFailure(args.Exception); };
         InitializeComponent();
     }
 
-    /// <summary>
-    /// Invoked when the application is launched.
-    /// </summary>
-    /// <param name="args">Details about the launch request and process.</param>
-    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+    protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
-        _window.Activate();
+        try
+        {
+            _window = new MainWindow();
+            _window.AppWindow.Closing += MainWindow_Closing;
+            _window.Activate();
+            _startup = InitializeServicesAsync();
+        }
+        catch (Exception exception)
+        {
+            RecordStartupFailure(exception);
+            throw;
+        }
+    }
+
+    private static void RecordStartupFailure(Exception exception)
+    {
+        try
+        {
+            var root = Environment.GetEnvironmentVariable("FILEWAY_WINDOWS_DATA_ROOT")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Fileway", "Preview");
+            var directory = Path.Combine(root, "diagnostics");
+            Directory.CreateDirectory(directory);
+            // Startup occurs before connection input is available; never log runtime requests or media addresses.
+            File.WriteAllText(Path.Combine(directory, "startup.log"), exception.ToString());
+        }
+        catch (Exception) { }
+    }
+
+    private async Task InitializeServicesAsync()
+    {
+        try
+        {
+            var directory = AppContext.BaseDirectory;
+            _host = await GoHostClient.StartAsync(new HostClientOptions(
+                Path.Combine(directory, "fileway-host.exe"),
+                Path.Combine(directory, "host-build.json")), _lifetime.Token);
+            _lifetime.Token.ThrowIfCancellationRequested();
+            _services = new FilewayClientServices(_host);
+            _playback = new MpvPlaybackService(_services,
+                new PlaybackWindowFactory(_window!.DispatcherQueue),
+                Path.Combine(directory, "media"));
+            _window.SetServices(_services, _services, _services, _playback);
+        }
+        catch (OperationCanceledException) when (_closing) { }
+        catch (Exception exception)
+        {
+            if (!_closing)
+            {
+                var message = exception is FilewayException known
+                    ? known.Error.Message
+                    : "无法启动原生核心或媒体组件。请完整解压预览包后运行 Fileway.App.exe。";
+                _window?.ShowStartupError(message);
+            }
+        }
+    }
+
+    private async void MainWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_closed) return;
+        args.Cancel = true;
+        if (_closing) return;
+        await DisposeAsync();
+        _closed = true;
+        _window?.Close();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await (_shutdown ??= ShutdownServicesAsync());
+        GC.SuppressFinalize(this);
+    }
+
+    private async Task ShutdownServicesAsync()
+    {
+        _closing = true;
+        _lifetime.Cancel();
+        await _startup;
+        // Stop native readers before revoking their HTTP resource leases and the Host.
+        try { if (_playback is not null) await _playback.DisposeAsync(); }
+        catch (Exception) { /* The Host Job Object still bounds process lifetime. */ }
+        try { if (_services is not null) await _services.DisposeAsync(); }
+        catch (Exception) { }
+        try { if (_host is not null) await _host.DisposeAsync(); }
+        catch (Exception) { }
+        _lifetime.Dispose();
     }
 }
