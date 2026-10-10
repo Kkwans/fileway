@@ -353,7 +353,8 @@ public sealed class FilewayClientServices : IConnectionService, IFileRepository,
     {
         string wirePath = RequiredText(item.GetProperty("wirePath"));
         ValidateWirePath(wirePath);
-        string name = RequiredText(item.GetProperty("name"));
+        string name = OptionalText(item, "name") is { } actualName && (actualName.Length > 0 || wirePath == "/")
+            ? actualName.Length == 0 ? "根目录" : actualName : throw InvalidResponse();
         string displayPath = RequiredText(item.GetProperty("path"));
         bool isDirectory = item.GetProperty("isDir").GetBoolean();
         long size = item.GetProperty("size").GetInt64();

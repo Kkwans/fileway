@@ -32,7 +32,7 @@ public sealed class FilewayClientServicesTests
             "/nas/api/login" => new FixtureResponse(200, Encoding.UTF8.GetBytes(Jwt()), "text/plain"),
             "/nas/api/users/7" => Json(new { id = 7, username = "真实用户", perm = new { download, create = true, rename = false, modify = false, delete = false, execute = false } }),
             "/nas/api/client-capabilities" => Json(new { authMethod, resourceWireOperations = true }),
-            "/nas/api/resources/" => Json(new { name = "/", path = "/", wirePath = "/", isDir = true, size = 0, items = new[]
+            "/nas/api/resources/" => Json(new { name = "", path = "/", wirePath = "/", isDir = true, size = 0, items = new[]
                 { File("乙.jpg", OpaquePath, size: 10), File("甲.jpg", "/a.jpg", size: 2), File("目录", "/folder", true) } }),
             "/nas/api/resources" + OpaquePath + "?metadata=1" => Json(File("乙.jpg", OpaquePath, size: 10)),
             "/nas/api/raw" + OpaquePath => new FixtureResponse(200, [1, 2, 3, 4, 5], "image/jpeg"),
