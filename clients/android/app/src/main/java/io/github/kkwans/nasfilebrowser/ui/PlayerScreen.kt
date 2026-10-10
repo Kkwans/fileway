@@ -221,7 +221,6 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     val blocked = state.error != null || client.error != null || client.busy || !state.playing || state.phase != "正在播放"
     val liveBlocked by rememberUpdatedState(blocked)
     fun touch() { visible = true; interaction++ }
-    fun step(delta: Long) { gestureSeek.reset(); touch(); model.player.seek(liveState.positionMs + delta) }
     fun lockTouch() { touchLocked = true; sheet = null; gestureSeek.reset() }
     fun unlockTouch() { touchLocked = false; touch() }
     fun changeDisplay(mode: PlayerDisplayMode) {
@@ -482,10 +481,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 Text(if (state.durationMs > 0) clock(state.durationMs) else "--:--", color = PlayerSecondary, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                PlayerIcon(R.drawable.ic_skip_previous, "上一个视频", { touch(); model.previousMedia() }, queue?.hasPrevious == true)
-                                PlayerIcon(R.drawable.ic_replay_10, "后退十秒", { step(-10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(if (state.playing) R.drawable.art_pause else R.drawable.art_play, if (state.playing) "暂停播放" else "开始播放", { touch(); model.togglePlayback() }, !client.busy)
-                                PlayerIcon(R.drawable.ic_forward_10, "快进十秒", { step(10_000) }, state.seekable && !client.busy)
                                 PlayerIcon(R.drawable.ic_skip_next, "下一个视频", { touch(); model.nextMedia() }, queue?.hasNext == true)
                                 if (landscape) Text(clock((seek ?: state.positionMs.toFloat()).toLong()) + " / " + if (state.durationMs > 0) clock(state.durationMs) else "--:--",
                                     color = Color(0xFFDADADA), fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
