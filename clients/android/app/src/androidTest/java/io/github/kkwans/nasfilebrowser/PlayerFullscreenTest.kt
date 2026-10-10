@@ -1,5 +1,7 @@
 package io.github.kkwans.nasfilebrowser
 
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.SystemClock
 import android.view.View
@@ -27,6 +29,7 @@ import io.github.kkwans.nasfilebrowser.player.PlaybackTraceAction
 import io.github.kkwans.nasfilebrowser.player.MediaSubtitleLayer
 import io.github.kkwans.nasfilebrowser.player.PlayerViewport
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -56,10 +59,16 @@ class PlayerFullscreenTest {
         val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Fullscreen fixture", address = source.url))
         lateinit var model: ClientModel
-        activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
+        var originalRequestedOrientation: Int? = null
+        activity.scenario.onActivity { host ->
+            originalRequestedOrientation = host.requestedOrientation
+            model = ViewModelProvider(host)[ClientModel::class.java]
+        }
         suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
         val inputDriver = InstrumentationRegistry.getArguments().getString("nfbInputDriver", "automation")
         require(inputDriver in setOf("automation", "shell"))
+        val touchTool = InstrumentationRegistry.getArguments().getString("nfbTouchTool", "finger")
+        require(touchTool in setOf("finger", "unknown"))
         var inspectDown = InstrumentationRegistry.getArguments().getString("nfbInspectDown") == "true"
         fun rejectedInput(stage: String) {
             activity.scenario.onActivity { host -> OwnedUiTraceRule.trace("rejected-input=$stage " +
@@ -86,7 +95,7 @@ class PlayerFullscreenTest {
             }
         }
         fun physicalTap(bounds: Rect) {
-            OwnedUiTraceRule.trace("fullscreen-tap-driver=$inputDriver bounds=$bounds")
+            OwnedUiTraceRule.trace("fullscreen-tap-driver=$inputDriver tool=$touchTool bounds=$bounds")
             if (inputDriver == "shell") {
                 // Controlled comparison of two real input-injection paths on OEM devices.
                 // Both hit the actual button; no semantic click, retry or model callback.
@@ -98,9 +107,19 @@ class PlayerFullscreenTest {
             }
             val downTime = SystemClock.uptimeMillis()
             fun inject(action: Int): Boolean {
-                val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action,
-                    bounds.centerX().toFloat(), bounds.centerY().toFloat(), 0)
-                event.source = InputDevice.SOURCE_TOUCHSCREEN
+                val properties = MotionEvent.PointerProperties().apply {
+                    id = 0
+                    toolType = if (touchTool == "finger") MotionEvent.TOOL_TYPE_FINGER else MotionEvent.TOOL_TYPE_UNKNOWN
+                }
+                val coordinates = MotionEvent.PointerCoords().apply {
+                    x = bounds.centerX().toFloat(); y = bounds.centerY().toFloat()
+                    pressure = 1f; size = 1f
+                }
+                val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, 1,
+                    arrayOf(properties), arrayOf(coordinates), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                OwnedUiTraceRule.trace("fullscreen-event action=$action tool=${event.getToolType(0)} " +
+                    "source=${event.source} device=${event.deviceId} " +
+                    "pressure=${event.getPressure(0)} flags=${event.flags}")
                 return try { instrumentation.uiAutomation.injectInputEvent(event, true) }
                 finally { event.recycle() }
             }
@@ -281,7 +300,19 @@ class PlayerFullscreenTest {
             assertEquals(before, geometry())
             // A real top-edge gesture must remain available. Do not capture the
             // owner's notification shade; inspect only our native geometry.
-            assertTrue(device.swipe(device.displayWidth / 2, 1, device.displayWidth / 2, device.displayHeight / 5, 20))
+            var cutouts = emptyList<Rect>()
+            activity.scenario.onActivity { host ->
+                val insets = checkNotNull(ViewCompat.getRootWindowInsets(host.window.decorView)) {
+                    "Current Activity insets missing for top-edge gesture"
+                }
+                cutouts = insets.displayCutout?.boundingRects.orEmpty().map { Rect(it) }
+            }
+            val width = device.displayWidth
+            val shadeX = listOf(width / 4, 3 * width / 4, width / 2)
+                .firstOrNull { x -> cutouts.none { it.contains(x, 1) } }
+                ?: error("No top-edge gesture candidate outside display cutouts: $cutouts")
+            OwnedUiTraceRule.trace("fullscreen-shade-input x=$shadeX y=1 cutouts=$cutouts")
+            assertTrue(device.swipe(shadeX, 1, shadeX, device.displayHeight / 5, 20))
             awaitStage("real-shade-revealed") {
                 var revealed = false
                 activity.scenario.onActivity { host -> revealed = !host.hasWindowFocus() ||
@@ -299,7 +330,20 @@ class PlayerFullscreenTest {
             assertFalse("Layout changes must preserve the pause intent", model.player.state.value.playing)
         }
         try {
-            device.setOrientationNatural()
+            // Establish only this Activity's initial direction without changing
+            // the display's global rotation policy or entering fullscreen.
+            activity.scenario.onActivity { host ->
+                host.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            }
+            awaitStage("fixture-portrait") {
+                var portrait = false
+                activity.scenario.onActivity { host ->
+                    val decor = host.window.decorView
+                    portrait = host.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT &&
+                        decor.width > 0 && decor.width < decor.height
+                }
+                portrait
+            }
             main { model.selectProfile(profile); model.connectDraft(profile.name, source.url, BackendKind.NAS, "fixture", "fixture-only", "direct") }
             withTimeout(15_000) { model.state.first { it.connected && !it.busy } }
             main { model.open(model.state.value.files.single()) }
@@ -310,7 +354,6 @@ class PlayerFullscreenTest {
             checkFullscreen()
             click("退出全屏")
             assertTrue(device.wait(Until.hasObject(By.desc("播放详情")), 5_000))
-            device.unfreezeRotation()
             click("横屏全屏")
             detailsGone()
             withTimeout(5_000) { while (device.displayWidth <= device.displayHeight) delay(50) }
@@ -319,12 +362,39 @@ class PlayerFullscreenTest {
             assertTrue(device.wait(Until.hasObject(By.desc("播放详情")), 5_000))
             assertNotNull("Back exits fullscreen before leaving the video", model.state.value.selected)
         } finally {
-            main { model.disconnect() }
-            device.setOrientationNatural()
-            device.unfreezeRotation()
-            store.remove(profile)
-            source.close()
-            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+            withContext(NonCancellable) {
+                try {
+                    main { model.disconnect() }
+                    // PlayerScreen restores the direction captured at composition.
+                    // Let that disposal finish before restoring the pre-fixture value.
+                    awaitStage("fixture-player-disposed") {
+                        var disposed = false
+                        activity.scenario.onActivity { host ->
+                            disposed = findViewport(host.window.decorView) == null &&
+                                host.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        }
+                        disposed
+                    }
+                } finally {
+                    try {
+                        originalRequestedOrientation?.let { original ->
+                            activity.scenario.onActivity { host -> host.requestedOrientation = original }
+                        }
+                    } finally {
+                        try {
+                            store.remove(profile)
+                        } finally {
+                            try {
+                                source.close()
+                            } finally {
+                                previousSession?.let {
+                                    if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
