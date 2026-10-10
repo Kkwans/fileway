@@ -78,6 +78,7 @@ internal sealed class MpvNative : IDisposable
     {
         var native = Marshal.PtrToStructure<EventData>(_wait(handle, 0.1));
         MpvProperty? property = null;
+        string[]? messages = null;
         int endReason = -1;
         if (native.Id == 22 && native.Data != 0)
         {
@@ -99,8 +100,17 @@ internal sealed class MpvNative : IDisposable
             property = new MpvProperty(name, value);
         }
         else if (native.Id == 7 && native.Data != 0) endReason = Marshal.ReadInt32(native.Data);
+        else if (native.Id == 16 && native.Data != 0)
+        {
+            var message = Marshal.PtrToStructure<ClientMessage>(native.Data);
+            if (message.Count is >= 0 and <= 16)
+            {
+                messages = new string[message.Count];
+                for (int i = 0; i < messages.Length; i++) messages[i] = Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(message.Arguments, i * nint.Size)) ?? "";
+            }
+        }
         // Every referenced native value has been copied before the next wait.
-        return new MpvEvent(native.Id, native.Error, native.User, property, endReason);
+        return new MpvEvent(native.Id, native.Error, native.User, property, endReason, messages);
     }
 
     private static object? CopyNode(Node node, int depth)
@@ -138,6 +148,7 @@ internal sealed class MpvNative : IDisposable
 
     [StructLayout(LayoutKind.Sequential)] private struct EventData { internal int Id, Error; internal ulong User; internal nint Data; }
     [StructLayout(LayoutKind.Sequential)] private struct PropertyData { internal nint Name; internal int Format; internal nint Data; }
+    [StructLayout(LayoutKind.Sequential)] private struct ClientMessage { internal int Count; internal nint Arguments; }
     [StructLayout(LayoutKind.Explicit, Size = 16)] private struct Node
     { [FieldOffset(0)] internal nint Pointer; [FieldOffset(0)] internal long Integer; [FieldOffset(0)] internal int Flag; [FieldOffset(0)] internal double Number; [FieldOffset(8)] internal int Format; }
     [StructLayout(LayoutKind.Sequential)] private struct NodeList { internal int Count; internal nint Values, Keys; }
@@ -155,7 +166,7 @@ internal sealed class MpvNative : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void FreeFunction(nint value);
 }
 
-internal sealed record MpvEvent(int Id, int Error, ulong User, MpvProperty? Property, int EndReason);
+internal sealed record MpvEvent(int Id, int Error, ulong User, MpvProperty? Property, int EndReason, string[]? Messages);
 internal sealed record MpvProperty(string Name, object? Value);
 
 internal static partial class MpvLibraryMethods

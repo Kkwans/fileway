@@ -33,6 +33,10 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
     private nint _handle;
     private long _nextCommand;
     private bool _closing, _paused, _seeking, _buffering, _usable, _ended;
+    private bool _nativeFullscreen, _hostFullscreen;
+    private SubtitlePreferences _subtitlePreferences = new();
+    private double _subtitleBottomInset;
+    private bool _scriptSubtitleSelected;
 
     private sealed record PlaybackCommand(string[][] Arguments, TaskCompletionSource Completion, CancellationToken Cancellation);
 
@@ -68,6 +72,7 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
             string source = await SourceAsync(_request.Input, cancellationToken).ConfigureAwait(false);
             _surface = await _surfaces.CreateAsync(this, cancellationToken).ConfigureAwait(false);
             if (_surface.ParentHwnd == 0) throw MpvNative.Error(ErrorCode.CapabilityMissing, "播放器视频容器尚未就绪。");
+            if (_surface is IPlaybackWindowControl window) window.FullscreenChanged += HostFullscreenChanged;
             await Task.Run(() =>
             {
                 _handle = _native.Create();
@@ -75,11 +80,15 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
                 foreach (var option in new (string Name, string Value)[]
                 {
                     ("config", "no"), ("terminal", "no"), ("msg-level", "all=no"), ("load-scripts", "no"),
-                    ("scripts", ""), ("ytdl", "no"), ("osc", "no"), ("load-stats-overlay", "no"),
+                    // Native-host control mode. Retain uosc assets as a candidate,
+                    // but never load a second production HUD or input profile.
+                    ("scripts", ""), ("osd-level", "0"), ("osd-bar", "no"),
+                    ("ytdl", "no"), ("osc", "no"), ("load-stats-overlay", "no"),
                     ("input-default-bindings", "no"), ("input-builtin-bindings", "no"), ("input-vo-keyboard", "no"),
                     ("input-cursor", "no"), ("access-references", "no"), ("autoload-files", "no"),
+                    ("cursor-autohide", "4000"), ("cursor-autohide-fs-only", "no"),
                     ("load-unsafe-playlists", "no"), ("idle", "yes"), ("keep-open", "yes"),
-                    ("title", "Fileway video"), ("force-media-title", "Fileway video"),
+                    ("title", "Fileway video"), ("force-media-title", _snapshot.DisplayName.Replace("\0", "", StringComparison.Ordinal)),
                     ("vo", "gpu-next"), ("gpu-context", "d3d11"), ("d3d11-output-mode", "window"),
                     ("hwdec", "auto-safe"), ("audio-client-name", "Fileway"), ("network-timeout", "15"),
                     ("wid", _surface.ParentHwnd.ToInt64().ToString(CultureInfo.InvariantCulture)),
@@ -93,6 +102,8 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
                     ("time-pos", 5), ("duration", 5), ("pause", 3), ("seeking", 3), ("paused-for-cache", 3),
                     ("eof-reached", 3), ("seekable", 3), ("track-list", 6), ("video-format", 1),
                     ("audio-codec-name", 1), ("hwdec-current", 1), ("current-gpu-context", 1), ("video-params/gamma", 1),
+                    ("fullscreen", 3), ("speed", 5), ("volume", 5), ("mute", 3),
+                    ("chapter-list", 6), ("demuxer-cache-state", 6),
                 }) _native.Observe(_handle, ++observer, property.Name, property.Format);
             }, cancellationToken).ConfigureAwait(false);
             _events = Task.Factory.StartNew(EventPump, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
@@ -205,6 +216,13 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
                     else reply.TrySetResult();
                 }
                 lock (_gate) if (_closing) continue;
+                // mpv deliberately disables its wid child. In native-host mode
+                // it stays disabled so the UI-owned container receives input.
+                if (item.Id == 16 && item.Messages is { Length: 1 } messages)
+                {
+                    if (messages[0] == "fileway-close") _ = CloseFromNativeAsync();
+                    else if (messages[0] == "fileway-controls") _ = ShowControlsAsync();
+                }
                 if (item.Property is { } property) PropertyChanged(property);
                 else if (item.Id == 21)
                 {
@@ -246,6 +264,20 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
             case "paused-for-cache" when property.Value is bool buffering: _buffering = buffering; Publish(snapshot => snapshot with { Status = CurrentStatus() }); break;
             case "eof-reached" when property.Value is bool ended: _ended = ended; Publish(snapshot => snapshot with { Status = CurrentStatus() }); break;
             case "seekable" when property.Value is bool seekable: Publish(snapshot => snapshot with { Seekable = seekable }); break;
+            case "speed" when property.Value is double rate && double.IsFinite(rate) && rate > 0:
+                Publish(snapshot => snapshot with { PlaybackRate = rate }); break;
+            case "volume" when property.Value is double volume && double.IsFinite(volume) && volume >= 0:
+                Publish(snapshot => snapshot with { Volume = volume }); break;
+            case "mute" when property.Value is bool muted:
+                Publish(snapshot => snapshot with { IsMuted = muted }); break;
+            case "chapter-list":
+                UpdateChapters(property.Value as JsonElement?); break;
+            case "demuxer-cache-state":
+                UpdateCache(property.Value as JsonElement?); break;
+            case "fullscreen" when property.Value is bool fullscreen:
+                lock (_gate) _nativeFullscreen = fullscreen;
+                if (_hostFullscreen != fullscreen) _ = SetHostFullscreenAsync(fullscreen);
+                break;
             case "track-list" when property.Value is JsonElement tracks: UpdateTracks(tracks); break;
             case "video-format" when property.Value is string video: Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { VideoCodec = video } }); break;
             case "audio-codec-name" when property.Value is string audio: Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { AudioCodec = audio } }); break;
@@ -256,22 +288,111 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
         }
     }
 
+    private void HostFullscreenChanged(object? sender, bool fullscreen)
+    {
+        lock (_gate)
+        {
+            _hostFullscreen = fullscreen;
+            if (_closing || _nativeFullscreen == fullscreen) return;
+            _nativeFullscreen = fullscreen;
+        }
+        try { _ = ObserveWindowCommandAsync(QueueAsync([["set", "fullscreen", fullscreen ? "yes" : "no"]], CancellationToken.None)); }
+        catch (FilewayException) { }
+    }
+
+    private static async Task ObserveWindowCommandAsync(Task command)
+    { try { await command.ConfigureAwait(false); } catch (Exception) { } }
+
+    private async Task SetHostFullscreenAsync(bool fullscreen)
+    {
+        lock (_gate) { if (_closing) return; }
+        if (_surface is not IPlaybackWindowControl window) return;
+        try
+        {
+            await window.SetFullscreenAsync(fullscreen, CancellationToken.None).ConfigureAwait(false);
+            lock (_gate) _hostFullscreen = fullscreen;
+        }
+        catch (Exception) { }
+    }
+
+    private async Task ShowControlsAsync()
+    {
+        lock (_gate) { if (_closing) return; }
+        if (_surface is IPlaybackWindowControl window)
+            try { await window.ShowControlsAsync(CancellationToken.None).ConfigureAwait(false); } catch (Exception) { }
+    }
+
+    private async Task CloseFromNativeAsync()
+    { try { await StopAsync(CancellationToken.None).ConfigureAwait(false); } catch (Exception) { } }
+
     private void UpdateTracks(JsonElement tracks)
     {
         if (tracks.ValueKind != JsonValueKind.Array) return;
         var parsed = new List<MediaTrack>();
         foreach (var track in tracks.EnumerateArray())
         {
-            if (!track.TryGetProperty("id", out var id) || !track.TryGetProperty("type", out var type)) continue;
+            if (track.ValueKind != JsonValueKind.Object || !track.TryGetProperty("id", out var id)
+                || id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var trackId)
+                || !track.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String) continue;
             MediaTrackKind? kind = type.GetString() switch { "video" => MediaTrackKind.Video, "audio" => MediaTrackKind.Audio, "sub" => MediaTrackKind.Subtitle, _ => null };
             if (kind is null) continue;
             string? Text(string name) => track.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
             bool Flag(string name) => track.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True;
-            parsed.Add(new MediaTrack(id.GetInt64(), kind.Value, Text("title"), Text("lang"), Text("codec"), Flag("selected"), Flag("external")));
+            parsed.Add(new MediaTrack(trackId, kind.Value, Text("title"), Text("lang"), Text("codec"), Flag("selected"), Flag("external")));
         }
         bool bitmap = parsed.Any(track => track.Kind == MediaTrackKind.Subtitle && track.Selected && track.Codec is "hdmv_pgs_subtitle" or "dvd_subtitle");
-        Publish(snapshot => snapshot with { Tracks = parsed.AsReadOnly(), SubtitleCapabilities = new SubtitleCapabilities(!bitmap, true, true, true, true) });
+        bool script = parsed.Any(track => track.Kind == MediaTrackKind.Subtitle && track.Selected && track.Codec is "ass" or "ssa");
+        lock (_gate) _scriptSubtitleSelected = script;
+        Publish(snapshot => snapshot with { Tracks = parsed.AsReadOnly(), SubtitleCapabilities = new SubtitleCapabilities(!bitmap, !bitmap, true, true, script) });
+        try { _ = ObserveWindowCommandAsync(QueueAsync(CurrentSubtitleCommands(), CancellationToken.None)); }
+        catch (FilewayException) { }
     }
+
+    private void UpdateChapters(JsonElement? value)
+    {
+        if (value is not { ValueKind: JsonValueKind.Array } chapters)
+        {
+            Publish(snapshot => snapshot with { Chapters = null });
+            return;
+        }
+        var parsed = new List<PlaybackChapter>();
+        foreach (var chapter in chapters.EnumerateArray())
+        {
+            if (chapter.ValueKind != JsonValueKind.Object || !chapter.TryGetProperty("time", out var time) || time.ValueKind != JsonValueKind.Number
+                || !time.TryGetDouble(out var seconds) || !IsMediaTime(seconds)) continue;
+            var title = chapter.TryGetProperty("title", out var text) && text.ValueKind == JsonValueKind.String
+                ? text.GetString() : null;
+            parsed.Add(new PlaybackChapter(string.IsNullOrWhiteSpace(title) ? $"章节 {parsed.Count + 1}" : title, TimeSpan.FromSeconds(seconds)));
+        }
+        Publish(snapshot => snapshot with { Chapters = parsed.OrderBy(chapter => chapter.Position).ToArray() });
+    }
+
+    private void UpdateCache(JsonElement? value)
+    {
+        // Only a native-reported contiguous range containing the current reader
+        // can become a buffered bar. File size or elapsed time is not buffer evidence.
+        TimeSpan? until = null;
+        if (value is { ValueKind: JsonValueKind.Object } state
+            && state.TryGetProperty("reader-pts", out var reader) && reader.ValueKind == JsonValueKind.Number
+            && reader.TryGetDouble(out var position) && IsMediaTime(position)
+            && state.TryGetProperty("seekable-ranges", out var ranges) && ranges.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var range in ranges.EnumerateArray())
+            {
+                if (range.ValueKind != JsonValueKind.Object || !range.TryGetProperty("start", out var start)
+                    || !range.TryGetProperty("end", out var end) || start.ValueKind != JsonValueKind.Number
+                    || end.ValueKind != JsonValueKind.Number || !start.TryGetDouble(out var from)
+                    || !end.TryGetDouble(out var to) || !double.IsFinite(from) || !IsMediaTime(to) || to < from
+                    || position < from || position > to) continue;
+                var candidate = TimeSpan.FromSeconds(to);
+                if (until is null || candidate > until) until = candidate;
+            }
+        }
+        Publish(snapshot => snapshot with { BufferedUntil = until });
+    }
+
+    private static bool IsMediaTime(double seconds)
+        => double.IsFinite(seconds) && seconds >= 0 && seconds < TimeSpan.MaxValue.TotalSeconds;
 
     private void Publish(Func<PlaybackSnapshot, PlaybackSnapshot> change, bool terminal = false)
     {
@@ -297,6 +418,13 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
         if (!double.IsFinite(volume) || volume is < 0 or > 100) throw MpvNative.Error(ErrorCode.InvalidRequest, "音量必须为 0 到 100。");
         return QueueAsync([["set", "volume", volume.ToString("R", CultureInfo.InvariantCulture)]], cancellationToken);
     }
+    public Task SetRateAsync(double rate, CancellationToken cancellationToken)
+    {
+        if (!double.IsFinite(rate) || rate is < 0.125 or > 5) throw MpvNative.Error(ErrorCode.InvalidRequest, "播放倍速必须为 0.125 到 5。");
+        return QueueAsync([["set", "speed", rate.ToString("R", CultureInfo.InvariantCulture)]], cancellationToken);
+    }
+    public Task SetMutedAsync(bool muted, CancellationToken cancellationToken)
+        => QueueAsync([["set", "mute", muted ? "yes" : "no"]], cancellationToken);
     public Task SeekAsync(TimeSpan position, CancellationToken cancellationToken)
     {
         if (position < TimeSpan.Zero) throw MpvNative.Error(ErrorCode.InvalidRequest, "播放位置不能为负数。");
@@ -308,17 +436,45 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
         string name = kind switch { MediaTrackKind.Video => "vid", MediaTrackKind.Audio => "aid", MediaTrackKind.Subtitle => "sid", _ => throw MpvNative.Error(ErrorCode.InvalidRequest, "媒体轨道类型无效。") };
         return QueueAsync([["set", name, trackId?.ToString(CultureInfo.InvariantCulture) ?? "no"]], cancellationToken);
     }
-    public Task SetSubtitlesAsync(SubtitlePreferences preferences, CancellationToken cancellationToken)
+    public async Task SetSubtitlesAsync(SubtitlePreferences preferences, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(preferences);
         if (!double.IsFinite(preferences.Scale) || preferences.Scale is < 0.1 or > 10 || !double.IsFinite(preferences.VerticalPositionPercent) || preferences.VerticalPositionPercent is < 0 or > 100)
             throw MpvNative.Error(ErrorCode.InvalidRequest, "字幕显示参数无效。");
-        List<string[]> commands = [["set", "sub-scale", preferences.Scale.ToString("R", CultureInfo.InvariantCulture)],
-            ["set", "sub-pos", preferences.VerticalPositionPercent.ToString("R", CultureInfo.InvariantCulture)],
-            ["set", "sub-delay", preferences.Delay.TotalSeconds.ToString("R", CultureInfo.InvariantCulture)],
-            ["set", "sub-ass-override", preferences.OverrideScriptStyle ? "force" : "no"]];
-        if (!string.IsNullOrWhiteSpace(preferences.FontFamily)) commands.Add(["set", "sub-font", preferences.FontFamily]);
-        return QueueAsync(commands.ToArray(), cancellationToken);
+        SubtitlePreferences previous;
+        lock (_gate) { previous = _subtitlePreferences; _subtitlePreferences = preferences; }
+        try { await QueueAsync(CurrentSubtitleCommands(), cancellationToken).ConfigureAwait(false); }
+        catch
+        {
+            lock (_gate) if (ReferenceEquals(_subtitlePreferences, preferences)) _subtitlePreferences = previous;
+            throw;
+        }
+    }
+
+    public Task SetSubtitleSafeAreaAsync(double bottomInsetFraction, CancellationToken cancellationToken)
+    {
+        if (!double.IsFinite(bottomInsetFraction) || bottomInsetFraction is < 0 or > 0.4)
+            throw MpvNative.Error(ErrorCode.InvalidRequest, "字幕安全区域无效。");
+        lock (_gate) _subtitleBottomInset = bottomInsetFraction;
+        return QueueAsync(CurrentSubtitleCommands(), cancellationToken);
+    }
+
+    private string[][] CurrentSubtitleCommands()
+    {
+        lock (_gate)
+        {
+            var preferences = _subtitlePreferences;
+            var preserve = _scriptSubtitleSelected && !preferences.OverrideScriptStyle;
+            // Author-positioned ASS remains at its native geometry. Plain text
+            // temporarily rises above controls, then returns to the user's position.
+            var position = preserve ? 100 : Math.Min(preferences.VerticalPositionPercent, 100 * (1 - _subtitleBottomInset));
+            var scale = preserve ? 1 : preferences.Scale;
+            return [["set", "sub-scale", scale.ToString("R", CultureInfo.InvariantCulture)],
+                ["set", "sub-pos", position.ToString("R", CultureInfo.InvariantCulture)],
+                ["set", "sub-delay", preferences.Delay.TotalSeconds.ToString("R", CultureInfo.InvariantCulture)],
+                ["set", "sub-ass-override", preserve ? "no" : "force"],
+                ["set", "sub-font", string.IsNullOrWhiteSpace(preferences.FontFamily) ? "sans-serif" : preferences.FontFamily]];
+        }
     }
     public async Task AddSubtitleAsync(PlaybackInput subtitle, CancellationToken cancellationToken)
     {
@@ -350,6 +506,7 @@ internal sealed class MpvPlaybackSession : IPlaybackSession
         try
         {
             if (_start is not null) { try { await _start.ConfigureAwait(false); } catch (Exception) { } }
+            if (_surface is IPlaybackWindowControl window) window.FullscreenChanged -= HostFullscreenChanged;
             if (_surface is not null) await _surface.DetachAsync(CancellationToken.None).AsTask().WaitAsync(NativeDeadline).ConfigureAwait(false);
             if (_handle != 0 && _ready.Task.IsCompletedSuccessfully)
             {
