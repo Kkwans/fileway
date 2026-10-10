@@ -71,6 +71,7 @@ public partial class App : Application, IAsyncDisposable
                 new PlaybackWindowFactory(_window!.DispatcherQueue),
                 Path.Combine(directory, "media"));
             _window.SetServices(_services, _services, _services, _playback);
+            await OpenLaunchFileAsync();
         }
         catch (OperationCanceledException) when (_closing) { }
         catch (Exception exception)
@@ -83,6 +84,20 @@ public partial class App : Application, IAsyncDisposable
                 _window?.ShowStartupError(message);
             }
         }
+    }
+
+    private async Task OpenLaunchFileAsync()
+    {
+        // Desktop file activation also works offline: a completed local file needs no server session.
+        var arguments = Environment.GetCommandLineArgs();
+        if (arguments.Length != 2 || !Path.IsPathFullyQualified(arguments[1])) return;
+        var path = Path.GetFullPath(arguments[1]);
+        if (!File.Exists(path))
+        {
+            _window?.ShowStartupError("本地文件不存在或不可读取，请重新选择文件。");
+            return;
+        }
+        await _playback!.OpenAsync(new PlaybackOpenRequest(new LocalPlaybackInput(path, Path.GetFileName(path))), _lifetime.Token);
     }
 
     private async void MainWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
