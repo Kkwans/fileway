@@ -204,9 +204,9 @@ class PlayerFullscreenTest {
                 throw AssertionError("Fullscreen wait failed at $stage; windows=$windows; ${trace.snapshot()}", failure)
             }
         }
-        suspend fun hiddenFocusedWindow(name: String) {
+        suspend fun hiddenFocusedWindow(name: String, systemHidden: (() -> Boolean)? = null) {
             awaitStage(name) {
-                withContext(Dispatchers.Main) {
+                val ownedHidden = withContext(Dispatchers.Main) {
                     val focused = WindowInspector.getGlobalWindowViews().filter { it.isShown && it.hasWindowFocus() }
                     focused.isNotEmpty() && focused.all { root ->
                         ViewCompat.getRootWindowInsets(root)?.let {
@@ -214,6 +214,7 @@ class PlayerFullscreenTest {
                         } == true
                     }
                 }
+                ownedHidden && (systemHidden?.invoke() ?: true)
             }
         }
         suspend fun checkFullscreen() {
@@ -247,6 +248,25 @@ class PlayerFullscreenTest {
             val generation = model.player.state.value.mediaGeneration
             val mediaSets = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.MEDIA_SET }
             val direction = if (device.displayWidth > device.displayHeight) "landscape" else "portrait"
+            var displayId = -1
+            activity.scenario.onActivity { host -> displayId = checkNotNull(host.window.decorView.display).displayId }
+            val screenWidth = device.displayWidth
+            val screenHeight = device.displayHeight
+            val clientTransient = device.executeShellCommand("getprop persist.wm.debug.client_transient").trim()
+            OwnedUiTraceRule.trace("fullscreen-transient-mode=$clientTransient display=$displayId")
+            var lastSystemBars: SystemStatusBarSnapshot? = null
+            fun systemStatusBar(): SystemStatusBarSnapshot {
+                // Read raw display insets, before WM applies this app's fake-control visibility.
+                // Keep only structural bar state: never persist a raw dump or notification content.
+                val snapshot = checkNotNull(parseSystemStatusBarSnapshot(
+                    device.executeShellCommand("dumpsys window displays"), displayId, screenWidth, screenHeight,
+                )) { "Unsupported system-bar dump for display=$displayId size=${screenWidth}x$screenHeight" }
+                if (snapshot != lastSystemBars) {
+                    OwnedUiTraceRule.trace("fullscreen-system-status=$direction $snapshot")
+                    lastSystemBars = snapshot
+                }
+                return snapshot
+            }
             capture("$direction-controls")
             val touches = trace.deliveredTouches()
             physicalTap(Rect(device.displayWidth / 2 - 1, device.displayHeight / 2 - 1,
@@ -325,13 +345,13 @@ class PlayerFullscreenTest {
             awaitStage("system-bars-shown") {
                 var shown = false
                 activity.scenario.onActivity { host -> shown = ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
-                shown
+                shown && systemStatusBar().visible
             }
             assertEquals("Visible transient system bars must overlay the same Surface", before, geometry())
             activity.scenario.onActivity { host ->
                 WindowCompat.getInsetsController(host.window, host.window.decorView).hide(WindowInsetsCompat.Type.systemBars())
             }
-            hiddenFocusedWindow("system-bars-hidden")
+            hiddenFocusedWindow("system-bars-hidden") { systemStatusBar().hidden }
             assertEquals(before, geometry())
             // A real top-edge gesture must remain available. Do not capture the
             // owner's notification shade; inspect only our native geometry.
@@ -349,14 +369,13 @@ class PlayerFullscreenTest {
             OwnedUiTraceRule.trace("fullscreen-shade-input x=$shadeX y=1 cutouts=$cutouts")
             assertTrue(device.swipe(shadeX, 1, shadeX, device.displayHeight / 5, 20))
             awaitStage("real-shade-revealed") {
-                var revealed = false
-                activity.scenario.onActivity { host -> revealed = !host.hasWindowFocus() ||
-                    ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
-                revealed
+                // A transient overlay deliberately leaves app root insets hidden and may keep focus.
+                // The same raw source was calibrated visible -> hidden immediately before this swipe.
+                systemStatusBar().visible
             }
             assertEquals("A real system shade gesture must overlay the same native layers", before, geometry())
             if (device.currentPackageName != instrumentation.targetContext.packageName) device.pressBack()
-            hiddenFocusedWindow("real-shade-dismissed")
+            hiddenFocusedWindow("real-shade-dismissed") { systemStatusBar().hidden }
             assertEquals(before, geometry())
             assertTrue("Closing system UI must keep fullscreen", device.hasObject(By.desc("退出全屏")))
             assertEquals(generation, model.player.state.value.mediaGeneration)
@@ -432,4 +451,46 @@ class PlayerFullscreenTest {
             }
         }
     }
+}
+
+/** Raw WM display state; no app-adjusted InsetsState, view text, icons or notification payloads. */
+private data class SystemStatusBarSnapshot(
+    val displayId: Int,
+    val width: Int,
+    val height: Int,
+    val barBottom: Int,
+    val visible: Boolean,
+    val transient: Boolean,
+) {
+    val hidden: Boolean get() = !visible && !transient
+}
+
+private fun parseSystemStatusBarSnapshot(
+    dump: String, displayId: Int, width: Int, height: Int,
+): SystemStatusBarSnapshot? {
+    val lines = dump.lineSequence().map(String::trim).toList()
+    val displayHeader = Regex("""Display: mDisplayId=(\d+)(?:\s.*)?""")
+    val displays = lines.mapIndexedNotNull { index, line ->
+        displayHeader.matchEntire(line)?.let { index to it.groupValues[1].toIntOrNull() }
+    }
+    val target = displays.singleOrNull { it.second == displayId } ?: return null
+    val end = displays.firstOrNull { it.first > target.first }?.first ?: lines.size
+    val display = lines.subList(target.first + 1, end)
+    val rawStart = display.indexOf("WindowInsetsStateController").takeIf { it >= 0 } ?: return null
+    val rawEnd = (rawStart + 1 until display.size).firstOrNull { display[it] == "Control map:" } ?: return null
+    val raw = display.subList(rawStart + 1, rawEnd)
+    if ("mDisplayFrame=Rect(0, 0 - $width, $height)" !in raw) return null
+    val status = raw.filter { it.startsWith("InsetsSource id=") && " type=statusBars " in it }
+        .singleOrNull() ?: return null
+    val frame = Regex("""\bframe=\[(-?\d+),(-?\d+)]\[(-?\d+),(-?\d+)]""")
+        .find(status)?.groupValues?.drop(1)?.map { it.toIntOrNull() ?: return null } ?: return null
+    if (frame[0] != 0 || frame[1] != 0 || frame[2] != width || frame[3] !in 2..height) return null
+    val visible = Regex("""\bvisible=(true|false)\b""").find(status)?.groupValues?.get(1)
+        ?.let { it == "true" } ?: return null
+    val policyStart = display.indexOf("InsetsPolicy").takeIf { it > rawEnd } ?: return null
+    val policy = display.drop(policyStart + 1)
+    if (policy.none { it.startsWith("status: WINDOW_STATE_") }) return null
+    val transient = policy.firstOrNull { it.startsWith("mShowingTransientTypes=") }
+        ?.substringAfter('=')?.split(' ')?.contains("statusBars") ?: false
+    return SystemStatusBarSnapshot(displayId, width, height, frame[3], visible, transient)
 }
