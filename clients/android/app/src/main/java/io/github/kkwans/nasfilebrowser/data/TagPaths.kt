@@ -4,7 +4,9 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import org.json.JSONObject
 
 data class TagPathRef(val path: String, val wirePath: String = "", val openable: Boolean = false) {
-    val identity: String? get() = if (openable) favoriteWireIdentity(wirePath) else null
+    // Immutable source values make this safe to reuse; copy() gets its own cache.
+    // Keep validation at first access, including for directly constructed refs.
+    val identity: String? by lazy { if (openable) favoriteWireIdentity(wirePath) else null }
 }
 
 internal fun tagPathRef(path: String, wire: String? = null, verified: Boolean? = null): TagPathRef {

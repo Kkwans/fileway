@@ -68,11 +68,22 @@ internal fun recentAccessRecordTarget(file: ResourceRef): RecentAccessTarget {
 }
 
 /** Canonical byte identity only; never use display names to merge entries. */
-internal fun recentAccessWireIdentity(wire: String): String = wireSegments(wire).joinToString("/") { bytes ->
-    bytes.joinToString("") { value ->
-        val byte = value.toInt() and 0xff
-        if (byte in 0x41..0x5a || byte in 0x61..0x7a || byte in 0x30..0x39 || byte in listOf(0x2d, 0x2e, 0x5f, 0x7e))
-            byte.toChar().toString() else "%%%02X".format(java.util.Locale.ROOT, byte)
+internal fun recentAccessWireIdentity(wire: String): String {
+    val segments = wireSegments(wire)
+    val hex = "0123456789ABCDEF"
+    return buildString(wire.length) {
+        segments.forEachIndexed { index, bytes ->
+            if (index > 0) append('/')
+            for (value in bytes) {
+                val byte = value.toInt() and 0xff
+                if (byte in 0x41..0x5a || byte in 0x61..0x7a || byte in 0x30..0x39 ||
+                    byte == 0x2d || byte == 0x2e || byte == 0x5f || byte == 0x7e) {
+                    append(byte.toChar())
+                } else {
+                    append('%'); append(hex[byte ushr 4]); append(hex[byte and 0x0f])
+                }
+            }
+        }
     }
 }
 

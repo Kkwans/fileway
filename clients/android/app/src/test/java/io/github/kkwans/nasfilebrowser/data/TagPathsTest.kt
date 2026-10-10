@@ -31,4 +31,23 @@ class TagPathsTest {
         assertFalse(taggedPathMatches("/a/photo.png", listOf("/A/photo.png"), false))
         assertFalse(taggedPathMatches("/folder/one", listOf("/folder/one "), false))
     }
+    @Test fun immutableReferencesReuseTheirIdentityWithoutSharingCopies() {
+        val wire = "/" + List(16) { "%01".repeat(200) }.joinToString("/") + "/owned.txt"
+        val ref = TagPathRef("/owned", wire, true)
+        val identity = ref.identity
+        assertEquals(wire, identity)
+        repeat(10) { assertSame(identity, ref.identity) }
+        val sibling = ref.copy(wirePath = "/%FF.txt")
+        assertEquals("/%FF.txt", sibling.identity)
+        assertEquals(identity, ref.identity)
+        assertNull(ref.copy(openable = false).identity)
+        assertEquals("/", ref.copy(wirePath = "/").identity)
+    }
+    @Test fun closedReferencesSkipValidationAndOpenReferencesStillValidateOnAccess() {
+        val closed = TagPathRef("/unknown", "/bad%GG", false)
+        assertNull(closed.identity)
+        val opened = closed.copy(openable = true)
+        repeat(2) { assertTrue(runCatching { opened.identity }.isFailure) }
+        assertNull(closed.identity)
+    }
 }

@@ -31,6 +31,38 @@ class RecentAccessPathsTest {
         assertNotEquals(recentAccessWireIdentity("/A"), recentAccessWireIdentity("/a"))
     }
 
+    @Test fun everyLegalFilenameByteKeepsItsCanonicalIdentity() {
+        val unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        for (byte in 1..255) {
+            if (byte == '/'.code) continue
+            // Prefix the byte so a legal dot cannot become a relative segment.
+            val escaped = "%%%02x".format(java.util.Locale.ROOT, byte)
+            val expected = if (byte.toChar() in unreserved) byte.toChar().toString()
+                else "%%%02X".format(java.util.Locale.ROOT, byte)
+            assertEquals("byte=$byte", "/byte-$expected", recentAccessWireIdentity("/byte-$escaped"))
+        }
+        assertEquals("/", recentAccessWireIdentity("/"))
+        assertEquals("/Folder/~a", recentAccessWireIdentity("/%46older/%7e%61/"))
+        assertEquals("/%D6%D0%CE%C4.txt", recentAccessWireIdentity("/%d6%d0%ce%c4.txt"))
+        assertEquals("/%E4%B8%AD%E6%96%87.txt", recentAccessWireIdentity("/%e4%b8%ad%e6%96%87.txt"))
+    }
+
+    @Test fun longControlCharacterPathsKeepTheirOriginalByteIdentity() {
+        val prefix = "/" + List(16) { "%01".repeat(200) }.joinToString("/")
+        repeat(40) { index ->
+            val wire = "$prefix/$index.txt"
+            assertEquals(wire, recentAccessWireIdentity(wire))
+        }
+    }
+
+    @Test fun identityNormalizationRetainsEverySegmentSafetyCheck() {
+        listOf("", "relative", "//host/file", "/a//b", "/a%00b", "/a%2fb", "/a%2Fb",
+            "/a/.", "/a/%2E", "/a/..", "/a/%2e%2E", "/a%", "/a%0", "/a%GG",
+            "/a?query", "/a#fragment", "/a b", "/中文", "/a\u0001b").forEach { wire ->
+            assertTrue("must reject $wire", runCatching { recentAccessWireIdentity(wire) }.isFailure)
+        }
+    }
+
     @Test fun malformedOrAmbiguousPathsAreRejectedBeforeNetworkWrite() {
         listOf("/broken%", "/bad%GG", "//host/file", "/file?query", "/file#fragment", "/a%2Fb", "/bad%00", "/%2E%2E/file").forEach { wire ->
             assertTrue("must reject $wire", runCatching { recentAccessRecordTarget(file("/file", wire)) }.isFailure)
