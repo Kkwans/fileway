@@ -433,6 +433,34 @@ async function geometry(page: Page) {
 }
 
 test.describe("affected page browser gate", () => {
+  test("面包屑末级长名称在桌面和窄屏完整显示", async ({ page }) => {
+    const unknownRequests: string[] = [];
+    await installFixtureApi(page, unknownRequests);
+    await login(page);
+    const current = "06_PARALLEL_AGENT_AND_GIT_" + "长名称必须完整显示".repeat(8);
+    await page.goto(`/files/docs/${encodeURIComponent(current)}/`);
+    const label = page.locator(".breadcrumb-current > .breadcrumb-label");
+    await expect(label).toHaveText(current);
+    await expect(label).toHaveAttribute("aria-current", "location");
+    for (const width of [1440, 1024, 768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const measured = await label.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const bar = element.closest(".breadcrumbs")!.getBoundingClientRect();
+        return {
+          clippedX: element.scrollWidth > element.clientWidth + 1,
+          clippedY: element.scrollHeight > element.clientHeight + 1,
+          outside: rect.right > bar.right + 1 || rect.bottom > bar.bottom + 1,
+          pageWidth: document.documentElement.scrollWidth,
+        };
+      });
+      expect(measured.clippedX).toBe(false);
+      expect(measured.clippedY).toBe(false);
+      expect(measured.outside).toBe(false);
+      expect(measured.pageWidth).toBeLessThanOrEqual(width + 1);
+    }
+  });
+
   test("keeps accepted transcodes submitted when task refresh fails", async ({
     page,
   }) => {

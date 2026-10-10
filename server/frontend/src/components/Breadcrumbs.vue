@@ -13,9 +13,21 @@
       </span>
     </component>
 
-    <span v-for="(link, index) in items" :key="index">
+    <span
+      v-for="(link, index) in items"
+      :key="index"
+      class="breadcrumb-item"
+      :class="{ 'breadcrumb-current': index === items.length - 1 }"
+    >
       <span class="chevron"><AppIcon name="chevron-right" :size="18" /></span>
-      <component :is="element" :to="link.url">{{ link.name }}</component>
+      <component
+        :is="element"
+        :to="link.url"
+        class="breadcrumb-label"
+        :title="link.name"
+        :aria-current="index === items.length - 1 ? 'location' : undefined"
+        >{{ link.name }}</component
+      >
     </span>
   </div>
 </template>

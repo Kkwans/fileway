@@ -101,11 +101,12 @@
   z-index: 800;
   box-sizing: border-box;
   width: auto;
-  height: 46px;
+  min-height: 46px;
+  height: auto;
+  flex-wrap: wrap;
   margin: 10px 16px 4px;
   padding: 0 10px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
   border: 1px solid var(--borderPrimary, #e1e6ec);
   border-radius: 12px;
   background: var(--surfacePrimary, #fff);
@@ -118,8 +119,7 @@
 }
 
 .breadcrumbs > a,
-.breadcrumbs > span > a,
-.breadcrumbs > span:last-child {
+.breadcrumbs > .breadcrumb-item > .breadcrumb-label {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
@@ -133,6 +133,34 @@
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.breadcrumbs > .breadcrumb-item {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 266px;
+}
+
+.breadcrumbs > .breadcrumb-item > .breadcrumb-label {
+  display: block;
+  flex: 0 1 auto;
+}
+
+/* Ancestors may elide; the current name must always remain readable, including
+ * an unbroken filename wider than a phone. Let it wrap instead of clipping. */
+.breadcrumbs > .breadcrumb-current {
+  flex: 1 1 12rem;
+  max-width: none;
+}
+
+.breadcrumbs > .breadcrumb-current > .breadcrumb-label {
+  flex: 1 1 auto;
+  max-width: none;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-overflow: clip;
+  line-height: 1.5;
 }
 
 .breadcrumbs > a:first-child {
@@ -1276,18 +1304,26 @@ nav.sidebar .favorite-item.drag-over-bottom {
 
   .breadcrumbs {
     top: calc(var(--app-mobile-header-height, 96px) + 8px);
-    height: 44px;
+    min-height: 44px;
+    height: auto;
     margin: 8px 10px 2px;
     padding-inline: 6px;
     border-radius: 10px;
   }
 
   .breadcrumbs > a,
-  .breadcrumbs > span > a,
-  .breadcrumbs > span:last-child {
+  .breadcrumbs > .breadcrumb-item > .breadcrumb-label {
     max-width: 112px;
     padding: 6px;
     font-size: 12px;
+  }
+
+  .breadcrumbs > .breadcrumb-item:not(.breadcrumb-current) {
+    max-width: 138px;
+  }
+
+  .breadcrumbs > .breadcrumb-current > .breadcrumb-label {
+    max-width: none;
   }
 
   /* Keep breadcrumb links easy to tap without changing the compact visual
