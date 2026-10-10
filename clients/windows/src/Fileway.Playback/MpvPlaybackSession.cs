@@ -1,0 +1,383 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Net;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Threading.Channels;
+using Fileway.Core.Contracts;
+using Fileway.Core.Integration;
+using Fileway.Playback.Contracts;
+using Fileway.Playback.Native;
+
+namespace Fileway.Playback;
+
+internal sealed class MpvPlaybackSession : IPlaybackSession
+{
+    private static readonly TimeSpan NativeDeadline = TimeSpan.FromSeconds(10);
+    private readonly object _gate = new();
+    private readonly PlaybackOpenRequest _request;
+    private readonly MpvNative _native;
+    private readonly IResourceLeaseProvider _leases;
+    private readonly IPlaybackSurfaceFactory _surfaces;
+    private readonly Action<Guid> _released;
+    private readonly List<IResourceLease> _ownedLeases = [];
+    private readonly List<Channel<PlaybackSnapshot>> _watchers = [];
+    private readonly Channel<PlaybackCommand> _commands = Channel.CreateBounded<PlaybackCommand>(64);
+    private readonly ConcurrentDictionary<ulong, TaskCompletionSource> _replies = new();
+    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly CancellationTokenSource _pumpStop = new();
+    private readonly Task _commandPump;
+    private PlaybackSnapshot _snapshot;
+    private IPlaybackSurface? _surface;
+    private Task? _start, _stop, _events;
+    private nint _handle;
+    private long _nextCommand;
+    private bool _closing, _paused, _seeking, _buffering, _usable, _ended;
+
+    private sealed record PlaybackCommand(string[][] Arguments, TaskCompletionSource Completion, CancellationToken Cancellation);
+
+    internal MpvPlaybackSession(PlaybackOpenRequest request, long generation, MpvNative native, IResourceLeaseProvider leases,
+        IPlaybackSurfaceFactory surfaces, Action<Guid> released)
+    {
+        _request = request;
+        _native = native;
+        _leases = leases;
+        _surfaces = surfaces;
+        _released = released;
+        string displayName = request.Input switch { RemotePlaybackInput remote => remote.Resource.DisplayName, LocalPlaybackInput local => local.DisplayName, _ => "媒体" };
+        _snapshot = new PlaybackSnapshot(Id, generation, displayName, PlaybackStatus.Preparing, TimeSpan.Zero, null, null, false,
+            Array.Empty<MediaTrack>(), new SubtitleCapabilities(true, true, true, true, true), new PlaybackDiagnostics());
+        _commandPump = Task.Run(CommandPumpAsync);
+    }
+
+    public Guid Id { get; } = Guid.NewGuid();
+    internal AccountKey? Account => _request.Input switch { RemotePlaybackInput remote => remote.Resource.Account, LocalPlaybackInput local => local.Origin?.Account, _ => null };
+    public PlaybackSnapshot Snapshot { get { lock (_gate) return _snapshot; } }
+
+    internal async Task StartAsync(CancellationToken cancellationToken)
+    {
+        Task start;
+        lock (_gate) { _start ??= StartCoreAsync(cancellationToken); start = _start; }
+        await start.ConfigureAwait(false);
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            string source = await SourceAsync(_request.Input, cancellationToken).ConfigureAwait(false);
+            _surface = await _surfaces.CreateAsync(this, cancellationToken).ConfigureAwait(false);
+            if (_surface.ParentHwnd == 0) throw MpvNative.Error(ErrorCode.CapabilityMissing, "播放器视频容器尚未就绪。");
+            await Task.Run(() =>
+            {
+                _handle = _native.Create();
+                if (_handle == 0) throw MpvNative.Error(ErrorCode.CapabilityMissing, "无法创建播放器引擎。");
+                foreach (var option in new (string Name, string Value)[]
+                {
+                    ("config", "no"), ("terminal", "no"), ("msg-level", "all=no"), ("load-scripts", "no"),
+                    ("scripts", ""), ("ytdl", "no"), ("osc", "no"), ("load-stats-overlay", "no"),
+                    ("input-default-bindings", "no"), ("input-builtin-bindings", "no"), ("input-vo-keyboard", "no"),
+                    ("input-cursor", "no"), ("access-references", "no"), ("autoload-files", "no"),
+                    ("load-unsafe-playlists", "no"), ("idle", "yes"), ("keep-open", "yes"),
+                    ("vo", "gpu-next"), ("gpu-context", "d3d11"), ("d3d11-output-mode", "window"),
+                    ("hwdec", "auto-safe"), ("audio-client-name", "Fileway"), ("network-timeout", "15"),
+                    ("wid", _surface.ParentHwnd.ToInt64().ToString(CultureInfo.InvariantCulture)),
+                }) _native.Option(_handle, option.Name, option.Value);
+                if (_request.ResumePosition is { } resume && resume > TimeSpan.Zero)
+                    _native.Option(_handle, "start", resume.TotalSeconds.ToString("R", CultureInfo.InvariantCulture));
+                _native.Initialize(_handle);
+                ulong observer = 0;
+                foreach (var property in new (string Name, int Format)[]
+                {
+                    ("time-pos", 5), ("duration", 5), ("pause", 3), ("seeking", 3), ("paused-for-cache", 3),
+                    ("eof-reached", 3), ("seekable", 3), ("track-list", 6), ("video-format", 1),
+                    ("audio-codec-name", 1), ("hwdec-current", 1), ("current-gpu-context", 1), ("video-params/gamma", 1),
+                }) _native.Observe(_handle, ++observer, property.Name, property.Format);
+            }, cancellationToken).ConfigureAwait(false);
+            _events = Task.Factory.StartNew(EventPump, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            _ready.TrySetResult();
+            await QueueAsync([["loadfile", source, "replace"]], cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            _ready.TrySetException(MpvNative.Error(ErrorCode.Unknown, "播放器初始化失败。"));
+            Publish(snapshot => snapshot with { Status = PlaybackStatus.Failed, Error = error is FilewayException fileway ? fileway.Error : new ErrorInfo(ErrorCode.Unknown, "播放器初始化失败。") });
+            throw;
+        }
+    }
+
+    private async Task<string> SourceAsync(PlaybackInput input, CancellationToken cancellationToken)
+    {
+        if (input is LocalPlaybackInput local)
+        {
+            if (!Path.IsPathFullyQualified(local.FullPath) || local.FullPath.StartsWith(@"\\", StringComparison.Ordinal) || !File.Exists(local.FullPath))
+                throw MpvNative.Error(ErrorCode.InvalidRequest, "本地媒体文件不可用。");
+            return Path.GetFullPath(local.FullPath);
+        }
+        if (input is not RemotePlaybackInput remote) throw MpvNative.Error(ErrorCode.InvalidRequest, "媒体输入类型不受支持。");
+        var lease = await _leases.AcquireAsync(remote.Resource, cancellationToken).ConfigureAwait(false);
+        Uri address = lease.Address;
+        if (address.Scheme != Uri.UriSchemeHttp || !IPAddress.TryParse(address.Host, out var ip) || !IPAddress.IsLoopback(ip) ||
+            !string.IsNullOrEmpty(address.UserInfo) || !string.IsNullOrEmpty(address.Fragment))
+        {
+            await lease.DisposeAsync().ConfigureAwait(false);
+            throw MpvNative.Error(ErrorCode.InvalidRequest, "媒体资源能力地址无效。");
+        }
+        bool closing;
+        lock (_gate) { closing = _closing; if (!closing) _ownedLeases.Add(lease); }
+        if (closing)
+        {
+            await lease.DisposeAsync().ConfigureAwait(false);
+            throw MpvNative.Error(ErrorCode.Canceled, "播放会话已关闭。");
+        }
+        return address.AbsoluteUri;
+    }
+
+    private Task QueueAsync(string[][] arguments, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            if (_closing) throw MpvNative.Error(ErrorCode.Canceled, "播放会话已关闭。");
+            if (!_commands.Writer.TryWrite(new PlaybackCommand(arguments, completion, cancellationToken)))
+                throw MpvNative.Error(ErrorCode.Busy, "播放器命令队列已满。");
+        }
+        return completion.Task;
+    }
+
+    private async Task CommandPumpAsync()
+    {
+        try
+        {
+            await _ready.Task.ConfigureAwait(false);
+            await foreach (var command in _commands.Reader.ReadAllAsync().ConfigureAwait(false))
+            {
+                try
+                {
+                    lock (_gate) if (_closing) throw MpvNative.Error(ErrorCode.Canceled, "播放会话已关闭。");
+                    command.Cancellation.ThrowIfCancellationRequested();
+                    if (command.Arguments[0][0] == "seek")
+                    {
+                        lock (_gate) { _seeking = true; _ended = false; }
+                        Publish(snapshot => snapshot with { Status = PlaybackStatus.Seeking });
+                    }
+                    foreach (string[] arguments in command.Arguments)
+                        await NativeCommandAsync(arguments, command.Cancellation).ConfigureAwait(false);
+                    command.Completion.TrySetResult();
+                }
+                catch (Exception error)
+                {
+                    command.Completion.TrySetException(error is FilewayException or OperationCanceledException ? error : MpvNative.Error(ErrorCode.Unknown, "播放器命令失败。"));
+                }
+            }
+        }
+        catch (Exception)
+        {
+            while (_commands.Reader.TryRead(out var command)) command.Completion.TrySetException(MpvNative.Error(ErrorCode.Canceled, "播放会话已关闭。"));
+        }
+    }
+
+    private async Task NativeCommandAsync(string[] arguments, CancellationToken cancellationToken)
+    {
+        ulong id = unchecked((ulong)Interlocked.Increment(ref _nextCommand));
+        var reply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_replies.TryAdd(id, reply)) throw MpvNative.Error(ErrorCode.Unknown, "播放器命令标识冲突。");
+        try
+        {
+            _native.Command(_handle, id, arguments);
+            await reply.Task.WaitAsync(NativeDeadline, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _replies.TryRemove(id, out _); }
+    }
+
+    private void EventPump()
+    {
+        try
+        {
+            while (!_pumpStop.IsCancellationRequested)
+            {
+                var item = _native.Wait(_handle);
+                if (item.Id == 5 && _replies.TryRemove(item.User, out var reply))
+                {
+                    if (item.Error < 0) reply.TrySetException(MpvNative.Error(ErrorCode.Unknown, $"播放器原生命令失败（{item.Error}）。"));
+                    else reply.TrySetResult();
+                }
+                lock (_gate) if (_closing) continue;
+                if (item.Property is { } property) PropertyChanged(property);
+                else if (item.Id == 21)
+                {
+                    _usable = true;
+                    _seeking = false;
+                    Publish(snapshot => snapshot with { Status = CurrentStatus(), ConfirmedPosition = snapshot.Position });
+                }
+                else if (item.Id == 20)
+                {
+                    _seeking = true;
+                    Publish(snapshot => snapshot with { Status = PlaybackStatus.Seeking });
+                }
+                else if (item.Id == 7)
+                {
+                    _ended = true;
+                    Publish(snapshot => snapshot with { Status = item.EndReason == 4 ? PlaybackStatus.Failed : PlaybackStatus.Ended,
+                        Error = item.EndReason == 4 ? new ErrorInfo(ErrorCode.Unknown, "媒体读取或解码失败。") : null });
+                }
+                else if (item.Id == 24) Publish(snapshot => snapshot with { Status = PlaybackStatus.Failed, Error = new ErrorInfo(ErrorCode.Unknown, "播放器事件队列溢出。") });
+            }
+        }
+        catch (Exception) { Publish(snapshot => snapshot with { Status = PlaybackStatus.Failed, Error = new ErrorInfo(ErrorCode.Unknown, "播放器事件处理失败。") }); }
+    }
+
+    private PlaybackStatus CurrentStatus() => _seeking ? PlaybackStatus.Seeking : _ended ? PlaybackStatus.Ended :
+        _buffering || !_usable ? PlaybackStatus.Buffering : _paused ? PlaybackStatus.Paused : PlaybackStatus.Playing;
+
+    private void PropertyChanged(MpvProperty property)
+    {
+        switch (property.Name)
+        {
+            case "time-pos" when property.Value is double position && double.IsFinite(position) && position >= 0:
+                Publish(snapshot => snapshot with { Position = TimeSpan.FromSeconds(position), ConfirmedPosition = _usable && !_seeking ? TimeSpan.FromSeconds(position) : snapshot.ConfirmedPosition });
+                break;
+            case "duration" when property.Value is double duration && double.IsFinite(duration) && duration >= 0:
+                Publish(snapshot => snapshot with { Duration = TimeSpan.FromSeconds(duration) }); break;
+            case "pause" when property.Value is bool paused: _paused = paused; Publish(snapshot => snapshot with { Status = CurrentStatus() }); break;
+            case "seeking" when property.Value is bool seeking: _seeking = seeking; Publish(snapshot => snapshot with { Status = CurrentStatus() }); break;
+            case "paused-for-cache" when property.Value is bool buffering: _buffering = buffering; Publish(snapshot => snapshot with { Status = CurrentStatus() }); break;
+            case "eof-reached" when property.Value is bool ended: _ended = ended; Publish(snapshot => snapshot with { Status = CurrentStatus() }); break;
+            case "seekable" when property.Value is bool seekable: Publish(snapshot => snapshot with { Seekable = seekable }); break;
+            case "track-list" when property.Value is JsonElement tracks: UpdateTracks(tracks); break;
+            case "video-format" when property.Value is string video: Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { VideoCodec = video } }); break;
+            case "audio-codec-name" when property.Value is string audio: Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { AudioCodec = audio } }); break;
+            case "hwdec-current" when property.Value is string decoder: Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { Decoder = decoder } }); break;
+            case "current-gpu-context" when property.Value is string context: Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { ActualOutputMode = context == "d3d11" ? "d3d11-hwnd" : context } }); break;
+            case "video-params/gamma" when property.Value is string gamma:
+                Publish(snapshot => snapshot with { Diagnostics = snapshot.Diagnostics with { SourceDynamicRange = gamma is "pq" or "hlg" ? gamma : "SDR" } }); break;
+        }
+    }
+
+    private void UpdateTracks(JsonElement tracks)
+    {
+        if (tracks.ValueKind != JsonValueKind.Array) return;
+        var parsed = new List<MediaTrack>();
+        foreach (var track in tracks.EnumerateArray())
+        {
+            if (!track.TryGetProperty("id", out var id) || !track.TryGetProperty("type", out var type)) continue;
+            MediaTrackKind? kind = type.GetString() switch { "video" => MediaTrackKind.Video, "audio" => MediaTrackKind.Audio, "sub" => MediaTrackKind.Subtitle, _ => null };
+            if (kind is null) continue;
+            string? Text(string name) => track.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+            bool Flag(string name) => track.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True;
+            parsed.Add(new MediaTrack(id.GetInt64(), kind.Value, Text("title"), Text("lang"), Text("codec"), Flag("selected"), Flag("external")));
+        }
+        bool bitmap = parsed.Any(track => track.Kind == MediaTrackKind.Subtitle && track.Selected && track.Codec is "hdmv_pgs_subtitle" or "dvd_subtitle");
+        Publish(snapshot => snapshot with { Tracks = parsed.AsReadOnly(), SubtitleCapabilities = new SubtitleCapabilities(!bitmap, true, true, true, true) });
+    }
+
+    private void Publish(Func<PlaybackSnapshot, PlaybackSnapshot> change, bool terminal = false)
+    {
+        lock (_gate)
+        {
+            if (_closing && !terminal) return;
+            _snapshot = change(_snapshot);
+            foreach (var watcher in _watchers) watcher.Writer.TryWrite(_snapshot);
+        }
+    }
+
+    public async IAsyncEnumerable<PlaybackSnapshot> WatchAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var channel = Channel.CreateBounded<PlaybackSnapshot>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+        lock (_gate) { _watchers.Add(channel); channel.Writer.TryWrite(_snapshot); if (_stop?.IsCompletedSuccessfully == true) channel.Writer.TryComplete(); }
+        try { await foreach (var snapshot in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)) yield return snapshot; }
+        finally { lock (_gate) _watchers.Remove(channel); }
+    }
+
+    public Task SetPausedAsync(bool paused, CancellationToken cancellationToken) => QueueAsync([["set", "pause", paused ? "yes" : "no"]], cancellationToken);
+    public Task SetVolumeAsync(double volume, CancellationToken cancellationToken)
+    {
+        if (!double.IsFinite(volume) || volume is < 0 or > 100) throw MpvNative.Error(ErrorCode.InvalidRequest, "音量必须为 0 到 100。");
+        return QueueAsync([["set", "volume", volume.ToString("R", CultureInfo.InvariantCulture)]], cancellationToken);
+    }
+    public Task SeekAsync(TimeSpan position, CancellationToken cancellationToken)
+    {
+        if (position < TimeSpan.Zero) throw MpvNative.Error(ErrorCode.InvalidRequest, "播放位置不能为负数。");
+        return QueueAsync([["seek", position.TotalSeconds.ToString("R", CultureInfo.InvariantCulture), "absolute+exact"]], cancellationToken);
+    }
+    public Task SelectTrackAsync(MediaTrackKind kind, long? trackId, CancellationToken cancellationToken)
+    {
+        if (trackId is <= 0) throw MpvNative.Error(ErrorCode.InvalidRequest, "媒体轨道标识无效。");
+        string name = kind switch { MediaTrackKind.Video => "vid", MediaTrackKind.Audio => "aid", MediaTrackKind.Subtitle => "sid", _ => throw MpvNative.Error(ErrorCode.InvalidRequest, "媒体轨道类型无效。") };
+        return QueueAsync([["set", name, trackId?.ToString(CultureInfo.InvariantCulture) ?? "no"]], cancellationToken);
+    }
+    public Task SetSubtitlesAsync(SubtitlePreferences preferences, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        if (!double.IsFinite(preferences.Scale) || preferences.Scale is < 0.1 or > 10 || !double.IsFinite(preferences.VerticalPositionPercent) || preferences.VerticalPositionPercent is < 0 or > 100)
+            throw MpvNative.Error(ErrorCode.InvalidRequest, "字幕显示参数无效。");
+        List<string[]> commands = [["set", "sub-scale", preferences.Scale.ToString("R", CultureInfo.InvariantCulture)],
+            ["set", "sub-pos", preferences.VerticalPositionPercent.ToString("R", CultureInfo.InvariantCulture)],
+            ["set", "sub-delay", preferences.Delay.TotalSeconds.ToString("R", CultureInfo.InvariantCulture)],
+            ["set", "sub-ass-override", preferences.OverrideScriptStyle ? "force" : "no"]];
+        if (!string.IsNullOrWhiteSpace(preferences.FontFamily)) commands.Add(["set", "sub-font", preferences.FontFamily]);
+        return QueueAsync(commands.ToArray(), cancellationToken);
+    }
+    public async Task AddSubtitleAsync(PlaybackInput subtitle, CancellationToken cancellationToken)
+    {
+        if (subtitle is RemotePlaybackInput remote && remote.Resource.Account != Account)
+            throw MpvNative.Error(ErrorCode.InvalidRequest, "字幕必须属于当前播放账户。");
+        string source = await SourceAsync(subtitle, cancellationToken).ConfigureAwait(false);
+        await QueueAsync([["sub-add", source, "select"]], cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        Task stop;
+        lock (_gate)
+        {
+            if (_stop is null)
+            {
+                _closing = true;
+                _commands.Writer.TryComplete();
+                Publish(snapshot => snapshot with { Status = PlaybackStatus.Closing }, terminal: true);
+                _stop = Task.Run(StopCoreAsync, CancellationToken.None);
+            }
+            stop = _stop;
+        }
+        return stop.WaitAsync(cancellationToken);
+    }
+
+    private async Task StopCoreAsync()
+    {
+        try
+        {
+            if (_start is not null) { try { await _start.ConfigureAwait(false); } catch (Exception) { } }
+            if (_surface is not null) await _surface.DetachAsync(CancellationToken.None).AsTask().WaitAsync(NativeDeadline).ConfigureAwait(false);
+            if (_handle != 0 && _ready.Task.IsCompletedSuccessfully)
+            {
+                try { await NativeCommandAsync(["stop"], CancellationToken.None).ConfigureAwait(false); }
+                catch (FilewayException) { /* Destroy still waits for all native reads to stop. */ }
+            }
+            _pumpStop.Cancel();
+            if (_handle != 0) _native.Wake(_handle);
+            foreach (var reply in _replies.Values) reply.TrySetException(MpvNative.Error(ErrorCode.Canceled, "播放会话已关闭。"));
+            if (_events is not null) await _events.WaitAsync(NativeDeadline).ConfigureAwait(false);
+            await _commandPump.WaitAsync(NativeDeadline).ConfigureAwait(false);
+            if (_handle != 0)
+            {
+                await Task.Run(() => _native.Destroy(_handle), CancellationToken.None).WaitAsync(NativeDeadline).ConfigureAwait(false);
+                _handle = 0;
+            }
+            foreach (var lease in _ownedLeases) await lease.DisposeAsync().ConfigureAwait(false);
+            _ownedLeases.Clear();
+            if (_surface is not null) await _surface.DisposeAsync().ConfigureAwait(false);
+            Publish(snapshot => snapshot with { Status = PlaybackStatus.Stopped }, terminal: true);
+            lock (_gate) foreach (var watcher in _watchers) watcher.Writer.TryComplete();
+            _released(Id);
+        }
+        catch (Exception)
+        {
+            Publish(snapshot => snapshot with { Status = PlaybackStatus.Failed, Error = new ErrorInfo(ErrorCode.Timeout, "播放器关闭未完成；原生资源保留待恢复。") }, terminal: true);
+            throw MpvNative.Error(ErrorCode.Timeout, "播放器关闭未完成；原生资源保留待恢复。");
+        }
+    }
+
+    public ValueTask DisposeAsync() => new(StopAsync(CancellationToken.None));
+}
