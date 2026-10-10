@@ -393,13 +393,28 @@ func TestConfirmedSuccessSurvivesCancelAndExternalIdentityReuse(t *testing.T) {
 	peer := startPeer(t, core, 200*time.Millisecond)
 	initPeer(t, peer)
 	peer.send(t, request("reused", "request", "account", requestParameters()))
-	first := <-core.started
+	var first, second struct{ ID, Session string }
+	select {
+	case first = <-core.started:
+	case <-time.After(time.Second):
+		t.Fatal("first accepted request did not reach core")
+	}
 	peer.send(t, request("cancel", "cancel", "", map[string]json.RawMessage{"targetRequestId": json.RawMessage(`"reused"`)}))
 	if !peer.response(t, "cancel").OK || !peer.response(t, "reused").OK {
 		t.Fatal("confirmed core success was replaced by cancellation")
 	}
+	// The peer can observe the frame before the writer retires its owner.
+	waitCondition(t, func() bool {
+		peer.server.mu.Lock()
+		defer peer.server.mu.Unlock()
+		return peer.server.requests["reused"] == nil
+	})
 	peer.send(t, request("reused", "request", "account", requestParameters()))
-	second := <-core.started
+	select {
+	case second = <-core.started:
+	case <-time.After(time.Second):
+		t.Fatal("reused accepted request did not reach core")
+	}
 	if first.ID == second.ID {
 		t.Fatal("external identity reuse reused a core tombstone ID")
 	}
@@ -554,7 +569,8 @@ func TestResponseByteBackpressureTerminatesWithStdinOpen(t *testing.T) {
 	})
 	input, parentInput := io.Pipe()
 	output := &blockedOutput{closed: make(chan struct{}), start: make(chan struct{})}
-	server := NewServer(core, BuildManifest("test", "", 150*time.Millisecond))
+	const shutdownTimeout = 150 * time.Millisecond
+	server := NewServer(core, BuildManifest("test", "", shutdownTimeout))
 	server.initialized = true
 	done := make(chan error, 1)
 	go func() { done <- server.Run(input, output, io.Discard) }()
@@ -563,9 +579,15 @@ func TestResponseByteBackpressureTerminatesWithStdinOpen(t *testing.T) {
 	for i := range 4 {
 		peer.send(t, request(fmt.Sprintf("large-%d", i), "open", "", nil))
 	}
+	// Large JSON validation/encoding under -race precedes the shutdown deadline.
+	select {
+	case <-server.stop:
+	case <-time.After(10 * time.Second):
+		t.Fatal("bounded response byte budget did not trigger backpressure")
+	}
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(shutdownTimeout + 500*time.Millisecond):
 		t.Fatal("bounded response byte budget did not terminate backpressure")
 	}
 	server.outputMu.Lock()
