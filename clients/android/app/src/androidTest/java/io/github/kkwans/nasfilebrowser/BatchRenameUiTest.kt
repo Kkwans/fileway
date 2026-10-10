@@ -31,11 +31,12 @@ internal class BatchRenameUiTest : LibraryUiHarness() {
         }
     }
     private fun click(label: String) {
-        var button = text(label)
-        while (!button.isClickable) button = button.parent ?: error("Missing action for $label")
-        assertTrue(button.isEnabled)
-        assertTrue("$label must retain a 48dp touch target", button.visibleBounds.height() + 1 >= 48 * instrumentation.targetContext.resources.displayMetrics.density)
-        button.click()
+        val button = enabledTextAction(label)
+        try {
+            assertTrue(button.isEnabled)
+            assertTrue("$label must retain a 48dp touch target", button.visibleBounds.height() + 1 >= 48 * instrumentation.targetContext.resources.displayMetrics.density)
+            button.click()
+        } finally { button.recycle() }
     }
     @Test fun nativePreviewRetainsRejectedInputAndUnknownExecutionOnlyAllowsVerification(): Unit = runBlocking {
         val authority = BatchRenameAuthority(); val context = authority.context("one")

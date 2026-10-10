@@ -1,5 +1,6 @@
 package io.github.kkwans.nasfilebrowser
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -21,6 +22,60 @@ internal open class LibraryUiHarness {
     protected suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
     protected fun text(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.text(label)), 5000) ?: missing(label) }
     protected fun action(label: String): UiObject2 { device.waitForIdle(); return device.wait(Until.findObject(By.desc(label)), 5000) ?: missing(label) }
+    /** Opt-in readiness query; a caller performs exactly one click after this
+     * returns. Never retry a gesture whose write outcome could be unknown.
+     * onPending is a test-only observation seam for controlled state changes.
+     */
+    protected fun enabledTextAction(label: String, onPending: (() -> Unit)? = null): UiObject2 {
+        val timeout = 5_000L
+        val deadline = SystemClock.uptimeMillis() + timeout
+        val configuration = Configurator.getInstance()
+        val previousIdle = configuration.getWaitForIdleTimeout()
+        var last = "label-not-found"
+        val ready = try {
+            // Pinned 2.3.0 findObject and every UiObject2 attribute/parent read
+            // implicitly waitForIdle (default 10s). Disable only that nested
+            // wait inside this serial query, restoring the exact original value.
+            configuration.setWaitForIdleTimeout(0L)
+            device.wait(Condition<UiDevice, UiObject2?> { currentDevice ->
+                if (SystemClock.uptimeMillis() >= deadline) return@Condition null
+                var node: UiObject2? = null
+                var returned = false
+                try {
+                    node = currentDevice.findObject(By.text(label))
+                    var depth = 0
+                    while (depth++ < 32 && SystemClock.uptimeMillis() < deadline) {
+                        val current = node ?: break
+                        val clickable = current.isClickable
+                        val enabled = current.isEnabled
+                        // Never pass a disabled button (even if the platform
+                        // omits its clickable flag) to reach an enabled wrapper.
+                        if (!enabled) { last = "enabled=false,clickable=$clickable"; break }
+                        if (clickable) {
+                            val bounds = current.visibleBounds
+                            last = "enabled=true,clickable=true,size=${bounds.width()}x${bounds.height()}"
+                            if (bounds.width() > 0 && bounds.height() > 0 && SystemClock.uptimeMillis() < deadline) {
+                                returned = true
+                                return@Condition current
+                            }
+                            break
+                        }
+                        node = current.parent
+                        current.recycle()
+                        last = "clickable-owner-not-found"
+                    }
+                } catch (_: StaleObjectException) {
+                    last = "stale-query-node"
+                } finally {
+                    if (!returned) node?.recycle()
+                }
+                onPending?.invoke()
+                null
+            }, (deadline - SystemClock.uptimeMillis()).coerceAtLeast(0))
+        } finally { configuration.setWaitForIdleTimeout(previousIdle) }
+        // A polling budget, not a hard preemption of platform Binder calls.
+        return ready ?: missing("$label (enabled clickable owner within ${timeout}ms; $last)")
+    }
     protected fun fileDetails(name: String) {
         var target = text(name)
         while (!target.isLongClickable) target = target.parent ?: missing("长按文件卡片 $name")

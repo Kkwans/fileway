@@ -25,9 +25,9 @@ internal class DirectoryCreationUiTest : LibraryUiHarness() {
         @Suppress("UNREACHABLE_CODE") error("Keyboard window missing")
     }
     private fun clickText(label: String) {
-        var button = text(label)
-        while (!button.isClickable) button = button.parent ?: error("Missing clickable owner for $label")
-        assertTrue(button.isEnabled); button.click()
+        val button = enabledTextAction(label)
+        try { assertTrue(button.isEnabled); button.click() }
+        finally { button.recycle() }
     }
     private fun input() = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000) ?: error("Missing directory input")
     private suspend fun start() {

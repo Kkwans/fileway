@@ -15,9 +15,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 internal class FileRenameUiTest : LibraryUiHarness() {
     private fun clickText(label: String) {
-        var target = text(label)
-        while (!target.isClickable) target = target.parent ?: error("Missing clickable owner for $label")
-        assertTrue(target.isEnabled); target.click()
+        val target = enabledTextAction(label)
+        try { assertTrue(target.isEnabled); target.click() }
+        finally { target.recycle() }
     }
     @Test fun rejectedNameIsRetainedConflictDoesNotOverwriteAndSuccessRefreshesSharedMetadata(): Unit = runBlocking {
         val data = LibraryFixtureData().apply { renameAllowed = true; liveDirectoryListing = true; rejectNextRename = true }
