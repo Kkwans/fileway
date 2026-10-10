@@ -179,8 +179,13 @@ internal class DownloadIndex private constructor(private val context: Context) {
                 return http.open(spec.buildUpon().setUri(access!!.url).build())
             } catch (failure: io.github.kkwans.nasfilebrowser.core.TransportException) {
                 throw DownloadPendingException(failure)
+            } catch (failure: io.github.kkwans.nasfilebrowser.data.ServiceException) {
+                if (failure.status == 408 || failure.status == 429 || failure.status in 500..599)
+                    throw DownloadPendingException(failure)
+                throw failure
             } catch (failure: HttpDataSource.HttpDataSourceException) {
-                if (failure is HttpDataSource.InvalidResponseCodeException && failure.responseCode in 400..499) throw failure
+                if (failure is HttpDataSource.InvalidResponseCodeException && failure.responseCode in 400..499 &&
+                    failure.responseCode != 408 && failure.responseCode != 429) throw failure
                 throw DownloadPendingException(failure)
             }
         }

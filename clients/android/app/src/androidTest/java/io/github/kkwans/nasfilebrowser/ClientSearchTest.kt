@@ -174,7 +174,8 @@ class ClientSearchTest {
 
     internal class Fixture(private val directoryItems: List<String> = emptyList(), private val previewBody: ByteArray? = null,
         private val modified: String = "", private val imageBodies: Map<String, ByteArray> = emptyMap(), val library: LibraryFixtureData? = null,
-        private val previewStatusCodes: Map<String, Int> = emptyMap(), private val rawStatusCodes: Map<String, Int> = emptyMap()) : Closeable {
+        private val previewStatusCodes: Map<String, Int> = emptyMap(), private val rawStatusCodes: Map<String, Int> = emptyMap(),
+        private val responseOverride: ((String, URI, String) -> Pair<String, Int>?)? = null) : Closeable {
         private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
         private val sockets = ConcurrentHashMap.newKeySet<Socket>()
         val url = "http://127.0.0.1:${server.localPort}"
@@ -231,6 +232,10 @@ class ClientSearchTest {
                 return
             }
             check(headers["x-auth"].orEmpty().count { it == '.' } == 2)
+            responseOverride?.invoke(request.substringBefore(' '), uri, String(body))?.let { (value, status) ->
+                reply(socket, value, status = status)
+                return
+            }
             if (library?.route(request.substringBefore(' '), uri, String(body), favoriteRecords) { value, status ->
                     val bytes = value.toByteArray()
                     socket.getOutputStream().apply { write("HTTP/1.1 $status OK\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
@@ -335,9 +340,10 @@ class ClientSearchTest {
                 reply(socket, JSONObject().put("items", items).toString())
             }
         }
-        private fun reply(socket: Socket, body: String, type: String = "application/json") {
+        private fun reply(socket: Socket, body: String, type: String = "application/json", status: Int = 200) {
             val bytes = body.toByteArray()
-            socket.getOutputStream().apply { write("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
+            val responseStatus = if (status == 200) "200 OK" else "$status Fixture"
+            socket.getOutputStream().apply { write("HTTP/1.1 $responseStatus\r\nContent-Type: $type\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(bytes); flush() }
         }
         override fun close() { releaseImage.countDown(); releaseMetadata.countDown(); releasePlayback.countDown(); server.close(); sockets.forEach { runCatching { it.close() } }; acceptor.join(1000) }
     }
