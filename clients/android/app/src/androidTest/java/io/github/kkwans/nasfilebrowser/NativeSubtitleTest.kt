@@ -66,7 +66,7 @@ class NativeSubtitleTest {
             component(Color.green(pixel), rgb[1]) && component(Color.blue(pixel), rgb[2])
     }
     private fun count(pixels: IntArray, rgb: List<Int>) = pixels.count { matches(it, rgb) }
-    private fun composedPixels(): IntArray? {
+    private fun composedPixels(native: IntArray): IntArray? {
         var bounds: Rect? = null
         activity.scenario.onActivity { owner ->
             fun find(view: View) {
@@ -79,10 +79,12 @@ class NativeSubtitleTest {
             find(owner.window.decorView)
         }
         val rect = bounds ?: return null
-        // The permanent throughput label is UI, not subtitle pixels. Exclude only
-        // its live accessibility bounds from compositor checks; pixels() still
-        // inspects every pixel of both actual subtitle layers without a mask.
-        val speedBounds = device.findObject(By.desc("实际网络下载速度"))?.visibleBounds
+        // Ignore HUD pixels only where the independently drawn subtitle layers
+        // are transparent. Never erase a real glyph inside a control's rectangle:
+        // the animation fixture's moving I starts beneath the left touch lock.
+        // pixels() still inspects every native subtitle pixel without a mask.
+        val hudBounds = listOf("实际网络下载速度", "锁定触控", "解除触控锁定")
+            .mapNotNull { label -> device.findObject(By.desc(label))?.visibleBounds }
         val captured = instrumentation.uiAutomation.takeScreenshot() ?: return null
         val screenshot = if (captured.config == Bitmap.Config.HARDWARE) {
             try { captured.copy(Bitmap.Config.ARGB_8888, false) ?: return null }
@@ -93,7 +95,8 @@ class NativeSubtitleTest {
             return IntArray(320 * 180) { index ->
                 val x = rect.left + ((index % 320 + .5) * rect.width() / 320).toInt()
                 val y = rect.top + ((index / 320 + .5) * rect.height() / 180).toInt()
-                if (speedBounds?.contains(x, y) == true) Color.BLACK else screenshot.getPixel(x, y)
+                if (Color.alpha(native[index]) <= 20 && hudBounds.any { it.contains(x, y) }) Color.BLACK
+                else screenshot.getPixel(x, y)
             }
         } finally { screenshot.recycle() }
     }
@@ -107,7 +110,7 @@ class NativeSubtitleTest {
             // content in the system compositor, including video blending.
             val nativeMatches = frame != null && (nativeCheck ?: check)(frame)
             if (nativeMatches || diagnostic) {
-                val composed = composedPixels()
+                val composed = frame?.let(::composedPixels)
                 if (diagnostic && attempts++ % 5 == 0) {
                     fun roi(values: IntArray?): String {
                         if (values == null) return "missing"
@@ -131,6 +134,13 @@ class NativeSubtitleTest {
 
     private var checking = "native start"
     private suspend fun onMain(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
+
+    private suspend fun pauseAtLivePosition(model: ClientModel, positionMs: Long) = withContext(Dispatchers.Main.immediate) {
+        // Pause at the clock update before any compositor/ADB screenshot can
+        // consume the next authored interval. No seek substitutes for playback.
+        model.player.state.first { it.playing && it.positionMs >= positionMs }
+        model.player.pause()
+    }
 
     /** Every gate owns its fixture/session, so ASS failure cannot hide PGS results. */
     private suspend fun withFixture(label: String, asset: String = "subtitle-fixture.mkv",
@@ -379,17 +389,22 @@ class NativeSubtitleTest {
             capture("animation-red")
             onMain { model.player.toggle() }
             checking = "ASS same-bounds blue transform"
-            rendered(checking) { count(it, listOf(0, 0, 255)) > 300 && count(it, listOf(255, 0, 0)) < 30 }
+            withTimeout(10_000) {
+                pauseAtLivePosition(model, 3000)
+                rendered(checking) { count(it, listOf(0, 0, 255)) > 300 && count(it, listOf(255, 0, 0)) < 30 }
+            }
             capture("animation-blue")
-            withTimeout(6000) { model.player.state.first { it.positionMs >= 4800 } }
+            onMain { model.player.toggle() }
             checking = "ASS attached-glyph motion"
+            withTimeout(6000) { pauseAtLivePosition(model, 4800) }
             val moved = rendered(checking) { count(it, listOf(255, 255, 0)) > 80 }
             assertTrue("The glyph must move rather than retain an old cached position", yellowCenter(moved) - firstX > 40)
             val occupied = (0 until 320).map { x -> (0 until 180).count { y -> matches(moved[y * 320 + x], listOf(255, 255, 0)) } > 3 }
             assertEquals("The attached I retains both bars during motion", 2, occupied.indices.count { occupied[it] && (it == 0 || !occupied[it - 1]) })
             capture("animation-moved")
-            withTimeout(6500) { model.player.state.first { it.positionMs >= 9900 } }
+            onMain { model.player.toggle() }
             checking = "ASS visible fade-out"
+            withTimeout(6500) { pauseAtLivePosition(model, 9900) }
             holdLiveFadeForCapture(model)
             fadedPixels()
             capture("animation-faded")
