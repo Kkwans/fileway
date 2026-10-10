@@ -179,15 +179,19 @@ class PlayerGestureControlsTest {
             // Compose maps Selected on non-Tab roles to Android's checked state.
             assertTrue("$label must expose a checkable lock state", button(label).isCheckable)
             assertEquals("$label must expose its lock state", selected, button(label).isChecked)
+            assertEquals("Only one touch-lock control may be exposed", 1, device.findObjects(By.desc(label)).size)
+            assertFalse(device.hasObject(By.desc(if (selected) "锁定触控" else "解除触控锁定")))
+            assertFalse(device.hasObject(By.desc("锁定屏幕方向")))
+            assertFalse(device.hasObject(By.desc("解除方向锁定")))
         }
         val minimumTarget = (48 * instrumentation.targetContext.resources.displayMetrics.density).toInt() - 2
-        fun assertSideLock(label: String, pictureBounds: Rect, left: Boolean): Rect {
+        fun assertLeftLock(label: String, pictureBounds: Rect): Rect {
             val bounds = button(label).visibleBounds
             assertTrue("$label needs a 48dp touch target: $bounds", bounds.width() >= minimumTarget && bounds.height() >= minimumTarget)
             assertTrue("$label must stay inside the picture: $bounds / $pictureBounds", pictureBounds.contains(bounds))
-            assertTrue("$label must align with the picture's vertical centre", kotlin.math.abs(bounds.centerY() - pictureBounds.centerY()) <= 2)
-            assertTrue("$label must be on its own side of the picture", if (left)
-                bounds.centerX() < pictureBounds.left + pictureBounds.width() / 4 else bounds.centerX() > pictureBounds.right - pictureBounds.width() / 4)
+            assertTrue("$label must stay in the picture's left quarter", bounds.right <= pictureBounds.left + pictureBounds.width() / 4)
+            assertTrue("Touch lock must align with the picture's vertical centre", kotlin.math.abs(bounds.centerY() - pictureBounds.centerY()) <= 2)
+            OwnedUiTraceRule.trace("left-touch-lock picture=$pictureBounds touch=$bounds")
             return bounds
         }
         fun captureLocks(stage: String) {
@@ -234,27 +238,20 @@ class PlayerGestureControlsTest {
             var oldOrientation = 0
             activity.scenario.onActivity { oldOrientation = it.requestedOrientation }
             val lockedBounds = button("视频画面").visibleBounds
-            val orientationBounds = assertSideLock("锁定屏幕方向", lockedBounds, left = true)
-            val touchBounds = assertSideLock("锁定触控", lockedBounds, left = false)
+            val touchBounds = assertLeftLock("锁定触控", lockedBounds)
             captureLocks("portrait-controls")
-            assertLockState("锁定屏幕方向", "方向未锁定", false)
             assertLockState("锁定触控", "触控未锁定", false)
-            button("锁定屏幕方向").click()
-            instrumentation.waitForIdleSync()
-            activity.scenario.onActivity { assertEquals(ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
-            assertLockState("解除方向锁定", "方向已锁定", true)
-            assertEquals(orientationBounds, button("解除方向锁定").visibleBounds)
 
             button("锁定触控").click()
             assertLockState("解除触控锁定", "触控已锁定", true)
+            activity.scenario.onActivity { assertEquals("Touch lock must preserve requested orientation", oldOrientation, it.requestedOrientation) }
             assertEquals("Unlock must keep the same touch target", touchBounds, button("解除触控锁定").visibleBounds)
             captureLocks("portrait-locked")
             assertFalse(device.hasObject(By.desc("视频画面")))
-            assertFalse(device.hasObject(By.desc("解除方向锁定")))
             button("解除触控锁定").click()
             assertLockState("锁定触控", "触控未锁定", false)
             assertEquals(touchBounds, button("锁定触控").visibleBounds)
-            activity.scenario.onActivity { assertEquals("Touch unlock must preserve orientation lock", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
+            activity.scenario.onActivity { assertEquals("Touch unlock must preserve requested orientation", oldOrientation, it.requestedOrientation) }
 
             button("锁定触控").click()
             assertLockState("解除触控锁定", "触控已锁定", true)
@@ -271,11 +268,7 @@ class PlayerGestureControlsTest {
             assertTrue(device.wait(Until.gone(By.desc("解除触控锁定")), 5_000))
             assertNotNull(model.state.value.selected)
             assertLockState("锁定触控", "触控未锁定", false)
-            assertLockState("解除方向锁定", "方向已锁定", true)
-            activity.scenario.onActivity { assertEquals("Back unlock must preserve orientation lock", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
-            button("解除方向锁定").click()
-            instrumentation.waitForIdleSync()
-            activity.scenario.onActivity { assertEquals(oldOrientation, it.requestedOrientation) }
+            activity.scenario.onActivity { assertEquals("Back unlock must preserve requested orientation", oldOrientation, it.requestedOrientation) }
 
             val fullscreenGeneration = model.player.state.value.mediaGeneration
             val fullscreenOpens = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.OPEN_REQUEST }
@@ -284,42 +277,37 @@ class PlayerGestureControlsTest {
             assertTrue("Landscape fullscreen must receive a real button tap", device.click(landscapeEntry.centerX(), landscapeEntry.centerY()))
             assertTrue(device.wait(Until.gone(By.desc("播放详情")), 5_000))
             withTimeout(5_000) { while (device.displayWidth <= device.displayHeight) delay(50) }
+            var landscapeRequestedOrientation = 0
             activity.scenario.onActivity {
                 assertEquals(android.content.res.Configuration.ORIENTATION_LANDSCAPE, it.resources.configuration.orientation)
                 assertEquals(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE, it.requestedOrientation)
+                landscapeRequestedOrientation = it.requestedOrientation
             }
             val landscapePicture = button("视频画面").visibleBounds
-            val landscapeOrientationBounds = assertSideLock("锁定屏幕方向", landscapePicture, left = true)
-            val landscapeTouchBounds = assertSideLock("锁定触控", landscapePicture, left = false)
-            OwnedUiTraceRule.trace("landscape-locks picture=$landscapePicture orientation=$landscapeOrientationBounds touch=$landscapeTouchBounds")
+            val landscapeTouchBounds = assertLeftLock("锁定触控", landscapePicture)
             captureLocks("landscape-controls")
-            assertLockState("锁定屏幕方向", "方向未锁定", false)
             assertLockState("锁定触控", "触控未锁定", false)
-            button("锁定屏幕方向").click()
-            assertLockState("解除方向锁定", "方向已锁定", true)
-            assertEquals(landscapeOrientationBounds, button("解除方向锁定").visibleBounds)
-            activity.scenario.onActivity { assertEquals(ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
 
             button("锁定触控").click()
             assertLockState("解除触控锁定", "触控已锁定", true)
+            activity.scenario.onActivity { assertEquals("Landscape touch lock must preserve requested orientation", landscapeRequestedOrientation, it.requestedOrientation) }
             assertEquals("Landscape unlock must keep the same touch target", landscapeTouchBounds, button("解除触控锁定").visibleBounds)
             captureLocks("landscape-locked")
             button("解除触控锁定").click()
             assertLockState("锁定触控", "触控未锁定", false)
             assertEquals(landscapeTouchBounds, button("锁定触控").visibleBounds)
-            activity.scenario.onActivity { assertEquals("Landscape touch unlock must preserve orientation lock", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation) }
+            activity.scenario.onActivity { assertEquals("Landscape touch unlock must preserve requested orientation", landscapeRequestedOrientation, it.requestedOrientation) }
 
             button("锁定触控").click()
             assertLockState("解除触控锁定", "触控已锁定", true)
             device.pressBack()
             assertTrue(device.wait(Until.gone(By.desc("解除触控锁定")), 5_000))
             assertLockState("锁定触控", "触控未锁定", false)
-            assertLockState("解除方向锁定", "方向已锁定", true)
             assertFalse("First Back must keep fullscreen", device.hasObject(By.desc("播放详情")))
             button("退出全屏并返回详情")
             activity.scenario.onActivity {
                 assertEquals(android.content.res.Configuration.ORIENTATION_LANDSCAPE, it.resources.configuration.orientation)
-                assertEquals("First Back unlocks touch before exiting fullscreen", ActivityInfo.SCREEN_ORIENTATION_LOCKED, it.requestedOrientation)
+                assertEquals("First Back unlocks touch before exiting fullscreen", landscapeRequestedOrientation, it.requestedOrientation)
             }
             assertEquals(fullscreenMedia, model.state.value.selected)
             assertEquals(fullscreenGeneration, model.player.state.value.mediaGeneration)

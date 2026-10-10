@@ -162,7 +162,6 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var touchLocked by remember(file) { mutableStateOf(false) }
     var playerPosition by remember { mutableStateOf(Offset.Zero) }
     var touchLockPosition by remember { mutableStateOf(Offset.Zero) }
-    var orientationBeforeLock by remember { mutableStateOf<Int?>(null) }
     val gestureSeek = remember(file) { SeekGestureAccumulator() }
     var gestureMessage by remember(file) { mutableStateOf<String?>(null) }
     var interaction by remember { mutableIntStateOf(0) }
@@ -225,22 +224,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     fun step(delta: Long) { gestureSeek.reset(); touch(); model.player.seek(liveState.positionMs + delta) }
     fun lockTouch() { touchLocked = true; sheet = null; gestureSeek.reset() }
     fun unlockTouch() { touchLocked = false; touch() }
-    fun lockOrientation() {
-        val owner = context.activity() ?: return
-        val previous = orientationBeforeLock
-        if (previous == null) {
-            orientationBeforeLock = owner.requestedOrientation
-            owner.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-        } else {
-            owner.requestedOrientation = previous
-            orientationBeforeLock = null
-        }
-        touch()
-    }
     fun changeDisplay(mode: PlayerDisplayMode) {
         touch()
         sheet = null
-        orientationBeforeLock = null
         displayMode = mode
         context.activity()?.requestedOrientation = if (mode == PlayerDisplayMode.LANDSCAPE_FULLSCREEN)
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
@@ -442,18 +428,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     PlayerLabel("取消", "取消播放等待") { model.leavePlayer() }
                                 }
                             }
-                            if (showControls) Box(Modifier.align(AbsoluteAlignment.CenterLeft)
+                            if (showControls || touchLocked) Box(Modifier.align(AbsoluteAlignment.CenterLeft)
                                 .then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Left)) else Modifier)
                                 .absolutePadding(left = 8.dp)) {
-                                PlayerLockIcon(
-                                    if (orientationBeforeLock == null) R.drawable.ic_screen_rotation else R.drawable.ic_screen_lock_rotation,
-                                    if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定",
-                                    if (orientationBeforeLock == null) "方向未锁定" else "方向已锁定",
-                                    orientationBeforeLock != null, ::lockOrientation)
-                            }
-                            if (showControls || touchLocked) Box(Modifier.align(AbsoluteAlignment.CenterRight)
-                                .then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Right)) else Modifier)
-                                .absolutePadding(right = 8.dp)) {
                                 // Retain this anchor while locked, including after a real
                                 // window rotation. The topmost unlock uses these same bounds.
                                 PlayerLockIcon(R.drawable.ic_lock_open, "锁定触控", "触控未锁定", false, ::lockTouch,
