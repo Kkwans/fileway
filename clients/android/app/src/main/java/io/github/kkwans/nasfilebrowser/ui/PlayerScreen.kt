@@ -75,6 +75,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
 import kotlin.math.roundToInt
 import io.github.kkwans.nasfilebrowser.R
@@ -83,6 +84,7 @@ import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.app.mediaKey
 import io.github.kkwans.nasfilebrowser.player.NativeTrack
 import io.github.kkwans.nasfilebrowser.player.SeekGestureAccumulator
+import io.github.kkwans.nasfilebrowser.player.SeekDragSession
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -138,6 +140,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     val maximumVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
     var mediaVolume by remember { mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var gestureForeground by remember(lifecycle) { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     val gestureEdge = with(LocalDensity.current) { 24.dp.toPx() }
     var draggingVertical by remember(file) { mutableStateOf(false) }
     var dragLeft by remember(file) { mutableStateOf(false) }
@@ -157,7 +160,10 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var sheet by remember { mutableStateOf<PlayerSheet?>(null) }
     var expandedTitle by remember(file) { mutableStateOf(false) }
     var seek by remember(file) { mutableStateOf<Float?>(null) }
-    val seekPreview = rememberSeekPreview(model, file, state.mediaGeneration, seek != null)
+    var pictureSeek by remember(file, state.mediaGeneration) { mutableStateOf<Long?>(null) }
+    var dragSession by remember(file, state.mediaGeneration) { mutableStateOf<SeekDragSession?>(null) }
+    val seekPreview = rememberSeekPreview(model, file, state.mediaGeneration, seek != null || pictureSeek != null)
+    val showControls = visible && pictureSeek == null
     var showRequest by remember(file) { mutableStateOf(false) }
     val feedback = remember { SnackbarHostState() }
     var documentGeneration by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -238,8 +244,13 @@ private tailrec fun Context.activity(): Activity? = when (this) {
         accessibility.addTouchExplorationStateChangeListener(listener)
         onDispose { accessibility.removeTouchExplorationStateChangeListener(listener) }
     }
-    LaunchedEffect(visible, interaction, sheet, seek != null, blocked, exploration, draggingVertical) {
-        if (blocked || exploration || sheet != null || seek != null || draggingVertical) visible = true
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, _ -> gestureForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(visible, interaction, sheet, seek != null, pictureSeek != null, blocked, exploration, draggingVertical) {
+        if (blocked || exploration || sheet != null || seek != null || pictureSeek != null || draggingVertical) visible = true
         else if (visible) {
             val timeout = accessibility.getRecommendedTimeoutMillis(3000,
                 AccessibilityManager.FLAG_CONTENT_CONTROLS or AccessibilityManager.FLAG_CONTENT_TEXT or AccessibilityManager.FLAG_CONTENT_ICONS)
@@ -318,7 +329,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"
                                 onClick("显示播放控制") { touch(); true }
-                            }.playerVerticalGestures(file.mediaKey, !exploration && !touchLocked && !holding && !client.busy, gestureEdge,
+                            }.playerGestures(Triple(file.mediaKey, state.mediaGeneration, landscapeOrientation),
+                                gestureForeground && !exploration && !touchLocked && !holding && !client.busy && sheet == null, gestureEdge,
                                 start = { left ->
                                     dragLeft = left; draggingVertical = true; touch()
                                     dragStart = if (left) actualBrightness() else audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / maximumVolume
@@ -332,8 +344,26 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                         gestureMessage = "媒体音量 ${(mediaVolume * 100f / maximumVolume).roundToInt()}%"
                                     } else gestureMessage = "此设备使用固定音量"
                                     interaction++
-                                }, finish = { draggingVertical = false; touch() })
-                                .pointerInput(file, exploration, touchLocked) {
+                                }, finish = { draggingVertical = false; touch() },
+                                seekStart = {
+                                    val current = model.player.state.value
+                                    if (!current.seekable || current.durationMs <= 0 || model.state.value.selected != file) false
+                                    else {
+                                        gestureSeek.reset()
+                                        dragSession = SeekDragSession(current.mediaGeneration, current.positionMs, current.durationMs)
+                                        pictureSeek = dragSession?.startMs
+                                        touch()
+                                        true
+                                    }
+                                }, seekChange = { fraction -> pictureSeek = dragSession?.preview(fraction) },
+                                seekFinish = { released ->
+                                    val current = model.player.state.value
+                                    val target = dragSession?.finish(current.mediaGeneration, released,
+                                        current.seekable && !model.state.value.busy && model.state.value.selected == file)
+                                    dragSession = null; pictureSeek = null; touch()
+                                    target?.let(model.player::seek)
+                                })
+                                .pointerInput(file, exploration, touchLocked, gestureForeground, landscapeOrientation) {
                                 detectTapGestures(
                                     onTap = { if (!liveBlocked && !exploration) visible = !visible else touch(); interaction++ },
                                     onDoubleTap = { point ->
@@ -376,6 +406,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 .clip(RoundedCornerShape(8.dp)).background(PlayerPanel).padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 13.sp)
                             gestureMessage?.let { message -> Text(message, Modifier.align(Alignment.Center)
                                 .clip(RoundedCornerShape(8.dp)).background(PlayerPanel).padding(12.dp), fontSize = 14.sp) }
+                            pictureSeek?.let { target -> dragSession?.let { drag ->
+                                PictureSeekFeedback(target, drag.startMs, drag.durationMs, seekPreview.takeIf { fullscreen }, Modifier.align(Alignment.Center))
+                            } }
                             val failure = if (client.busy) null else client.error ?: state.error
                             if (failure != null) {
                                 Column(Modifier.align(Alignment.Center).widthIn(max = 360.dp).padding(20.dp)
@@ -409,10 +442,10 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             }
                         } ?: "— B/s", color = Color.White, fontSize = 11.sp,
                             modifier = Modifier.align(Alignment.TopEnd).then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)) else Modifier)
-                                .padding(top = if (fullscreen && visible) 56.dp else 8.dp, end = 12.dp)
+                                .padding(top = if (fullscreen && showControls) 56.dp else 8.dp, end = 12.dp)
                                 .background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 3.dp)
                                 .semantics { contentDescription = "实际网络下载速度" })
-                        if (visible && fullscreen) Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent)))
+                        if (showControls && fullscreen) Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent)))
                             .windowInsetsPadding(controlInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
                             .padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             PlayerIcon(R.drawable.ic_arrow_back, "退出全屏并返回详情", { changeDisplay(PlayerDisplayMode.AUTOMATIC) })
@@ -421,7 +454,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                             PlayerIcon(R.drawable.ic_lock, "锁定触控", ::lockTouch, !exploration)
                             PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                         }
-                        if (visible) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))
+                        if (showControls) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))
                             .then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)) else Modifier)
                             .padding(horizontal = if (landscape) 20.dp else 12.dp)) {
                             SeekPreview(seekPreview, seek?.toLong())
