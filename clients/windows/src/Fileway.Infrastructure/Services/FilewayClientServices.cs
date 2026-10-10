@@ -58,7 +58,7 @@ public sealed class FilewayClientServices : IConnectionService, IFileRepository,
             using var accountBody = ParseBody(await RequestAsync(coreSession, "/api/users/" + userId, cancellationToken).ConfigureAwait(false));
             var user = accountBody.RootElement;
             if (ReadUserId(user) != userId) throw InvalidResponse();
-            using var capabilityBody = ParseBody(await RequestAsync(coreSession, "/api/client/capabilities", cancellationToken).ConfigureAwait(false));
+            using var capabilityBody = ParseBody(await RequestAsync(coreSession, "/api/client-capabilities", cancellationToken).ConfigureAwait(false));
             var capabilities = capabilityBody.RootElement;
             string authMethod = RequiredText(capabilities.GetProperty("authMethod"));
             if (authMethod != (login.Mode == AuthenticationMode.NoAuthentication ? "noauth" : "json"))
