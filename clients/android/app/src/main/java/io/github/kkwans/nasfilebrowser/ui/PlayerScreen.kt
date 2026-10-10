@@ -71,9 +71,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -94,6 +92,7 @@ import io.github.kkwans.nasfilebrowser.download.DownloadIndex
 import io.github.kkwans.nasfilebrowser.download.DownloadRuntime
 
 private enum class PlayerSheet { AUDIO, SUBTITLE, SPEED, VOLUME, BRIGHTNESS, SOURCE, EXTERNAL, QUEUE }
+private enum class PlayerDisplayMode { AUTOMATIC, PORTRAIT_FULLSCREEN, LANDSCAPE_FULLSCREEN }
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.activity()
@@ -144,6 +143,8 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var dragLeft by remember(file) { mutableStateOf(false) }
     var dragStart by remember(file) { mutableFloatStateOf(0f) }
     val landscapeOrientation = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    var displayMode by rememberSaveable { mutableStateOf(PlayerDisplayMode.AUTOMATIC) }
+    val fullscreen = landscapeOrientation || displayMode != PlayerDisplayMode.AUTOMATIC
     val view = LocalView.current
     val accessibility = remember(context) { context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager }
     var exploration by remember { mutableStateOf(accessibility.isTouchExplorationEnabled) }
@@ -220,6 +221,15 @@ private tailrec fun Context.activity(): Activity? = when (this) {
         }
         touch()
     }
+    fun changeDisplay(mode: PlayerDisplayMode) {
+        touch()
+        sheet = null
+        orientationBeforeLock = null
+        displayMode = mode
+        context.activity()?.requestedOrientation = if (mode == PlayerDisplayMode.LANDSCAPE_FULLSCREEN)
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+    }
+    BackHandler(fullscreen && !touchLocked) { changeDisplay(PlayerDisplayMode.AUTOMATIC) }
     BackHandler(touchLocked) { touchLocked = false; touch() }
     LaunchedEffect(exploration) { if (exploration) touchLocked = false }
     LaunchedEffect(gestureMessage, interaction) { if (gestureMessage != null) { delay(1_000); gestureMessage = null } }
@@ -268,33 +278,13 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     }
     DisposableEffect(window, model.player) {
         val oldKeep = view.keepScreenOn
-        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
-        val oldStatus = controller?.isAppearanceLightStatusBars
-        val oldNavigation = controller?.isAppearanceLightNavigationBars
-        controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        controller?.isAppearanceLightStatusBars = false
-        controller?.isAppearanceLightNavigationBars = false
         onDispose {
             model.player.detach()
             view.keepScreenOn = oldKeep
-            controller?.show(WindowInsetsCompat.Type.systemBars())
-            oldStatus?.let { controller?.isAppearanceLightStatusBars = it }
-            oldNavigation?.let { controller?.isAppearanceLightNavigationBars = it }
         }
     }
-    SideEffect {
-        view.keepScreenOn = state.playing
-        window?.let {
-            val controller = WindowCompat.getInsetsController(it, view)
-            if (!landscapeOrientation || exploration) controller.show(WindowInsetsCompat.Type.systemBars())
-            else controller.hide(WindowInsetsCompat.Type.systemBars())
-        }
-    }
-    fun fullscreen(landscape: Boolean) {
-        touch()
-        orientationBeforeLock = null
-        context.activity()?.requestedOrientation = if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-    }
+    SideEffect { view.keepScreenOn = state.playing }
+    PlayerWindowBars(window, fullscreen && !exploration)
     DisposableEffect(context) {
         val owner = context.activity()
         val original = owner?.requestedOrientation
@@ -302,11 +292,16 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     }
     ClientTheme(darkTheme = true) {
         CompositionLocalProvider(LocalContentColor provides Color.White) {
-            BoxWithConstraints(Modifier.fillMaxSize().background(PlayerCanvas).windowInsetsPadding(WindowInsets.safeDrawing)) {
+            // Fullscreen media ignores changing system-bar visibility. Insets
+            // protect only the overlay controls, never resize the video Surface.
+            BoxWithConstraints(Modifier.fillMaxSize().background(PlayerCanvas)
+                .then(if (fullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.safeDrawing))) {
                 val landscape = maxWidth > maxHeight
+                val controlInsets = if (exploration) WindowInsets.systemBarsIgnoringVisibility.union(WindowInsets.displayCutout)
+                    else WindowInsets.displayCutout.union(WindowInsets.navigationBarsIgnoringVisibility).union(WindowInsets.captionBar)
                 val portraitStageHeight = maxWidth / (16f / 9f) + 116.dp
                 Column(Modifier.fillMaxSize()) {
-                    if (!landscape) Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!fullscreen) Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
                         Text("正在观看", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         PlayerLabel(if (orientationBeforeLock == null) "锁定方向" else "方向已锁", if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定", click = ::lockOrientation)
@@ -316,9 +311,9 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                     // Portrait keeps transport below the picture. Fullscreen
                     // uses the entire viewport with controls over the video;
                     // hiding the HUD never changes the native surface size.
-                    val stage = if (landscape) Modifier.weight(1f) else Modifier.fillMaxWidth().height(portraitStageHeight)
+                    val stage = if (fullscreen) Modifier.weight(1f) else Modifier.fillMaxWidth().height(portraitStageHeight)
                     Box(stage.background(Color.Black)) {
-                        Box(Modifier.fillMaxSize().padding(bottom = if (landscape) 0.dp else 116.dp)) {
+                        Box(Modifier.fillMaxSize().padding(bottom = if (fullscreen) 0.dp else 116.dp)) {
                             AndroidView(factory = { PlayerViewport(it).also(model.player::attach) }, modifier = Modifier.fillMaxSize())
                             Box(Modifier.fillMaxSize().semantics {
                                 contentDescription = "视频画面"
@@ -413,17 +408,22 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 else -> "$speed B/s"
                             }
                         } ?: "— B/s", color = Color.White, fontSize = 11.sp,
-                            modifier = Modifier.align(Alignment.TopEnd).padding(top = if (landscape && visible) 56.dp else 8.dp, end = 12.dp)
+                            modifier = Modifier.align(Alignment.TopEnd).then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)) else Modifier)
+                                .padding(top = if (fullscreen && visible) 56.dp else 8.dp, end = 12.dp)
                                 .background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 3.dp)
                                 .semantics { contentDescription = "实际网络下载速度" })
-                        if (visible && landscape) Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent))).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            PlayerIcon(R.drawable.ic_arrow_back, "返回文件", model::leavePlayer)
+                        if (visible && fullscreen) Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent)))
+                            .windowInsetsPadding(controlInsets.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                            .padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            PlayerIcon(R.drawable.ic_arrow_back, "退出全屏并返回详情", { changeDisplay(PlayerDisplayMode.AUTOMATIC) })
                             Text(file.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
                             PlayerLabel(if (orientationBeforeLock == null) "锁定方向" else "方向已锁", if (orientationBeforeLock == null) "锁定屏幕方向" else "解除方向锁定", click = ::lockOrientation)
                             PlayerIcon(R.drawable.ic_lock, "锁定触控", ::lockTouch, !exploration)
                             PlayerIcon(R.drawable.ic_info, "播放来源", { touch(); sheet = PlayerSheet.SOURCE })
                         }
-                        if (visible) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000)))).padding(horizontal = if (landscape) 20.dp else 12.dp)) {
+                        if (visible) Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))
+                            .then(if (fullscreen) Modifier.windowInsetsPadding(controlInsets.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)) else Modifier)
+                            .padding(horizontal = if (landscape) 20.dp else 12.dp)) {
                             SeekPreview(seekPreview, seek?.toLong())
                             PlayerSlider(seek ?: state.positionMs.toFloat().coerceIn(0f, state.durationMs.toFloat().coerceAtLeast(1f)), state.durationMs.toFloat().coerceAtLeast(1f),
                                 "播放进度", state.seekable && state.durationMs > 0,
@@ -462,11 +462,22 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                     PlayerIcon(R.drawable.art_volume, "媒体系统音量", { touch(); sheet = PlayerSheet.VOLUME })
                                     PlayerLabel("亮度", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
                                 }
-                                PlayerIcon(if (landscape) R.drawable.art_fullscreen_off else R.drawable.art_fullscreen_on, if (landscape) "退出全屏" else "横屏全屏", { fullscreen(landscape) })
+                                if (!fullscreen) PlayerLabel("竖屏", "竖屏全屏") { changeDisplay(PlayerDisplayMode.PORTRAIT_FULLSCREEN) }
+                                PlayerIcon(if (fullscreen) R.drawable.art_fullscreen_off else R.drawable.art_fullscreen_on, if (fullscreen) "退出全屏" else "横屏全屏", {
+                                    changeDisplay(if (fullscreen) PlayerDisplayMode.AUTOMATIC else PlayerDisplayMode.LANDSCAPE_FULLSCREEN)
+                                })
+                            }
+                            if (fullscreen && !landscape) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                                PlayerIcon(R.drawable.ic_playlist_play, "播放列表", { touch(); sheet = PlayerSheet.QUEUE }, queue != null)
+                                PlayerLabel("音轨", "选择音轨", state.audio.isNotEmpty()) { touch(); sheet = PlayerSheet.AUDIO }
+                                PlayerLabel("字幕", "选择字幕", !client.busy) { touch(); sheet = PlayerSheet.SUBTITLE }
+                                PlayerLabel("${state.rate}×", "播放速度") { touch(); sheet = PlayerSheet.SPEED }
+                                PlayerIcon(R.drawable.art_volume, "媒体系统音量", { touch(); sheet = PlayerSheet.VOLUME })
+                                PlayerLabel("亮度", "窗口亮度") { touch(); sheet = PlayerSheet.BRIGHTNESS }
                             }
                         }
                     }
-                    if (!landscape) Column(Modifier.weight(1f).semantics { contentDescription = "播放详情" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (!fullscreen) Column(Modifier.weight(1f).semantics { contentDescription = "播放详情" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(file.name, fontSize = 18.sp, lineHeight = 25.sp, fontWeight = FontWeight.SemiBold,
                                 maxLines = if (expandedTitle) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
@@ -508,7 +519,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         PlayerLabel("解锁", "解除触控锁定") { touchLocked = false; touch() }
                     }
                 }
-                if (sheet != null) PlayerPanel(landscape, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "媒体系统音量"; PlayerSheet.BRIGHTNESS -> "窗口亮度"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
+                if (sheet != null) PlayerPanel(landscape, fullscreen && !exploration, when (sheet) { PlayerSheet.AUDIO -> "音轨"; PlayerSheet.SUBTITLE -> "字幕"; PlayerSheet.SPEED -> "播放速度"; PlayerSheet.VOLUME -> "媒体系统音量"; PlayerSheet.BRIGHTNESS -> "窗口亮度"; PlayerSheet.EXTERNAL -> "外挂字幕"; PlayerSheet.QUEUE -> "播放列表"; else -> "播放来源" }, { sheet = null; touch() }) {
                     when (sheet) {
                         PlayerSheet.QUEUE -> queue?.let { snapshot ->
                             Column {
@@ -758,9 +769,13 @@ private val PlayerDivider = Color(0xFF293342)
         Icon(painterResource(R.drawable.ic_arrow_forward), null, Modifier.size(18.dp), tint = PlayerSecondary)
     }
 }
-@Composable private fun PlayerPanel(landscape: Boolean, title: String, dismiss: () -> Unit, content: @Composable () -> Unit) {
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun PlayerPanel(landscape: Boolean, immersive: Boolean, title: String, dismiss: () -> Unit, content: @Composable () -> Unit) {
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()
+        PlayerWindowBars((LocalView.current.parent as? DialogWindowProvider)?.window, immersive)
+        BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(if (immersive)
+            WindowInsets.displayCutout.union(WindowInsets.navigationBarsIgnoringVisibility).union(WindowInsets.captionBar)
+            else WindowInsets.safeDrawing).imePadding()
             .semantics { contentDescription = "播放设置" }) {
             Box(Modifier.fillMaxSize().clickable(onClick = dismiss))
             val panel = if (landscape) Modifier.align(Alignment.CenterEnd).width(maxWidth.coerceAtMost(360.dp)).fillMaxHeight()
