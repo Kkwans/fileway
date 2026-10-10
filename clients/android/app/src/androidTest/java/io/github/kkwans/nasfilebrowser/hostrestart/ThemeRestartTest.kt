@@ -62,7 +62,9 @@ class ThemeRestartVerifyTest {
                     val screenshot = instrumentation.uiAutomation.takeScreenshot() ?: error("Screenshot unavailable")
                     val bitmap = screenshot.copy(Bitmap.Config.ARGB_8888, false)
                     val pixel = try { bitmap.getPixel(10, bitmap.height / 2) } finally { bitmap.recycle(); screenshot.recycle() }
-                    if (pixel == Color.rgb(32, 32, 35)) break
+                    // ConnectionForm's Scaffold uses LibraryTheme.background;
+                    // 32/32/35 is its card surface, not the page background.
+                    if (pixel == Color.rgb(20, 20, 22)) break
                     delay(100)
                 }
             }
