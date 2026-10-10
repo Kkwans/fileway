@@ -30,6 +30,11 @@ class BatchDownloadTest {
     private val dao = database.downloads()
     private suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
     private suspend fun fixture(block: suspend (ClientModel, ServerProfile, ByteArray) -> Unit) {
+        // This case verifies batch selection/bytes. Give the owned download
+        // fixture its notification prerequisite so a system permission dialog
+        // cannot cover the selection row after the queue is already complete.
+        if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.grantRuntimePermission(
+            context.packageName, android.Manifest.permission.POST_NOTIFICATIONS)
         val id = UUID.randomUUID().toString()
         val bytes = instrumentation.context.assets.open("media/fixture.mkv").use { it.readBytes() }
         val source = NativePlaybackTest.Fixture(bytes, download = true, videos = listOf("owned-$id-one.mkv", "owned-$id-two.mkv"))
