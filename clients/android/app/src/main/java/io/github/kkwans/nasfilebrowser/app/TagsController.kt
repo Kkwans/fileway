@@ -103,7 +103,14 @@ class TagsController(private val scope: CoroutineScope, private val isCurrent: (
     }
     fun remove(tag: ServerTag) = change("标签已删除，文件保持原位") { it.api.action("DELETE", "/api/tags/${android.net.Uri.encode(tag.id)}") }
     fun removePath(tag: ServerTag, ref: TagPathRef, sourceScope: String = mutable.value.scope) {
-        if (bound?.owner != sourceScope) return
+        val context = bound ?: return
+        if (context.owner != sourceScope || !current(context) || mutable.value.changing) return
+        if (!ref.openable) {
+            // Identity is already known to be unavailable. Keep active reads
+            // intact and report locally, without fetching the entire tag list.
+            mutable.value = mutable.value.copy(error = "原始路径无法确认，不能按显示名称取消关联", notice = null)
+            return
+        }
         change("已取消此路径的标签") {
             check(ref.openable) { "原始路径无法确认，不能按显示名称取消关联" }
             writeAssociation(it, tag.id, ResourceRef(ref.path, ref.wirePath, "tag", false, "", 0), false)

@@ -10,6 +10,7 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(AndroidJUnit4::class)
 class TagsContractTest {
@@ -17,6 +18,7 @@ class TagsContractTest {
         val refs = JSONArray()
         val writes = mutableListOf<JSONObject>()
         val batches = mutableListOf<JSONObject>()
+        val tagReads = AtomicInteger()
         var legacy = false
         var mismatch = false
         var hold: CompletableDeferred<Unit>? = null
@@ -33,6 +35,7 @@ class TagsContractTest {
                 var status = 200
                 val body: Any = when {
                     method == "GET" && endpoint == "/api/tags" -> {
+                        tagReads.incrementAndGet()
                         val captured = JSONArray().put(tag()).toString(); val gate = hold
                         if (gate != null) { entered.complete(Unit); withContext(NonCancellable) { gate.await() } }
                         captured
@@ -151,12 +154,23 @@ class TagsContractTest {
         val controller = TagsController(scope) { it === context }
         try {
             withContext(Dispatchers.Main) { controller.bind(context); controller.refresh() }
-            withTimeout(3000) { controller.state.first { it.loaded && !it.loading } }
+            try { withTimeout(3000) { controller.state.first { it.loaded && !it.loading } } }
+            catch (failure: TimeoutCancellationException) {
+                val state = controller.state.value
+                throw AssertionError("Owned budget tag initial read: loaded=${state.loaded}, loading=${state.loading}, errorPresent=${state.error != null}", failure)
+            }
             val tag = controller.state.value.items.single()
             val unknown = tag.pathRefs.first { !it.openable }
+            val readsBeforeRejection = authority.tagReads.get()
             withContext(Dispatchers.Main) { controller.removePath(tag, unknown) }
-            withTimeout(3000) { controller.state.first { !it.changing && it.error != null } }
+            try { withTimeout(3000) { controller.state.first { !it.changing && it.error != null } } }
+            catch (failure: TimeoutCancellationException) {
+                val state = controller.state.value
+                throw AssertionError("Owned unverified tag removal: loaded=${state.loaded}, loading=${state.loading}, changing=${state.changing}, errorPresent=${state.error != null}", failure)
+            }
             assertTrue(authority.writes.isEmpty())
+            assertEquals("A known unverified reference must be rejected without re-reading all tags",
+                readsBeforeRejection, authority.tagReads.get())
             assertTrue(controller.assigned(ResourceRef("/lost�", "/lost%EF%BF%BD", "actual", false, "", 0)).isNotEmpty())
         } finally { scope.cancel() }
     }
