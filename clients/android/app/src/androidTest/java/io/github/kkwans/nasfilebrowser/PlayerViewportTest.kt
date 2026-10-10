@@ -45,7 +45,9 @@ class PlayerViewportTest {
             withTimeout(15_000) { model.state.first { it.connected && !it.busy } }
             main { model.open(model.state.value.files.single()) }
             withTimeout(15_000) { model.state.first { it.selected != null && !it.busy } }
-            withTimeout(15_000) { model.player.state.first { it.durationMs > 0 } }
+            // Duration can arrive while the decoder is still buffering or
+            // recovering. This gate pauses a confirmed playable position.
+            withTimeout(15_000) { model.player.state.first { it.durationMs > 0 && it.playing && it.canSavePosition } }
             device.setOrientationLeft()
             assertTrue(device.wait(Until.hasObject(By.desc("退出全屏")), 10_000))
             instrumentation.waitForIdleSync()
