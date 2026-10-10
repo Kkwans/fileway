@@ -1,0 +1,39 @@
+# Native media lifecycle
+
+`Fileway.Core.Contracts.Media` describes application behavior. It contains no WinUI types, HWNDs or COM pointers. Platform surfaces and libmpv bindings belong in `Fileway.Playback` and the App adapter. A swapchain pointer never crosses the Go IPC boundary.
+
+## Ownership and sources
+
+Remote input carries an immutable `RemoteResourceRef`, including account/source revision. The use case acquires a resource lease through `IResourceLeaseProvider`; media bytes flow through the core's loopback transport. The lease URL is a temporary capability and must not appear in a snapshot, playback history, diagnostic export or ordinary log.
+
+Local input is a distinct type with an absolute local path. Its optional origin preserves the original account and version for completed downloads. It must never be rebound to the currently selected account. Local paths and remote wire paths use different validation and normalization rules.
+
+The playback service owns sessions; a session owns its native engine, event pump, surface attachments, video/subtitle leases and temporary resources. Closing an account stops its sessions before credentials or leases are removed. A Host exit invalidates remote sources; local complete files do not acquire a remote lease merely for playback.
+
+## State and progress
+
+Each opened media item has a new generation. Native event data is copied before its documented lifetime ends. Posted UI callbacks verify both session and generation, and cannot attach an old surface after stop or close. Snapshots contain immutable track collections and are published away from native callback threads.
+
+`Position` is presentation state. `ConfirmedPosition` is null until the engine has confirmed usable playback progress and retains the last confirmed value while a seek is pending. History writes use confirmed progress; a requested seek or resume target never becomes history merely because the command was accepted. Track and subtitle changes operate on the current engine without reopening the source.
+
+Commands are serialized per session. Rapid seek/resize requests may be coalesced, but stop/close and resource release are not discarded. `StopAsync` is idempotent and terminates the current source; `DisposeAsync` also releases the engine. Native failure and cancellation are explicit states rather than a silent reopen loop.
+
+## Teardown
+
+1. Mark closing, fence new callbacks and preserve the latest confirmed position.
+2. Detach XAML/native composition references on their owning UI thread, without blocking that thread on an event pump that needs the dispatcher.
+3. Stop media reads, drain the necessary end events, stop callbacks/pump, and destroy the native player using the ordering verified against the pinned client API.
+4. Revoke video and subtitle leases, then dispose temporary resources.
+5. Destroy the surface/window after its native dependencies are released.
+
+The native engine must remain alive while an App-owned COM reference or callback can still use it. A timeout is a failed teardown requiring recovery; it is not proof that native handles were released. The last known reference must not be freed while native work continues.
+
+## Rendering and diagnosis
+
+The pinned mpv 0.41.0 exposes both HWND output and a D3D11 composition path with `display-swapchain`. They require separate native validation. The render API's OpenGL/SW backends do not describe every video-output capability. Production selection requires actual layer, input, resize, DPI, fullscreen and device-recovery evidence.
+
+In composition mode mpv owns presentation and buffer resizing. The App owns the WinUI attachment, valid physical viewport dimensions and monitor information. UI and engine must not independently overwrite swapchain color settings. Raw pointers have explicit reference ownership and never enter Core domain objects.
+
+Diagnostics separately represent source format, decode path, display capabilities and actual output. Unavailable information is null/unknown. HDR input metadata, a 10-bit buffer or a normal-looking SDR screenshot cannot prove HDR output. Subtitle controls reflect the selected format: text styles, script-preserving ASS with explicit override, or bitmap scale/position for PGS.
+
+Runtime packages require pinned hashes, actual configuration/nonfree checks, complete import/runtime closure, notices and corresponding source/build materials before distribution. Engine load success alone does not establish rendering, compatibility or redistribution readiness.

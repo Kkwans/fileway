@@ -5,4 +5,12 @@
     <Project Path="src/Fileway.Infrastructure/Fileway.Infrastructure.csproj" />
     <Project Path="src/Fileway.Playback/Fileway.Playback.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Fileway.HostTestHarness/Fileway.HostTestHarness.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="tests/Fileway.Infrastructure.Tests/Fileway.Infrastructure.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
 </Solution>

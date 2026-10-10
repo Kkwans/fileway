@@ -9,9 +9,16 @@ The initial verified development toolchain is .NET SDK 10.0.401, Windows App SDK
 `eng/Use-WindowsEnvironment.ps1` selects project-specific toolchains, caches, build output, data and temporary directories in the current PowerShell process. It does not update global environment variables, install Visual Studio, enable Developer Mode, register certificates or modify Android SDKs.
 
 ```powershell
+.\eng\Install-WindowsTools.ps1 -ToolsRoot <isolated-tools>
 . .\eng\Use-WindowsEnvironment.ps1 -ToolsRoot <isolated-tools> -ArtifactsRoot <external-artifacts>
 .\eng\Build-Windows.ps1 -ToolsRoot <isolated-tools> -ArtifactsRoot <external-artifacts> -Configuration Debug
 ```
+
+The installer script downloads fixed official tool archives, checks published hashes and extracts them into the selected directory. Incomplete downloads are retained for resume; no system installer is run. Defaults use sibling directories relative to the checkout, so the scripts also work with explicit temporary CI roots.
+
+Deep checkout/tool paths can exceed native XAML compiler path limits. Pass an explicit short, externally owned `-NuGetPackagesRoot <path>` to environment/build/test scripts when needed. It is propagated through nested scripts and never changes global NuGet or Windows settings.
+
+Build-Windows builds the Go Host first, embeds the actual Git commit and records dirty state and executable SHA-256 in `host-build.json`. It then copies the matching Host and manifest beside the application. A direct app build without these prerequisites fails explicitly.
 
 The EXE is produced under `<external-artifacts>\bin\Fileway.App\x64\Debug\net10.0-windows10.0.26100.0\win-x64`. Run it with that directory as its working directory. Publishing also stays under the external artifact root. A successful build is not proof of native launch, media support or a clean installation.
 

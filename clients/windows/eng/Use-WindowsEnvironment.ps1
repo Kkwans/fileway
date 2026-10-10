@@ -1,8 +1,10 @@
 param(
-    [string] $ToolsRoot = 'D:\Kkwans\Desktop\Project\MyProject\Fileway-windows-tools',
-    [string] $ArtifactsRoot = 'D:\Kkwans\Desktop\Project\MyProject\Fileway-windows-artifacts\local'
+    [string] $ToolsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..\Fileway-windows-tools')),
+    [string] $ArtifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..\Fileway-windows-artifacts\local')),
+    [string] $NuGetPackagesRoot
 )
 $ErrorActionPreference = 'Stop'
+$ToolsRoot = [System.IO.Path]::GetFullPath($ToolsRoot)
 $dotnetDirectory = Join-Path $ToolsRoot 'dotnet-10.0.401'
 $goDirectory = Join-Path $ToolsRoot 'go-1.26.6\go'
 if (-not (Test-Path -LiteralPath (Join-Path $dotnetDirectory 'dotnet.exe'))) { throw 'Isolated .NET SDK 10.0.401 is missing.' }
@@ -11,11 +13,12 @@ $env:DOTNET_ROOT = $dotnetDirectory
 $env:DOTNET_ROOT_X64 = $dotnetDirectory
 $env:DOTNET_CLI_HOME = Join-Path $ToolsRoot 'state\dotnet-home'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:TESTINGPLATFORM_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = '0'
 $env:WINAPP_CLI_TELEMETRY_OPTOUT = '1'
-$env:NUGET_PACKAGES = Join-Path $ToolsRoot 'cache\nuget'
+$env:NUGET_PACKAGES = if ([string]::IsNullOrWhiteSpace($NuGetPackagesRoot)) { Join-Path $ToolsRoot 'cache\nuget' } else { [System.IO.Path]::GetFullPath($NuGetPackagesRoot) }
 $env:NUGET_HTTP_CACHE_PATH = Join-Path $ToolsRoot 'cache\nuget-http'
 $env:GOPATH = Join-Path $ToolsRoot 'state\go'
 $env:GOROOT = $goDirectory

@@ -68,6 +68,16 @@
     <ProjectReference Include="..\Fileway.Playback\Fileway.Playback.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="$(FilewayArtifactsRoot)\host\$(Configuration)\fileway-host.exe" Link="fileway-host.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FilewayArtifactsRoot)\host\$(Configuration)\host-build.json" Link="host-build.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="ValidateFilewayGoHost" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(FilewayArtifactsRoot)\host\$(Configuration)\fileway-host.exe')" Text="Build the matching Go Host first with eng/Build-Windows.ps1 or eng/Build-GoHost.ps1." />
+    <Error Condition="!Exists('$(FilewayArtifactsRoot)\host\$(Configuration)\host-build.json')" Text="The Go Host build provenance manifest is missing." />
+  </Target>
+
   <!--
     Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution
     Explorer "Package and Publish" context menu entry to be enabled for this project even if

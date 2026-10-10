@@ -59,6 +59,7 @@ public interface IConnectionService
 
 public interface IFileRepository
 {
+    Task<RemoteResourceRef> GetRootAsync(ConnectionSession session, CancellationToken cancellationToken);
     Task<DirectoryPage> ListAsync(RemoteResourceRef directory, DirectoryQuery query, CancellationToken cancellationToken);
     Task<RemoteFile> GetAsync(RemoteResourceRef resource, CancellationToken cancellationToken);
     Task<FileOperationResult> CreateDirectoryAsync(RemoteResourceRef parent, string name, CancellationToken cancellationToken);
