@@ -3,11 +3,8 @@ package fileutils
 import (
 	"context"
 	"errors"
-	"io"
 	"io/fs"
-	"os"
 	"path"
-	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/afero"
@@ -37,53 +34,8 @@ func MoveFile(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) erro
 
 // CopyFile copies a file from source to dest and returns
 // an error if any.
-func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) (err error) {
-	// Open the source file.
-	src, err := afs.Open(source)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := src.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-
-	// Makes the directory needed to create the dst
-	// file.
-	err = afs.MkdirAll(filepath.Dir(dest), dirMode)
-	if err != nil {
-		return err
-	}
-
-	// Create the destination file.
-	dst, err := afs.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := dst.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-
-	// Copy the contents of the file.
-	_, err = io.Copy(dst, src)
-	if err != nil {
-		return err
-	}
-
-	// Copy the mode
-	info, err := afs.Stat(source)
-	if err != nil {
-		return err
-	}
-	err = afs.Chmod(dest, info.Mode())
-	if err != nil {
-		return err
-	}
-
-	return nil
+func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) error {
+	return copyFilePublished(afs, source, dest, fileMode, dirMode, true)
 }
 
 // CommonPrefix returns common directory path of provided files

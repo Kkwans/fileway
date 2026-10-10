@@ -10,6 +10,12 @@ import (
 
 // Copy copies a file or folder from one place to another.
 func Copy(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) error {
+	return CopyWithOverwrite(afs, src, dst, fileMode, dirMode, true)
+}
+
+// CopyWithOverwrite preserves legacy directory merging, but only replaces
+// existing files when overwrite was explicitly approved by its caller.
+func CopyWithOverwrite(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode, overwrite bool) error {
 	if src = path.Clean("/" + src); src == "" {
 		return os.ErrNotExist
 	}
@@ -33,8 +39,8 @@ func Copy(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) error {
 	}
 
 	if info.IsDir() {
-		return CopyDir(afs, src, dst, fileMode, dirMode)
+		return copyDirPublished(afs, src, dst, fileMode, dirMode, overwrite)
 	}
 
-	return CopyFile(afs, src, dst, fileMode, dirMode)
+	return copyFilePublished(afs, src, dst, fileMode, dirMode, overwrite)
 }

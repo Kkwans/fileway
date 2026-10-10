@@ -353,6 +353,10 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 		srcInfo, _ := d.user.Fs.Stat(src)
 		dstInfo, _ := d.user.Fs.Stat(dst)
 		same := sameExistingFile(srcInfo, dstInfo)
+		if action == "copy" && query.Get("rename") != "true" && (src == dst || same) {
+			return http.StatusBadRequest, fmt.Errorf("不能将文件复制到自身")
+		}
+		overwrite := query.Get("override") == "true" && query.Get("rename") != "true"
 
 		if action != "rename" || !same {
 			override := r.URL.Query().Get("override") == "true"
@@ -372,6 +376,9 @@ func resourcePatchHandler(fileCache FileCache) handleFunc {
 		}
 
 		err = d.RunHook(func() error {
+			if action == "copy" {
+				return patchCopyAction(src, dst, d, overwrite)
+			}
 			return patchAction(r.Context(), action, src, dst, d, fileCache)
 		}, action, src, dst, d.user)
 		if err == nil && action == "rename" {
@@ -571,14 +578,17 @@ func delThumbs(ctx context.Context, fileCache FileCache, file *files.FileInfo) e
 	return nil
 }
 
+func patchCopyAction(src, dst string, d *data, overwrite bool) error {
+	if !d.user.Perm.Create {
+		return fberrors.ErrPermissionDenied
+	}
+	return fileutils.CopyWithOverwrite(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode, overwrite)
+}
+
 func patchAction(ctx context.Context, action, src, dst string, d *data, fileCache FileCache) error {
 	switch action {
 	case "copy":
-		if !d.user.Perm.Create {
-			return fberrors.ErrPermissionDenied
-		}
-
-		return fileutils.Copy(d.user.Fs, src, dst, d.settings.FileMode, d.settings.DirMode)
+		return patchCopyAction(src, dst, d, false)
 	case "rename":
 		if !d.user.Perm.Rename {
 			return fberrors.ErrPermissionDenied
