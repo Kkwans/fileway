@@ -51,6 +51,7 @@ class PlayerGestureControlsTest {
         var held = false
         var x = 0f; var y = 0f
         var stage = "prepare"
+        var previewBounds: Rect? = null
         fun pointer(action: Int, nextX: Float = x, nextY: Float = y) {
             x = nextX; y = nextY
             if (action == MotionEvent.ACTION_DOWN) { downTime = SystemClock.uptimeMillis(); held = true }
@@ -64,7 +65,10 @@ class PlayerGestureControlsTest {
         fun previewDescription(node: AccessibilityNodeInfo, refresh: Boolean): String? {
             try {
                 if (refresh && !node.refresh()) return null
-                if (node.contentDescription?.toString() == "画面拖动进度") return AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString()
+                if (node.contentDescription?.toString() == "画面拖动进度") {
+                    if (refresh) previewBounds = Rect().also(node::getBoundsInScreen)
+                    return AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString()
+                }
                 for (index in 0 until node.childCount) {
                     node.getChild(index)?.let { previewDescription(it, refresh) }?.let { return it }
                 }
@@ -102,6 +106,16 @@ class PlayerGestureControlsTest {
             delay(25)
             pointer(MotionEvent.ACTION_MOVE, picture.centerX() + picture.width() * .16f)
             val preview = feedback().substringBefore('，')
+            val feedbackBounds = checkNotNull(previewBounds)
+            assertTrue("Seek feedback must remain compact over the picture", feedbackBounds.width() <= picture.width() / 2 &&
+                feedbackBounds.height() <= picture.height() / 3)
+            OwnedUiTraceRule.trace("seek-preview-bounds=$feedbackBounds picture=$picture")
+            if (InstrumentationRegistry.getArguments().getString("nfbTraceUi") == "true") {
+                val name = "player075-compact-seek-${SystemClock.uptimeMillis()}"
+                device.executeShellCommand("mkdir -p /sdcard/Download/nfb-client-acceptance")
+                device.executeShellCommand("screencap -p /sdcard/Download/nfb-client-acceptance/$name.png")
+                OwnedUiTraceRule.trace("seek-capture=$name")
+            }
             delay(200)
             assertEquals("Drag previews must not send incremental seek commands", before, seeks().size)
             assertEquals(1f, model.player.state.value.rate)
