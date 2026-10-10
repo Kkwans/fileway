@@ -61,19 +61,26 @@ class PlayerGestureControlsTest {
             OwnedUiTraceRule.trace("seek-drag=$stage action=$action x=$x y=$y screen=${device.displayWidth}x${device.displayHeight}")
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) held = false
         }
-        fun previewDescription(node: AccessibilityNodeInfo): String? {
+        fun previewDescription(node: AccessibilityNodeInfo, refresh: Boolean): String? {
             try {
-                if (node.contentDescription == "画面拖动进度") return AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString()
+                if (refresh && !node.refresh()) return null
+                if (node.contentDescription?.toString() == "画面拖动进度") return AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString()
                 for (index in 0 until node.childCount) {
-                    node.getChild(index)?.let { previewDescription(it) }?.let { return it }
+                    node.getChild(index)?.let { previewDescription(it, refresh) }?.let { return it }
                 }
                 return null
             } finally { node.recycle() }
         }
         suspend fun feedback(): String {
+            fun read(): String? {
+                val cached = instrumentation.uiAutomation.rootInActiveWindow?.let { previewDescription(it, false) }
+                val fresh = instrumentation.uiAutomation.rootInActiveWindow?.let { previewDescription(it, true) }
+                if (cached == null && fresh != null) OwnedUiTraceRule.trace("seek-preview-cache=stale stage=$stage")
+                return fresh
+            }
             return try { withTimeout(5_000) {
-                var description = instrumentation.uiAutomation.rootInActiveWindow?.let(::previewDescription)
-                while (description == null) { delay(25); description = instrumentation.uiAutomation.rootInActiveWindow?.let(::previewDescription) }
+                var description = read()
+                while (description == null) { delay(25); description = read() }
                 description
             } } catch (error: TimeoutCancellationException) {
                 throw AssertionError("Seek preview missing during $stage; ${trace.snapshot()}; state=${model.player.state.value.phase}, " +
