@@ -26,8 +26,8 @@ android {
         applicationId = "io.github.kkwans.nasfilebrowser"
         minSdk = 29
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.7.3-preview"
+        versionCode = 14
+        versionName = "0.7.4-preview"
         buildConfigField("boolean", "NATIVE_VERBOSE", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // External control-plane acceptance runs explicitly through adb.
