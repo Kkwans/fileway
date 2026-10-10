@@ -1,5 +1,7 @@
 package io.github.kkwans.nasfilebrowser
 
+import android.graphics.Rect
+import android.view.ViewConfiguration
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -19,6 +21,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.TimeUnit
+import kotlin.math.ceil
 
 /** Installed application UI -> bound ViewModel -> actual JNI/Go -> owned HTTP fixture. */
 @RunWith(AndroidJUnit4::class)
@@ -28,8 +31,28 @@ class SearchScreenTest {
     private val device = UiDevice.getInstance(instrumentation)
     private fun objectWithText(text: String): UiObject2 = device.wait(Until.findObject(By.text(text)), 5000)
         ?: throw AssertionError("Visible action missing: $text")
-    private fun resultWithName(name: String): UiObject2 = device.wait(Until.findObject(By.clazz("android.widget.TextView").text(name)), 5000)
-        ?: throw AssertionError("Visible result missing: $name")
+    private suspend fun resultWithName(name: String): Rect = withTimeout(5000) {
+        while (true) {
+            val matches = freshAccessibilityBounds(instrumentation, Rect(0, 0, device.displayWidth, device.displayHeight))
+                ?.filter { it.visible && it.enabled && it.canLongClick && it.className == "android.widget.TextView" &&
+                    it.text == name && "搜索结果" in it.ancestorDescriptions }
+            matches?.singleOrNull()?.let { return@withTimeout Rect(it.bounds) }
+            delay(25)
+        }
+        @Suppress("UNREACHABLE_CODE") error("Visible result missing: $name")
+    }
+    private suspend fun clickResult(name: String) {
+        val bounds = resultWithName(name)
+        assertTrue("Current search result tap must be injected", device.click(bounds.centerX(), bounds.centerY()))
+    }
+    private suspend fun longPressResult(name: String) {
+        val bounds = resultWithName(name)
+        // Match UiAutomator 2.3.0's 1.5 * platform long-press timeout. The
+        // existing UiDevice swipe path sends real FINGER events every 5ms.
+        val steps = ceil(ViewConfiguration.getLongPressTimeout() * 1.5 / 5).toInt().coerceAtLeast(1)
+        assertTrue("Current search result long press must be injected",
+            device.swipe(bounds.centerX(), bounds.centerY(), bounds.centerX(), bounds.centerY(), steps))
+    }
     private fun capture(name: String) {
         instrumentation.waitForIdleSync()
         // Capture the settled dialog/system-bar frame, not its exit animation.
@@ -44,7 +67,9 @@ class SearchScreenTest {
 
     private suspend fun fixture(action: suspend (ClientModel, ClientSearchTest.Fixture) -> Unit) {
         val source = ClientSearchTest.Fixture()
-        val store = ProfileStore(ClientDatabase.get(instrumentation.targetContext), CredentialVault(instrumentation.targetContext))
+        val database = ClientDatabase.get(instrumentation.targetContext)
+        val previousSession = database.profiles().activeSession()
+        val store = ProfileStore(database, CredentialVault(instrumentation.targetContext))
         val profile = store.save(ServerProfile(name = "Search UI fixture", address = source.url))
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
@@ -62,8 +87,15 @@ class SearchScreenTest {
         catch (error: AssertionError) { capture("search-failure"); throw error }
         finally {
             source.releaseSearch.countDown(); source.releaseMetadata.countDown(); source.releasePlayback.countDown()
-            withContext(Dispatchers.Main) { model.disconnect() }
-            store.remove(profile); source.close()
+            withContext(NonCancellable) {
+                try { withContext(Dispatchers.Main) { model.disconnect() } } finally {
+                    try { store.remove(profile) } finally {
+                        try { source.close() } finally {
+                            previousSession?.let { if (database.profiles().account(it.accountKey) != null) database.profiles().saveActiveSession(it) }
+                        }
+                    }
+                }
+            }
         }
     }
     private fun submit(value: String) {
@@ -99,7 +131,7 @@ class SearchScreenTest {
             assertEquals("/library", model.state.value.path)
             objectWithText("文件夹 · /")
             capture("search-global-results")
-            resultWithName("跨目录+100%").click()
+            clickResult("跨目录+100%")
             val opened = withTimeout(5000) { model.state.first { !it.busy && it.path == "/跨目录+100%" } }
             assertEquals("/%e8%b7%a8%e7%9b%ae%e5%bd%95%2b100%25", opened.wirePath)
             assertFalse(model.search.state.value.open)
@@ -120,10 +152,10 @@ class SearchScreenTest {
             objectWithText("重新搜索").click()
             withTimeout(5000) { model.search.state.first { it.ending == SearchEnding.COMPLETED } }
             assertEquals("retry", model.search.state.value.query)
-            resultWithName("retry").longClick()
+            longPressResult("retry")
             assertTrue(device.wait(Until.hasObject(By.text("/retry")), 5000))
             objectWithText("关闭").click()
-            resultWithName("retry").click()
+            clickResult("retry")
             withTimeout(5000) { model.state.first { !it.busy && it.path == "/retry" } }
             assertFalse(model.search.state.value.open)
             assertTrue(device.wait(Until.hasObject(By.desc("上一级")), 5000))
@@ -134,7 +166,7 @@ class SearchScreenTest {
         fixture { model, source ->
             submit("back.mkv")
             withTimeout(5000) { model.search.state.first { it.ending == SearchEnding.COMPLETED } }
-            resultWithName("back.mkv").click()
+            clickResult("back.mkv")
             assertTrue(withContext(Dispatchers.IO) { source.playbackStarted.await(5, TimeUnit.SECONDS) })
             val back = device.wait(Until.findObject(By.desc("返回文件")), 5000) ?: throw AssertionError("Return action missing")
             back.click()
@@ -158,7 +190,7 @@ class SearchScreenTest {
             try {
                 val list = device.wait(Until.findObject(By.desc("搜索结果")), 5000) ?: throw AssertionError("Scrollable results missing")
                 if (!device.hasObject(By.clazz("android.widget.TextView").text(title))) list.scroll(Direction.DOWN, 0.8f)
-                resultWithName(title).longClick()
+                longPressResult(title)
                 capture("search-details-top-landscape")
                 if (!device.hasObject(By.text("/$title"))) {
                     val content = device.wait(Until.findObject(By.desc("文件详情内容")), 5000)

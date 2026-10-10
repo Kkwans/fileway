@@ -11,7 +11,6 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.By
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.app.ResourceRef
 import io.github.kkwans.nasfilebrowser.data.*
@@ -83,8 +82,12 @@ class NativeSubtitleTest {
         // are transparent. Never erase a real glyph inside a control's rectangle:
         // the animation fixture's moving I starts beneath the left touch lock.
         // pixels() still inspects every native subtitle pixel without a mask.
-        val hudBounds = listOf("实际网络下载速度", "锁定触控", "解除触控锁定")
-            .mapNotNull { label -> device.findObject(By.desc(label))?.visibleBounds }
+        val nodes = freshAccessibilityBounds(instrumentation, Rect(0, 0, device.displayWidth, device.displayHeight)) ?: return null
+        // Throughput is always present, even after the transport HUD hides.
+        // A tree without it cannot establish the current player's HUD mask.
+        if (nodes.none { it.visible && it.description == "实际网络下载速度" }) return null
+        val hudLabels = setOf("实际网络下载速度", "锁定触控", "解除触控锁定")
+        val hudBounds = nodes.filter { it.visible && it.description != null && it.description in hudLabels }.map { it.bounds }
         val captured = instrumentation.uiAutomation.takeScreenshot() ?: return null
         val screenshot = if (captured.config == Bitmap.Config.HARDWARE) {
             try { captured.copy(Bitmap.Config.ARGB_8888, false) ?: return null }
