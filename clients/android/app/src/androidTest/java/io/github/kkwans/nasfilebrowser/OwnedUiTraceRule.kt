@@ -13,6 +13,7 @@ import org.junit.rules.TestRule
 import org.junit.runner.Description
 import org.junit.runners.model.Statement
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Main-callback snapshots, including ActivityScenario launch and teardown.
  * Logging is opt-in. Cache reads never await main/idle or query accessibility.
@@ -23,6 +24,9 @@ internal class OwnedUiTraceRule : TestRule {
     private data class Case(val token: Any, val id: String, val snapshot: Snapshot? = null)
     private data class WindowHook(val original: Window.Callback, val installed: Window.Callback)
     private val current = AtomicReference<Case?>()
+    private val touches = AtomicInteger()
+
+    fun deliveredTouches(): Int = touches.get()
 
     fun snapshot(): String {
         val observed = current.get() ?: return "case=unverified; testActivities=unverified"
@@ -36,6 +40,7 @@ internal class OwnedUiTraceRule : TestRule {
             val app = instrumentation.targetContext.applicationContext as Application
             val token = Any()
             val id = "${description.className}.${description.methodName}@${System.identityHashCode(token)}"
+            touches.set(0)
             current.set(Case(token, id))
             val windows = mutableMapOf<Activity, WindowHook>() // Accessed only by main callbacks/posted cleanup.
             fun stage(activity: Activity, value: String) {
@@ -67,7 +72,9 @@ internal class OwnedUiTraceRule : TestRule {
                         }
                         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                             val handled = original.dispatchTouchEvent(event)
-                            if (event.actionMasked in setOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
+                            if (current.get()?.token === token &&
+                                event.actionMasked in setOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) {
+                                touches.incrementAndGet()
                                 stage(activity, "touch=${event.actionMasked} x=${event.x.toInt()} y=${event.y.toInt()} handled=$handled")
                             }
                             return handled

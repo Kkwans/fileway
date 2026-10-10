@@ -4,6 +4,8 @@ import android.graphics.Rect
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.inspector.WindowInspector
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -55,21 +58,94 @@ class PlayerFullscreenTest {
         lateinit var model: ClientModel
         activity.scenario.onActivity { model = ViewModelProvider(it)[ClientModel::class.java] }
         suspend fun main(action: () -> Unit) = withContext(Dispatchers.Main) { action() }
+        val inputDriver = InstrumentationRegistry.getArguments().getString("nfbInputDriver", "automation")
+        require(inputDriver in setOf("automation", "shell"))
+        var inspectDown = InstrumentationRegistry.getArguments().getString("nfbInspectDown") == "true"
+        fun rejectedInput(stage: String) {
+            activity.scenario.onActivity { host -> OwnedUiTraceRule.trace("rejected-input=$stage " +
+                "requested=${host.requestedOrientation} focus=${host.hasWindowFocus()} task=${host.taskId}") }
+            val input = device.executeShellCommand("dumpsys input").lines()
+            val start = input.indexOfFirst { it.contains("Input Dispatcher State:") }
+            if (start >= 0) {
+                input.drop(start).takeWhile { it.trim() != "Windows:" }.take(60)
+                    .forEach { OwnedUiTraceRule.trace("input-state=${it.trim()}") }
+                // Identify only potential interceptors above this activity.
+                // These are input-window identities/regions, never view text.
+                val windows = input.drop(start).dropWhile { it.trim() != "Windows:" }.drop(1)
+                    .takeWhile { !it.contains("RecentQueue:") }
+                    .filter { it.trim().firstOrNull()?.isDigit() == true && it.contains(": name=") }.take(14)
+                for (line in windows) {
+                    OwnedUiTraceRule.trace("input-above=${line.trim()}")
+                    if (line.contains("nasfilebrowser.MainActivity")) break
+                }
+                input.filter { it.contains("io.github.kkwans.nasfilebrowser") }.take(12)
+                    .forEach { OwnedUiTraceRule.trace("input-owned=${it.trim()}") }
+                input.dropWhile { !it.trim().startsWith("RecentQueue:") }.drop(1)
+                    .takeWhile { it.trim().isNotEmpty() }.filter { it.contains("MotionEvent") }.take(10)
+                    .forEach { OwnedUiTraceRule.trace("input-recent=${it.trim()}") }
+            }
+        }
+        fun physicalTap(bounds: Rect) {
+            OwnedUiTraceRule.trace("fullscreen-tap-driver=$inputDriver bounds=$bounds")
+            if (inputDriver == "shell") {
+                // Controlled comparison of two real input-injection paths on OEM devices.
+                // Both hit the actual button; no semantic click, retry or model callback.
+                // executeShellCommand uses Runtime.exec, not a shell parser.
+                // Completion is transport evidence only; callers still verify
+                // delivered touches and the resulting UI/IME state.
+                device.executeShellCommand("input touchscreen tap ${bounds.centerX()} ${bounds.centerY()}")
+                return
+            }
+            val downTime = SystemClock.uptimeMillis()
+            fun inject(action: Int): Boolean {
+                val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action,
+                    bounds.centerX().toFloat(), bounds.centerY().toFloat(), 0)
+                event.source = InputDevice.SOURCE_TOUCHSCREEN
+                return try { instrumentation.uiAutomation.injectInputEvent(event, true) }
+                finally { event.recycle() }
+            }
+            val down = inject(MotionEvent.ACTION_DOWN)
+            if (!down) rejectedInput("DOWN")
+            assertTrue("Owned tap DOWN must be injected at $bounds", down)
+            if (inspectDown) { inspectDown = false; rejectedInput("DOWN-observed-before-UP") }
+            var released = false
+            try {
+                SystemClock.sleep(100) // Same normal tap duration as UiDevice's click.
+                released = inject(MotionEvent.ACTION_UP)
+                if (!released) rejectedInput("UP")
+                assertTrue("Owned tap UP must be injected at $bounds", released)
+            } finally { if (!released) inject(MotionEvent.ACTION_CANCEL) }
+        }
         fun traceWindow(stage: String) {
             activity.scenario.onActivity { host ->
                 val decor = host.window.decorView
                 OwnedUiTraceRule.trace("fullscreen=$stage orientation=${host.resources.configuration.orientation} " +
                     "requested=${host.requestedOrientation} decor=${decor.width}x${decor.height} " +
-                    "focus=${host.hasWindowFocus()} generation=${model.player.state.value.mediaGeneration}")
+                    "focus=${host.hasWindowFocus()} display=${decor.display?.displayId} flags=${host.window.attributes.flags} " +
+                    "generation=${model.player.state.value.mediaGeneration}")
             }
         }
         fun click(label: String) {
             val action = device.wait(Until.findObject(By.desc(label)), 5_000) ?: error("Missing player action $label")
             assertTrue("Player action must be enabled: $label", action.isEnabled)
-            OwnedUiTraceRule.trace("fullscreen-action=$label bounds=${action.visibleBounds}")
+            assertTrue("Player action must be clickable: $label", action.isClickable)
+            val bounds = action.visibleBounds
+            assertFalse("Player action must have visible bounds: $label", bounds.isEmpty)
+            OwnedUiTraceRule.trace("fullscreen-action=$label bounds=$bounds")
             traceWindow("before-$label")
-            action.click()
+            val touches = trace.deliveredTouches()
+            val inputState = "screen=${device.displayWidth}x${device.displayHeight}, on=${device.isScreenOn}, rotation=${device.displayRotation}"
+            OwnedUiTraceRule.trace("fullscreen-input=$label $inputState")
+            // Reuse the checked event path exercised by PlayerGestureControlsTest.
+            // This targets the same actual button, never a semantic/model shortcut.
+            val started = SystemClock.uptimeMillis()
+            physicalTap(bounds)
+            OwnedUiTraceRule.trace("fullscreen-tap=$label elapsedMs=${SystemClock.uptimeMillis() - started}")
             traceWindow("after-$label")
+            if (label in listOf("竖屏全屏", "横屏全屏", "退出全屏")) {
+                assertTrue("Fullscreen tap must reach the owned Activity: $label; ${trace.snapshot()}",
+                    trace.deliveredTouches() >= touches + 2)
+            }
         }
         fun detailsGone() {
             val gone = device.wait(Until.gone(By.desc("播放详情")), 5_000)
@@ -111,53 +187,68 @@ class PlayerFullscreenTest {
             }
             return viewport to rectangles
         }
-        suspend fun hiddenFocusedWindow() {
-            withTimeout(5_000) {
-                while (true) {
-                    val hidden = withContext(Dispatchers.Main) {
-                        val focused = WindowInspector.getGlobalWindowViews().filter { it.isShown && it.hasWindowFocus() }
-                        focused.isNotEmpty() && focused.all { view ->
-                            ViewCompat.getRootWindowInsets(view)?.let {
-                                !it.isVisible(WindowInsetsCompat.Type.statusBars()) && !it.isVisible(WindowInsetsCompat.Type.navigationBars())
-                            } == true
-                        }
+        var stage = "entry"
+        suspend fun awaitStage(name: String, ready: suspend () -> Boolean) {
+            stage = name
+            OwnedUiTraceRule.trace("fullscreen-stage=$stage")
+            try { withTimeout(5_000) {
+                while (!ready()) delay(50)
+            } } catch (failure: TimeoutCancellationException) {
+                val windows = withContext(Dispatchers.Main) {
+                    WindowInspector.getGlobalWindowViews().filter { it.isShown }.map { root ->
+                        val insets = ViewCompat.getRootWindowInsets(root)
+                        "${root.javaClass.simpleName}:focus=${root.hasWindowFocus()}," +
+                            "status=${insets?.isVisible(WindowInsetsCompat.Type.statusBars())}," +
+                            "navigation=${insets?.isVisible(WindowInsetsCompat.Type.navigationBars())}," +
+                            "ime=${insets?.isVisible(WindowInsetsCompat.Type.ime())}"
                     }
-                    if (hidden) break
-                    delay(50)
+                }
+                throw AssertionError("Fullscreen wait failed at $stage; windows=$windows; ${trace.snapshot()}", failure)
+            }
+        }
+        suspend fun hiddenFocusedWindow(name: String) {
+            awaitStage(name) {
+                withContext(Dispatchers.Main) {
+                    val focused = WindowInspector.getGlobalWindowViews().filter { it.isShown && it.hasWindowFocus() }
+                    focused.isNotEmpty() && focused.all { root ->
+                        ViewCompat.getRootWindowInsets(root)?.let {
+                            !it.isVisible(WindowInsetsCompat.Type.statusBars()) && !it.isVisible(WindowInsetsCompat.Type.navigationBars())
+                        } == true
+                    }
                 }
             }
         }
         suspend fun checkFullscreen() {
-            hiddenFocusedWindow()
+            hiddenFocusedWindow("entry-hidden")
             val before = geometry()
             assertTrue("Fullscreen viewport must occupy the full screen height", before.second.first().height() >= device.displayHeight * .98f)
             val generation = model.player.state.value.mediaGeneration
             val mediaSets = model.player.diagnosticSnapshot().count { it.action == PlaybackTraceAction.MEDIA_SET }
             val direction = if (device.displayWidth > device.displayHeight) "landscape" else "portrait"
             capture("$direction-controls")
-            device.click(device.displayWidth / 2, device.displayHeight / 2)
-            hiddenFocusedWindow()
+            val touches = trace.deliveredTouches()
+            physicalTap(Rect(device.displayWidth / 2 - 1, device.displayHeight / 2 - 1,
+                device.displayWidth / 2 + 1, device.displayHeight / 2 + 1))
+            assertTrue("Ordinary touch must reach the owned Activity", trace.deliveredTouches() >= touches + 2)
+            hiddenFocusedWindow("ordinary-touch-hidden")
             assertEquals("Ordinary touch must not resize video", before, geometry())
             for (panel in listOf("选择字幕", "播放速度")) {
                 click(panel)
                 assertTrue(device.wait(Until.hasObject(By.desc("播放设置")), 5_000))
-                hiddenFocusedWindow()
+                hiddenFocusedWindow("panel-$panel-hidden")
                 assertEquals("A focused settings window must not resize video", before, geometry())
                 capture("$direction-${if (panel == "选择字幕") "subtitles" else "speed"}")
                 if (panel == "播放速度") {
                     val field = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)
                         ?: error("Custom rate input missing")
-                    field.click()
-                    suspend fun keyboard(shown: Boolean) = withTimeout(5_000) {
-                        while (true) {
-                            val matches = withContext(Dispatchers.Main) {
-                                WindowInspector.getGlobalWindowViews().any { view ->
-                                    view.isShown && view.hasWindowFocus() &&
-                                        ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == shown
-                                }
+                    val bounds = field.visibleBounds
+                    physicalTap(bounds)
+                    suspend fun keyboard(shown: Boolean) = awaitStage("ime-$shown") {
+                        withContext(Dispatchers.Main) {
+                            WindowInspector.getGlobalWindowViews().any { view ->
+                                view.isShown && view.hasWindowFocus() &&
+                                    ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == shown
                             }
-                            if (matches) break
-                            delay(50)
                         }
                     }
                     keyboard(true)
@@ -169,7 +260,7 @@ class PlayerFullscreenTest {
                 }
                 click("关闭播放设置")
                 assertTrue(device.wait(Until.gone(By.desc("播放设置")), 5_000))
-                hiddenFocusedWindow()
+                hiddenFocusedWindow("panel-$panel-closed")
                 assertEquals(before, geometry())
             }
             // Exercise real inset changes as well as hidden bars. Manual shade
@@ -177,35 +268,29 @@ class PlayerFullscreenTest {
             activity.scenario.onActivity { host ->
                 WindowCompat.getInsetsController(host.window, host.window.decorView).show(WindowInsetsCompat.Type.systemBars())
             }
-            withTimeout(5_000) {
-                while (true) {
-                    var shown = false
-                    activity.scenario.onActivity { host -> shown = ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
-                    if (shown) break
-                    delay(50)
-                }
+            awaitStage("system-bars-shown") {
+                var shown = false
+                activity.scenario.onActivity { host -> shown = ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
+                shown
             }
             assertEquals("Visible transient system bars must overlay the same Surface", before, geometry())
             activity.scenario.onActivity { host ->
                 WindowCompat.getInsetsController(host.window, host.window.decorView).hide(WindowInsetsCompat.Type.systemBars())
             }
-            hiddenFocusedWindow()
+            hiddenFocusedWindow("system-bars-hidden")
             assertEquals(before, geometry())
             // A real top-edge gesture must remain available. Do not capture the
             // owner's notification shade; inspect only our native geometry.
             assertTrue(device.swipe(device.displayWidth / 2, 1, device.displayWidth / 2, device.displayHeight / 5, 20))
-            withTimeout(5_000) {
-                while (true) {
-                    var revealed = false
-                    activity.scenario.onActivity { host -> revealed = !host.hasWindowFocus() ||
-                        ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
-                    if (revealed) break
-                    delay(50)
-                }
+            awaitStage("real-shade-revealed") {
+                var revealed = false
+                activity.scenario.onActivity { host -> revealed = !host.hasWindowFocus() ||
+                    ViewCompat.getRootWindowInsets(host.window.decorView)?.isVisible(WindowInsetsCompat.Type.statusBars()) == true }
+                revealed
             }
             assertEquals("A real system shade gesture must overlay the same native layers", before, geometry())
             if (device.currentPackageName != instrumentation.targetContext.packageName) device.pressBack()
-            hiddenFocusedWindow()
+            hiddenFocusedWindow("real-shade-dismissed")
             assertEquals(before, geometry())
             assertTrue("Closing system UI must keep fullscreen", device.hasObject(By.desc("退出全屏")))
             assertEquals(generation, model.player.state.value.mediaGeneration)
