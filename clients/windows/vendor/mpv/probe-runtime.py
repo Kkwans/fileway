@@ -26,6 +26,7 @@ try:
                        ("input-default-bindings", "no"), ("input-builtin-bindings", "no"), ("input-vo-keyboard", "no"),
                        ("input-cursor", "no"), ("access-references", "no"), ("autoload-files", "no"),
                        ("load-unsafe-playlists", "no"), ("idle", "yes"), ("keep-open", "yes"),
+                       ("title", "Fileway video"), ("force-media-title", "Fileway video"),
                        ("vo", "gpu-next"), ("gpu-context", "d3d11"), ("d3d11-output-mode", "window"),
                        ("hwdec", "auto-safe"), ("audio-client-name", "Fileway"), ("network-timeout", "15")]:
         result = mpv.mpv_set_option_string(handle, key.encode(), value.encode())

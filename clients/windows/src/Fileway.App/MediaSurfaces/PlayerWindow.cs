@@ -45,7 +45,15 @@ internal sealed class PlayerWindow : Window, IPlaybackSurface
         var volume = new Slider { Minimum = 0, Maximum = 100, Value = 100, Header = "音量", VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(volume, 3); controls.Children.Add(volume); Grid.SetRow(controls, 2); _root.Children.Add(controls);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_seek, "播放进度");
-        _pause.Click += async (_, _) => await RunCommandAsync(() => _session.SetPausedAsync(!_paused, _watchCancellation.Token));
+        _pause.Click += async (_, _) => await RunCommandAsync(async () =>
+        {
+            if (_session.Snapshot.Status == PlaybackStatus.Ended)
+            {
+                await _session.SeekAsync(TimeSpan.Zero, _watchCancellation.Token);
+                await _session.SetPausedAsync(false, _watchCancellation.Token);
+            }
+            else await _session.SetPausedAsync(!_paused, _watchCancellation.Token);
+        });
         volume.ValueChanged += async (_, args) => { if (!_applyingSnapshot && !_detached) await RunCommandAsync(() => _session.SetVolumeAsync(args.NewValue, _watchCancellation.Token)); };
         _seek.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userSeeking = true), true);
         _seek.AddHandler(UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(async (_, _) => { if (!_userSeeking) return; _userSeeking = false; await SeekAsync(); }), true);
@@ -70,6 +78,9 @@ internal sealed class PlayerWindow : Window, IPlaybackSurface
         var point = _video.TransformToVisual(_root).TransformPoint(new Point(0, 0));
         var scale = _root.XamlRoot.RasterizationScale;
         NativeVideoWindow.MoveWindow(_child, (int)Math.Round(point.X * scale), (int)Math.Round(point.Y * scale), Math.Max(1, (int)Math.Round(_video.ActualWidth * scale)), Math.Max(1, (int)Math.Round(_video.ActualHeight * scale)), true);
+        // WinUI's desktop bridge is a sibling HWND covering the client area.
+        // Keep only the video rectangle above that bridge; controls remain outside it.
+        NativeVideoWindow.SetWindowPos(_child, 0, 0, 0, 0, 0, 0x0013);
     }
 
     private async Task WatchAsync()
@@ -89,8 +100,8 @@ internal sealed class PlayerWindow : Window, IPlaybackSurface
         if (_detached) return;
         _applyingSnapshot = true;
         _paused = snapshot.Status == PlaybackStatus.Paused;
-        _pause.Content = _paused ? "播放" : "暂停";
-        _pause.IsEnabled = snapshot.Status is PlaybackStatus.Playing or PlaybackStatus.Paused or PlaybackStatus.Buffering;
+        _pause.Content = snapshot.Status == PlaybackStatus.Ended ? "重播" : _paused ? "播放" : "暂停";
+        _pause.IsEnabled = snapshot.Status is PlaybackStatus.Playing or PlaybackStatus.Paused or PlaybackStatus.Buffering or PlaybackStatus.Ended;
         _status.Text = snapshot.Error?.Message ?? snapshot.Status switch
         {
             PlaybackStatus.Preparing => "正在准备播放…", PlaybackStatus.Buffering => "正在缓冲…", PlaybackStatus.Playing => snapshot.DisplayName,
@@ -146,6 +157,9 @@ internal static class NativeVideoWindow
     [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool MoveWindow(nint window, int x, int y, int width, int height, [MarshalAs(UnmanagedType.Bool)] bool repaint);
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetWindowPos(nint window, nint insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool DestroyWindow(nint window);
