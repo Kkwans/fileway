@@ -184,6 +184,14 @@ class NativeSubtitleTest {
     }
 
     private val fadeRoi = (30 until 50).flatMap { y -> (200 until 240).map { x -> y * 320 + x } }
+    private suspend fun holdLiveFadeForCapture(model: ClientModel) {
+        // The grey authored interval is shorter than slow emulator screenshot
+        // capture. Freeze the position reached by actual playback, without a
+        // seek that could conceal a stale live subtitle clock.
+        onMain { model.player.pause() }
+        val position = model.player.state.value.positionMs
+        assertTrue("Live fade capture must remain inside its authored grey interval: $position", position in 9900..10500)
+    }
     private suspend fun fadedPixels() = rendered(checking,
         nativeCheck = { frame -> fadeRoi.count { Color.alpha(frame[it]) > 20 } > 300 }) { frame ->
         fadeRoi.count { index ->
@@ -205,6 +213,7 @@ class NativeSubtitleTest {
             capture("fade-opaque")
             withTimeout(10_000) { model.player.state.first { it.positionMs >= 9900 } }
             checking = "ASS independent visible fade-out"
+            holdLiveFadeForCapture(model)
             fadedPixels()
             capture("fade-grey")
         }
@@ -381,8 +390,10 @@ class NativeSubtitleTest {
             capture("animation-moved")
             withTimeout(6500) { model.player.state.first { it.positionMs >= 9900 } }
             checking = "ASS visible fade-out"
+            holdLiveFadeForCapture(model)
             fadedPixels()
             capture("animation-faded")
+            onMain { model.player.toggle() }
             checking = "ASS end clears all animated regions"
             rendered(checking) { frame -> frame.none { Color.alpha(it) > 100 && maxOf(Color.red(it), Color.green(it), Color.blue(it)) > 100 } }
             capture("animation-cleared")
