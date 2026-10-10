@@ -3,8 +3,6 @@ package io.github.kkwans.nasfilebrowser
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
-import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.*
 import io.github.kkwans.nasfilebrowser.app.ClientModel
 import io.github.kkwans.nasfilebrowser.data.*
@@ -15,7 +13,8 @@ import org.junit.rules.RuleChain
 
 internal open class LibraryUiHarness {
     protected val activity = ActivityScenarioRule(MainActivity::class.java)
-    @get:Rule val rules: RuleChain = RuleChain.outerRule(OwnedUiTraceRule()).around(activity)
+    private val uiTrace = OwnedUiTraceRule()
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(uiTrace).around(activity)
     protected val instrumentation = InstrumentationRegistry.getInstrumentation()
     protected val device get() = UiDevice.getInstance(instrumentation)
     protected lateinit var model: ClientModel
@@ -32,23 +31,6 @@ internal open class LibraryUiHarness {
         // Pure setContent tests intentionally need no bound ClientModel. A
         // diagnostic failure must never replace the original missing control.
         fun observe(block: () -> String) = runCatching(block).getOrElse { "unavailable(${it.javaClass.simpleName})" }
-        val foreground = observe { device.currentPackageName ?: "none" }
-        val scenario = observe { activity.scenario.state.toString() }
-        var activities = "unavailable"
-        val lifecycle = observe {
-            instrumentation.runOnMainSync {
-                val monitor = ActivityLifecycleMonitorRegistry.getInstance()
-                activities = Stage.values().filter { it != Stage.PRE_ON_CREATE && it != Stage.DESTROYED }
-                    .flatMap { stage -> monitor.getActivitiesInStage(stage).map { current ->
-                        val decor = current.window.decorView
-                        "${current.javaClass.simpleName}@${System.identityHashCode(current)}:$stage" +
-                            "(task=${current.taskId},focus=${current.hasWindowFocus()},finishing=${current.isFinishing}," +
-                            "destroyed=${current.isDestroyed},attached=${decor.isAttachedToWindow},shown=${decor.isShown}," +
-                            "visibility=${decor.windowVisibility},size=${decor.width}x${decor.height})"
-                    } }.sorted().joinToString(prefix = "[", postfix = "]")
-            }
-            activities
-        }
         val modelState = observe {
             if (!this::model.isInitialized) "model=uninitialized" else {
                 val state = model.state.value
@@ -58,8 +40,9 @@ internal open class LibraryUiHarness {
         }
         // No hierarchy, screenshot, Intent or View text: those can contain
         // credentials/input/private filenames. Explicit owned captures remain opt-in.
-        val diagnostics = "$modelState; foregroundPackage=$foreground; scenario=$scenario; testActivities=$lifecycle"
-        runCatching { OwnedUiTraceRule.trace("missing-control $diagnostics") }
+        // Even scenario.state waits for main idle in core 1.7.0. Read only a
+        // timestamped main-callback cache; unavailable foreground is not a fact.
+        val diagnostics = "$modelState; foregroundPackage=unverified; scenario=unverified; ${uiTrace.snapshot()}"
         error("Missing visible action $label; $diagnostics")
     }
     protected suspend fun fixture(data: LibraryFixtureData, block: suspend (ClientSearchTest.Fixture) -> Unit) {
