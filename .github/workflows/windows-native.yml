@@ -16,12 +16,15 @@ jobs:
       run:
         shell: pwsh
         working-directory: clients/windows
-    env:
-      FILEWAY_TOOLS_ROOT: '${{ runner.temp }}\Fileway-windows-tools'
-      FILEWAY_ARTIFACTS_ROOT: '${{ runner.temp }}\Fileway-windows-artifacts'
-      FILEWAY_NUGET_PACKAGES: '${{ runner.temp }}\Fileway-windows-nuget'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Configure isolated paths
+        run: |
+          @(
+            "FILEWAY_TOOLS_ROOT=$env:RUNNER_TEMP\Fileway-windows-tools"
+            "FILEWAY_ARTIFACTS_ROOT=$env:RUNNER_TEMP\Fileway-windows-artifacts"
+            "FILEWAY_NUGET_PACKAGES=$env:RUNNER_TEMP\Fileway-windows-nuget"
+          ) | Add-Content -LiteralPath $env:GITHUB_ENV
       - name: Install isolated, hash-verified toolchains
         run: ./eng/Install-WindowsTools.ps1 -ToolsRoot $env:FILEWAY_TOOLS_ROOT
       - name: Test Host and shared core
