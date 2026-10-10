@@ -19,6 +19,7 @@ class TagsContractTest {
         val writes = mutableListOf<JSONObject>()
         val batches = mutableListOf<JSONObject>()
         val tagReads = AtomicInteger()
+        var preparedTagsResponse: String? = null
         var legacy = false
         var mismatch = false
         var hold: CompletableDeferred<Unit>? = null
@@ -36,7 +37,7 @@ class TagsContractTest {
                 val body: Any = when {
                     method == "GET" && endpoint == "/api/tags" -> {
                         tagReads.incrementAndGet()
-                        val captured = JSONArray().put(tag()).toString(); val gate = hold
+                        val captured = preparedTagsResponse ?: JSONArray().put(tag()).toString(); val gate = hold
                         if (gate != null) { entered.complete(Unit); withContext(NonCancellable) { gate.await() } }
                         captured
                     }
@@ -150,6 +151,9 @@ class TagsContractTest {
         paths.indices.forEach { assertEquals(wires[it], result.getJSONObject(it).getString("wirePath")) }
         authority.refs.remove(0)
         authority.add("/lost�", "", false); authority.add("/lost�", "/lost%EF%BF%BD", true)
+        // Freeze the owned server's exact response after its final fixture mutation.
+        // The original controller read/decoding and 3s budget remain below.
+        authority.preparedTagsResponse = JSONArray().put(authority.tag()).toString()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val controller = TagsController(scope) { it === context }
         try {
