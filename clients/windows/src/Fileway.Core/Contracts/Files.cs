@@ -1,0 +1,67 @@
+using System.Text.Json.Serialization;
+
+namespace Fileway.Core.Contracts;
+
+public enum FileSortField
+{
+    Name,
+    Size,
+    Modified,
+    Type,
+}
+
+public sealed record DirectoryQuery(FileSortField SortBy = FileSortField.Name, bool Descending = false, string? Cursor = null);
+
+public sealed record RemoteFile(
+    RemoteResourceRef Resource,
+    bool IsDirectory,
+    long Size,
+    DateTimeOffset? Modified,
+    string? MediaType = null);
+
+public sealed record DirectoryPage(
+    RemoteResourceRef Directory,
+    IReadOnlyList<RemoteFile> Items,
+    string? NextCursor,
+    string? SnapshotId);
+
+public enum OperationOutcome
+{
+    Confirmed,
+    Partial,
+    OutcomeUnknown,
+}
+
+public sealed record FileOperationResult(OperationOutcome Outcome, string? ServerTaskId = null, ErrorInfo? Error = null);
+
+public enum AuthenticationMode
+{
+    Password,
+    NoAuthentication,
+}
+
+/// <summary>Ephemeral login input. Password must never be logged or persisted.</summary>
+public sealed record LoginInput(
+    AuthenticationMode Mode,
+    string Username = "",
+    [property: JsonIgnore] string Password = "",
+    bool KeepSignedIn = false)
+{
+    public override string ToString() => "LoginInput (credentials redacted)";
+}
+
+public interface IConnectionService
+{
+    Task<ConnectionSession> ConnectAsync(ConnectionProfile profile, LoginInput login, CancellationToken cancellationToken);
+    Task DisconnectAsync(AccountKey account, CancellationToken cancellationToken);
+    Task LogoutAsync(AccountKey account, CancellationToken cancellationToken);
+}
+
+public interface IFileRepository
+{
+    Task<DirectoryPage> ListAsync(RemoteResourceRef directory, DirectoryQuery query, CancellationToken cancellationToken);
+    Task<RemoteFile> GetAsync(RemoteResourceRef resource, CancellationToken cancellationToken);
+    Task<FileOperationResult> CreateDirectoryAsync(RemoteResourceRef parent, string name, CancellationToken cancellationToken);
+    Task<FileOperationResult> RenameAsync(RemoteResourceRef resource, string name, CancellationToken cancellationToken);
+    Task<FileOperationResult> TrashAsync(IReadOnlyList<RemoteResourceRef> resources, CancellationToken cancellationToken);
+}
