@@ -56,7 +56,11 @@ internal class UploadRestartTest : LibraryUiHarness() {
             }
             val first = row("/owned-restart.bin", "abcd".toByteArray())
             context.contentResolver.openOutputStream(uri, "w")!!.use { it.write(updated) }
+            assertEquals(updated.size.toLong(), context.contentResolver.openFileDescriptor(uri, "r")!!.use { it.statSize })
             assertThrows(IllegalStateException::class.java) { UploadSources(context).reauthorize(first, uri) }
+            assertEquals(updated.size.toLong(), UploadSources(context).read(uri).size)
+            assertEquals(first, dao.get(first.id)); assertEquals(4L, dao.get(first.id)!!.uploaded)
+            assertEquals(0, server.deletes.get()); assertArrayEquals("abcd".toByteArray(), server.files[first.targetPath])
             main { model.openUploads(); model.uploads.prepareRestart(first.id, first.generation, uri) }
             withTimeout(5000) { model.uploads.state.first { !it.busy && it.restart != null } }
             text("从零重新开始上传？"); clickable(text("保留原任务")).click()

@@ -76,7 +76,14 @@ internal class UploadSources(private val context: Context) {
             check(name.isNotBlank() && name != "." && name != ".." && !name.contains('/') && !name.contains('\u0000')) { "源文件名称无效" }
             val mime = if (row.columnCount > 3 && !row.isNull(3)) row.getString(3) else resolver.getType(uri).orEmpty()
             check(mime != DocumentsContract.Document.MIME_TYPE_DIR) { "请选择文件，文件夹请使用上传文件夹入口" }
-            val size = if (!row.isNull(1)) row.getLong(1) else resolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1
+            val declaredSize = if (!row.isNull(1)) row.getLong(1) else -1
+            // Provider indexes (notably MediaStore) may lag an already changed
+            // file. A readable regular descriptor is authoritative for bytes;
+            // pipes/cloud providers with unknown stat size retain their declared
+            // length fallback. Do not mask revoked/unreadable sources with SIZE.
+            val actualSize = resolver.openFileDescriptor(uri, "r")?.use { it.statSize }
+                ?: throw FileNotFoundException("原文件无法读取，请检查系统授权")
+            val size = if (actualSize >= 0) actualSize else declaredSize
             check(size >= 0) { "来源未提供文件大小，请先保存到本机后再上传" }
             LocalUploadSource(uri.toString(), name, size, if (row.columnCount > 2 && !row.isNull(2)) row.getLong(2) * if (document) 1 else 1000 else 0,
                 mime.ifEmpty { "application/octet-stream" }, directory)
