@@ -36,7 +36,9 @@ import org.videolan.libvlc.util.VLCVideoLayout
 import java.security.MessageDigest
 import kotlin.math.abs
 
-/** Base-path comparison, not full engine acceptance. No FFmpeg/libass/mpv claim. */
+/** Opt-in historical base-path comparison, not production engine acceptance.
+ * Enable filewayEngineComparison; every original candidate/assertion is retained.
+ * No FFmpeg/libass/mpv claim. */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 class EngineComparisonTest {

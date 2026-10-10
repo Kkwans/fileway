@@ -63,6 +63,14 @@ These are implemented feature groups, with scoped verification. Server capabilit
 and versions determine availability; unsupported newer operations request an upgrade.
 The full App-internal download/install/cover-upgrade flow remains a separate gate.
 
+The historical stock-Media3/libVLC comparison is a separate, opt-in diagnostic:
+build the test APK with `-PfilewayEngineComparison=true`, then explicitly run
+`EngineComparisonTest` on the selected disposable device. The pinned VLC-version
+and mpv probe options also select this source set. Its original candidate/pixel
+assertions and historical failures are retained; it does not certify the selected
+Media3/FFmpeg/libass product chain. Default instrumentation continues to include
+the actual native playback, audio, subtitle, viewport and lifecycle gates.
+
 ### Core fixes in 0.7.4
 
 - Save only engine-confirmed READY/ENDED positions, preserving valid resume data

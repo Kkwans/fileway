@@ -10,6 +10,13 @@ plugins {
 // libVLC is retained only by the reference instrumentation harness.
 val vlcProbeVersion = providers.gradleProperty("filewayVlcProbeVersion").orNull
 require(vlcProbeVersion == null || vlcProbeVersion == "3.7.7") { "Only the pinned libVLC 3.7.7 comparison is supported" }
+val engineComparisonOption = providers.gradleProperty("filewayEngineComparison")
+    .orElse((vlcProbeVersion != null || providers.gradleProperty("filewayMpvProbeAar").isPresent).toString()).get()
+require(engineComparisonOption in listOf("true", "false")) { "filewayEngineComparison must be true or false" }
+val engineComparison = engineComparisonOption == "true"
+require(engineComparison || vlcProbeVersion == null && !providers.gradleProperty("filewayMpvProbeAar").isPresent) {
+    "Reference engine candidates require the explicit comparison source set"
+}
 val audioCaptureOption = providers.gradleProperty("filewayAudioCaptureProbe").orElse("false").get()
 require(audioCaptureOption in listOf("true", "false")) { "filewayAudioCaptureProbe must be true or false" }
 val audioCaptureProbe = audioCaptureOption == "true"
@@ -40,6 +47,7 @@ android {
     }
     buildFeatures { compose = true; buildConfig = true }
     sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    if (engineComparison) sourceSets.getByName("androidTest").kotlin.srcDir("src/engineComparisonTest/java")
     if (audioCaptureProbe) {
         sourceSets.getByName("debug").manifest.srcFile("src/audioCaptureProbe/AndroidManifest.xml")
         sourceSets.getByName("debug").kotlin.srcDir("src/audioCaptureProbe/java")
@@ -89,7 +97,7 @@ dependencies {
     implementation("androidx.media3:media3-database:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("io.github.peerless2012:ass-kt:0.5.1")
-    androidTestImplementation("org.videolan.android:libvlc-all:${vlcProbeVersion ?: "3.7.6"}")
+    if (engineComparison) androidTestImplementation("org.videolan.android:libvlc-all:${vlcProbeVersion ?: "3.7.6"}")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("androidx.room:room-runtime:2.8.5")
