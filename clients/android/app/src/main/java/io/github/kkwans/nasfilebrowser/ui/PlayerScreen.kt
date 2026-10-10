@@ -129,6 +129,12 @@ private tailrec fun Context.activity(): Activity? = when (this) {
     var subtitleOffsetError by remember(file) { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val download = downloads.items.firstOrNull { it.id == file.downloadId }
+    val playbackSourceLabel = when {
+        file.downloadId.isEmpty() -> client.serverLabel
+        download == null -> "本机下载 · 下载状态待确认"
+        download.complete -> "本机下载 · 离线读取"
+        else -> "本机下载 · 未下载片段按需读取服务器"
+    }
     val downloadIndex by produceState<DownloadIndex.Info?>(null, download?.id, download?.complete, client.busy) {
         val item = download
         value = if (item == null || item.complete) null else withContext(Dispatchers.IO) {
@@ -545,7 +551,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button,
                                     onClickLabel = if (expandedTitle) "收起完整名称" else "展开完整名称") { expandedTitle = !expandedTitle; touch() })
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(client.serverLabel, Modifier.weight(1f), color = PlayerSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(playbackSourceLabel, Modifier.weight(1f), color = PlayerSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (state.width > 0) Text("${state.width} × ${state.height}", color = PlayerSecondary, fontSize = 12.sp)
                             }
                         }
@@ -708,9 +714,7 @@ private tailrec fun Context.activity(): Activity? = when (this) {
                         }
                         PlayerSheet.SOURCE -> LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             item { SourceField("文件", file.name) }
-                            item { SourceField(if (file.downloadId.isEmpty()) "服务器与账号" else "来源", if (file.downloadId.isEmpty()) client.serverLabel
-                                else if (downloads.items.firstOrNull { it.id == file.downloadId }?.complete == true) "本机下载 · 离线读取"
-                                else "本机下载 · 未下载片段按需读取服务器") }
+                            item { SourceField(if (file.downloadId.isEmpty()) "服务器与账号" else "来源", playbackSourceLabel) }
                             item { SourceField("路径", file.path) }
                             item { SourceField("播放方式", "原生播放 · Media3") }
                             item { SourceField("画质", "原画 · 直接读取原文件") }
