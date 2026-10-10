@@ -4,11 +4,14 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.SystemClock
+import android.text.format.DateFormat
 import android.view.View
 import android.view.ViewGroup
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.inspector.WindowInspector
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -41,6 +44,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
+import java.util.Date
 
 /** Real Activity/dialog windows and native Surface geometry, not just HUD semantics. */
 @RunWith(AndroidJUnit4::class)
@@ -239,6 +243,30 @@ class PlayerFullscreenTest {
         }
         suspend fun checkFullscreen() {
             hiddenFocusedWindow("entry-hidden")
+            fun clockValue(node: AccessibilityNodeInfo): String? {
+                try {
+                    if (!node.refresh()) return null
+                    if (node.contentDescription?.toString() == "设备时间")
+                        return AccessibilityNodeInfoCompat.wrap(node).stateDescription?.toString()
+                    for (index in 0 until node.childCount) {
+                        node.getChild(index)?.let(::clockValue)?.let { return it }
+                    }
+                    return null
+                } finally { node.recycle() }
+            }
+            awaitStage("device-clock-confirmed") {
+                val expected = DateFormat.getTimeFormat(instrumentation.targetContext).format(Date())
+                instrumentation.uiAutomation.rootInActiveWindow?.let(::clockValue) == expected
+            }
+            val clockBounds = (device.findObject(By.desc("设备时间")) ?: error("Device clock missing")).visibleBounds
+            val speedBounds = (device.findObject(By.desc("实际网络下载速度")) ?: error("Throughput label missing")).visibleBounds
+            assertFalse("Device time and throughput must not overlap", Rect.intersects(clockBounds, speedBounds))
+            val timeline = (device.findObject(By.desc("播放进度")) ?: error("Timeline missing")).visibleBounds
+            val play = (device.findObject(By.desc("开始播放")) ?: error("Play control missing")).visibleBounds
+            assertFalse("Timeline must occupy a separate row from transport", Rect.intersects(timeline, play))
+            assertFalse(device.hasObject(By.desc("上一个视频")))
+            assertFalse(device.hasObject(By.desc("后退十秒")))
+            assertFalse(device.hasObject(By.desc("快进十秒")))
             val before = geometry()
             assertTrue("Fullscreen viewport must occupy the full screen height", before.second.first().height() >= device.displayHeight * .98f)
             val generation = model.player.state.value.mediaGeneration
@@ -281,6 +309,22 @@ class PlayerFullscreenTest {
                 assertTrue(device.wait(Until.gone(By.desc("播放设置")), 5_000))
                 hiddenFocusedWindow("panel-$panel-closed")
                 assertEquals(before, geometry())
+            }
+            for (option in listOf("媒体系统音量", "窗口亮度", "播放来源")) {
+                click("更多播放选项")
+                assertTrue(device.wait(Until.hasObject(By.desc("播放设置")), 5_000))
+                click(option)
+                val content = when (option) {
+                    "媒体系统音量" -> By.text(java.util.regex.Pattern.compile("与设备媒体音量键同步.*|此设备使用固定音量.*"))
+                    "窗口亮度" -> By.text("恢复系统亮度")
+                    else -> By.text("播放方式")
+                }
+                assertTrue("More must open its existing $option content", device.wait(Until.hasObject(content), 5_000))
+                hiddenFocusedWindow("more-$option-hidden")
+                assertEquals("More settings must not resize video", before, geometry())
+                click("关闭播放设置")
+                assertTrue(device.wait(Until.gone(By.desc("播放设置")), 5_000))
+                hiddenFocusedWindow("more-$option-closed")
             }
             // Exercise real inset changes as well as hidden bars. Manual shade
             // gestures remain a separate real-device interaction acceptance.
