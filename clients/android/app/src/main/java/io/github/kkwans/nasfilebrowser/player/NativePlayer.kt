@@ -50,6 +50,8 @@ data class PlayerState(
     val videoDecoderKind: String = "未知",
     val pendingAudio: Int? = null, val pendingSubtitle: Int? = null,
     val decoderRecovery: String? = null,
+    /** Engine confirmed this position; a requested/buffering seek is not a checkpoint. */
+    val canSavePosition: Boolean = false,
 )
 
 /** Main-thread session facade. Track/rate/subtitle commands never reopen the media or rebind video. */
@@ -197,6 +199,7 @@ class NativePlayer(context: Context) {
             }
             override fun onPlayerError(error: PlaybackException) {
                 if (!current()) return
+                mutable.value = mutable.value.copy(canSavePosition = false)
                 trace.record(PlaybackTraceAction.ERROR, error.errorCode.toDouble())
                 val failedCodec = generateSequence(error.cause) { it.cause }.take(8)
                     .filterIsInstance<MediaCodecDecoderException>().firstOrNull()?.codecInfo
@@ -269,7 +272,10 @@ class NativePlayer(context: Context) {
     private fun publish() {
         val player = engine ?: return
         val previous = mutable.value
-        if (previous.error != null) return
+        if (previous.error != null) {
+            if (previous.canSavePosition) mutable.value = previous.copy(canSavePosition = false)
+            return
+        }
         if (seekTarget != null && player.playbackState == Player.STATE_READY && kotlin.math.abs(player.currentPosition - requireNotNull(seekTarget)) < 1000) {
             trace.record(PlaybackTraceAction.SEEK_REACHED, player.currentPosition.toDouble()); seekTarget = null
         }
@@ -286,6 +292,8 @@ class NativePlayer(context: Context) {
                 player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "已暂停"
                 else -> "正在播放"
             }, playing = player.isPlaying, positionMs = player.currentPosition.coerceAtLeast(0), durationMs = player.duration.coerceAtLeast(0),
+            canSavePosition = (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_ENDED) &&
+                seekTarget == null && player.playerError == null,
             seekable = player.isCurrentMediaItemSeekable,
             waitingForBuffer = player.playWhenReady && player.playbackState == Player.STATE_BUFFERING,
             buffering = if (player.playbackState == Player.STATE_READY) 100f else (loadControl?.percent ?: 0).coerceAtMost(99).toFloat(),
@@ -364,6 +372,7 @@ class NativePlayer(context: Context) {
         if (!player.isCurrentMediaItemSeekable) return
         val target = position.coerceIn(0, player.duration.coerceAtLeast(0))
         seekTarget = target; trace.record(PlaybackTraceAction.SEEK_REQUEST, target.toDouble())
+        mutable.value = mutable.value.copy(canSavePosition = false)
         loadControl?.resetProgress()
         player.seekTo(target); trace.record(PlaybackTraceAction.SEEK_ACCEPTED, target.toDouble()); publish()
     }

@@ -1047,11 +1047,13 @@ class ClientModel(application: Application) : AndroidViewModel(application) {
     fun retryProgress() { lastSaved = null; saveProgress() }
     private fun snapshot(binding: PlaybackBinding): PlaybackSnapshot? {
         val value = player.state.value
+        if (!value.canSavePosition) return null
         if (value.durationMs <= 0 && value.positionMs <= 0) return null
         return PlaybackSnapshot(binding.context.account.key, binding.file.wirePath.ifEmpty { binding.file.path }, binding.identity,
             binding.file.path, binding.file.wirePath, binding.file.name, value.positionMs, value.durationMs, System.currentTimeMillis(), ProgressSync.PENDING)
     }
     private fun saveProgress() {
+        if (!player.state.value.canSavePosition) return
         localPlayback?.let { item ->
             val value = player.state.value
             val fingerprint = value.positionMs to value.durationMs
